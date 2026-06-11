@@ -18,37 +18,26 @@ function usePrefersReducedMotion(): boolean {
 interface TypewriterOpts {
   /** ms per character while typing. */
   speed?: number;
-  /** ms per character while erasing (looping only). */
-  deleteSpeed?: number;
-  /** ms to hold the full text before erasing (looping only). */
+  /** ms to hold the full text before restarting (looping only). */
   holdTime?: number;
-  /** ms to wait, empty, before typing again (looping only). */
-  pauseTime?: number;
   /** ms before the first character appears. */
   startDelay?: number;
-  /** When true, loops forever: type → hold → erase → pause → type … */
+  /** When true, loops forever: type → hold → clear → type … (no erase animation). */
   loop?: boolean;
   enabled?: boolean;
 }
 
 /**
  * Reveals `text` one character at a time. With `loop`, runs a type → hold →
- * erase → pause cycle forever. The caret `blinking` flag is true only while
- * idle (holding/pausing) so it reads as a steady caret while typing.
- * Disabled (instant full text, no blink) when not `enabled` or the user
- * prefers reduced motion.
+ * clear → type cycle forever: once fully typed it holds, then jumps straight
+ * back to empty and types again (no backspace/erase animation). The caret
+ * `blinking` flag is true only while idle (holding) so it reads as a steady
+ * caret while typing. Disabled (instant full text, no blink) when not
+ * `enabled` or the user prefers reduced motion.
  */
 function useTypewriter(
   text: string,
-  {
-    speed = 60,
-    deleteSpeed = 30,
-    holdTime = 1900,
-    pauseTime = 700,
-    startDelay = 400,
-    loop = false,
-    enabled = true,
-  }: TypewriterOpts,
+  { speed = 60, holdTime = 1900, startDelay = 400, loop = false, enabled = true }: TypewriterOpts,
 ): { shown: string; blinking: boolean } {
   const reduced = usePrefersReducedMotion();
   const [count, setCount] = useState(0);
@@ -80,27 +69,17 @@ function useTypewriter(
         after(speed, type);
       } else if (loop) {
         setBlinking(true); // idle caret while the full command is held
-        after(holdTime, erase);
+        after(holdTime, restart);
       } else {
         setBlinking(true); // one-shot: leave the caret blinking at the end
       }
     };
-    const erase = () => {
+    const restart = () => {
+      // Jump straight back to empty and type again — no erase animation.
+      i = 0;
+      setCount(0);
       setBlinking(false);
-      step();
-    };
-    const step = () => {
-      i -= 1;
-      setCount(i);
-      if (i > 0) {
-        after(deleteSpeed, step);
-      } else {
-        setBlinking(true); // pause, empty, before typing again
-        after(pauseTime, () => {
-          setBlinking(false);
-          type();
-        });
-      }
+      type();
     };
 
     after(startDelay, type);
@@ -108,7 +87,7 @@ function useTypewriter(
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [text, speed, deleteSpeed, holdTime, pauseTime, startDelay, loop, enabled, reduced]);
+  }, [text, speed, holdTime, startDelay, loop, enabled, reduced]);
 
   return { shown: text.slice(0, count), blinking };
 }
