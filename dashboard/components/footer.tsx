@@ -1,5 +1,7 @@
 /* NOTE: GitHub/X hrefs below are intentional placeholders (https://github.com/agentgate,
    https://x.com/agentgate) until the public org/handle exist — swap before launch. */
+import Link from 'next/link';
+
 export function Footer() {
   return (
     <footer className="border-t border-line">
@@ -32,15 +34,9 @@ export function Footer() {
           >
             X
           </a>
-          <a
-            href="https://github.com/agentgate#readme"
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Placeholder link pre-launch"
-            className="text-mut transition-colors hover:text-accent"
-          >
+          <Link href="/docs" className="text-mut transition-colors hover:text-accent">
             Docs
-          </a>
+          </Link>
         </div>
       </div>
       <div className="border-t border-line/50">

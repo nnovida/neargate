@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 const LINKS = [
   { href: '/catalog', label: 'Catalog' },
   { href: '/activity', label: 'Activity' },
+  { href: '/docs', label: 'Docs' },
 ] as const;
 
 function GateMark() {
