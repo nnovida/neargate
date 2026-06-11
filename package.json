@@ -1,0 +1,31 @@
+{
+  "name": "agentgate",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "dashboard"
+  ],
+  "scripts": {
+    "dev": "tsx scripts/dev.ts",
+    "dev:dashboard": "npm run dev -w dashboard",
+    "demo": "tsx scripts/demo.ts",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "build": "npm run build -w dashboard",
+    "agent": "tsx packages/buyer-agent/src/main.ts",
+    "agentgate": "tsx packages/cli/src/bin.ts"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}
