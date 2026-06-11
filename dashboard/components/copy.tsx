@@ -59,20 +59,30 @@ export function CopyButton({ text, className = '' }: { text: string; className?:
   );
 }
 
-/** Terminal-style block with a copy button. `display` may differ from copied text. */
+/**
+ * Terminal-style block with a copy button. `display` may differ from copied text.
+ * `wrap` shows the command in full (soft-wrapped) instead of in a horizontal
+ * scroll box — used where the command should always be readable at a glance.
+ */
 export function CommandBlock({
   text,
   display,
   prompt = '$',
+  wrap = false,
 }: {
   text: string;
   display?: string;
   prompt?: string | null;
+  wrap?: boolean;
 }) {
   const shown = display ?? text;
   return (
     <div className="panel flex items-start gap-3 bg-[#070A0F] px-4 py-3">
-      <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre font-mono text-[13px] leading-6 text-zinc-200">
+      <pre
+        className={`min-w-0 flex-1 font-mono text-[13px] leading-6 text-zinc-200 ${
+          wrap ? 'whitespace-pre-wrap break-words' : 'overflow-x-auto whitespace-pre'
+        }`}
+      >
         {prompt ? <span className="select-none text-accent">{prompt} </span> : null}
         {shown}
       </pre>

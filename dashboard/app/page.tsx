@@ -90,7 +90,7 @@ export default function Home() {
           className="mt-9 max-w-2xl animate-fade-up"
           style={{ animationDelay: '270ms' }}
         >
-          <CommandBlock text={WRAP_CMD} />
+          <CommandBlock text={WRAP_CMD} wrap />
         </div>
         <div
           className="mt-7 flex flex-wrap items-center gap-3 animate-fade-up"
@@ -226,7 +226,7 @@ export default function Home() {
             Wrap your first API in under five minutes.
           </h2>
           <div className="mt-7 max-w-2xl">
-            <CommandBlock text={WRAP_CMD} />
+            <CommandBlock text={WRAP_CMD} wrap />
           </div>
           <p className="mt-4 font-mono text-[11px] text-mut">
             then open{' '}
