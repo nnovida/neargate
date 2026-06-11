@@ -13,6 +13,7 @@
   ],
   "scripts": {
     "dev": "tsx scripts/dev.ts",
+    "dev:seed": "tsx scripts/dev.ts --seed",
     "dev:dashboard": "npm run dev -w dashboard",
     "demo": "tsx scripts/demo.ts",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc --noEmit -p tsconfig.json",

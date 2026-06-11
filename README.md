@@ -54,14 +54,30 @@ The demo boots a mock chain + oracle + gateway in-process, wraps the oracle at
 0.5 CSPR, runs the LLM buyer agent (deterministic MockLlm — no API key needed), and
 prints the **payment deploy hash**, the **attestation tx hash**, and the final score.
 
-### Interactive dev loop
+### See it in the dashboard (one command)
 
 ```bash
-npm run dev               # devnet :4030 + oracle :4010 + middleware :4021 (mock mode)
+npm run dev:seed          # boots devnet+oracle+middleware AND seeds one wrapped
+                          # service + a real paid call, then STAYS UP
+npm run dev:dashboard     # in a second terminal → open the URL it prints
+```
+
+> **`npm run demo` won't show in the dashboard** — it's a self-contained one-shot
+> that boots its *own* in-memory chain, runs the loop, and exits, so its data is gone
+> by the time you open a browser. Use `npm run dev:seed` (persistent + populated) to
+> view it live. The dashboard polls the running stack every 5 s.
+
+> **Port note:** the dashboard defaults to `http://localhost:3000`, but if 3000 is
+> already taken Next.js silently moves to **3001** (or the next free port). Always
+> open the URL printed in the `dev:dashboard` terminal, not a hard-coded 3000.
+
+### Manual dev loop
+
+```bash
+npm run dev               # empty stack: devnet :4030 + oracle :4010 + middleware :4021
 # paste the printed MOCK_BUYER_ACCOUNT / MOCK_SELLER_ACCOUNT export lines, then:
 npm run agentgate -- wrap http://localhost:4010/feed --price 0.5 --name "RWA FX & Gold Oracle"
 npm run agent -- --task "Get today's USD/IDR rate and gold price, summarize for a treasury report"
-npm run dev:dashboard     # http://localhost:3000 — landing, catalog, live activity
 ```
 
 Set `ANTHROPIC_API_KEY` to let the buyer agent use Claude instead of the MockLlm.
