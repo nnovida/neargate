@@ -1,0 +1,16 @@
+{
+  "name": "@agentgate/oracle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@agentgate/shared": "*",
+    "express": "^4.21.0"
+  }
+}
