@@ -80,7 +80,7 @@ export function CommandBlock({
     <div className="panel flex items-start gap-3 bg-[#070A0F] px-4 py-3">
       <pre
         className={`min-w-0 flex-1 font-mono text-[13px] leading-6 text-zinc-200 ${
-          wrap ? 'whitespace-pre-wrap break-words' : 'overflow-x-auto whitespace-pre'
+          wrap ? 'whitespace-pre-wrap break-normal' : 'overflow-x-auto whitespace-pre'
         }`}
       >
         {prompt ? <span className="select-none text-accent">{prompt} </span> : null}
