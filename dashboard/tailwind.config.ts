@@ -36,11 +36,16 @@ const config: Config = {
           '0%': { opacity: '0', transform: 'translateY(14px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
         },
+        'caret-blink': {
+          '0%, 49%': { opacity: '1' },
+          '50%, 100%': { opacity: '0' },
+        },
       },
       animation: {
         'pulse-dot': 'pulse-dot 2s ease-in-out infinite',
         shimmer: 'shimmer 1.6s linear infinite',
         'fade-up': 'fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) both',
+        'caret-blink': 'caret-blink 1s steps(1) infinite',
       },
       boxShadow: {
         glow: '0 0 32px rgba(255,59,48,0.22)',

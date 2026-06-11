@@ -90,7 +90,7 @@ export default function Home() {
           className="mt-9 animate-fade-up"
           style={{ animationDelay: '270ms' }}
         >
-          <CommandBlock text={WRAP_CMD} wrap />
+          <CommandBlock text={WRAP_CMD} wrap typewriter />
         </div>
         <div
           className="mt-7 flex flex-wrap items-center gap-3 animate-fade-up"
