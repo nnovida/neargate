@@ -274,7 +274,11 @@ export class LiveCasperClient implements ChainClient {
         },
         // Never let a slow/hung CSPR.cloud block the middleware request forever.
         signal: AbortSignal.timeout(this.cfg.upstreamTimeoutMs),
-      });
+        // Live chain state: bypass any fetch-layer cache (e.g. Next.js) so the
+        // dashboard never shows stale on-chain reads. `cache` is a valid web
+        // fetch option Node accepts but omits from its RequestInit types.
+        cache: 'no-store',
+      } as RequestInit);
     } catch (error) {
       const timedOut = error instanceof Error && error.name === 'TimeoutError';
       throw new AgentGateError(

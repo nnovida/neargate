@@ -4,6 +4,7 @@ import type { ActivityResponse } from '@/lib/api-types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const limit = parseLimit(req.nextUrl.searchParams.get('limit'), 50, 200);

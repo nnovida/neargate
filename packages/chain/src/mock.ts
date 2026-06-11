@@ -101,7 +101,11 @@ export class MockChainHttpClient implements ChainClient {
         headers: body === undefined ? undefined : { 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(DEVNET_REQUEST_TIMEOUT_MS),
-      });
+        // Chain state is live: never let a fetch layer (e.g. Next.js App Router,
+        // which patches global fetch and caches by default) serve a stale read.
+        // `cache` is a valid web fetch option Node accepts but omits from its types.
+        cache: 'no-store',
+      } as RequestInit);
     } catch (error) {
       const timedOut = error instanceof Error && error.name === 'TimeoutError';
       throw new AgentGateError(
