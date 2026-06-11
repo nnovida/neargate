@@ -1,0 +1,21 @@
+{
+  "name": "@agentgate/chain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@agentgate/shared": "*",
+    "@ethersproject/bignumber": "^5.7.0",
+    "@noble/hashes": "^1.2.0",
+    "casper-js-sdk": "^5.0.12"
+  },
+  "devDependencies": {
+    "@agentgate/devnet": "*"
+  }
+}
