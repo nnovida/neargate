@@ -1,0 +1,7 @@
+# cargo-odra contract manifest.
+#
+# The single deployable contract. `cargo odra build` produces
+# `wasm/AgentGateRegistry.wasm`; `cargo odra schema` writes
+# `resources/casper_contract_schemas/agent_gate_registry_schema.json`.
+[[contracts]]
+fqn = "agentgate_registry::AgentGateRegistry"

@@ -1,0 +1,9 @@
+# Odra requires nightly for every build, including `cargo odra test` (OdraVM)
+# — odra-macros uses unstable features (e.g. `box_patterns`). Pinned to the
+# same nightly the official Odra 2.8 `cargo odra new` template pins, which is
+# also new enough for the optional livenet deploy bin (odra-cli needs
+# `Path::with_added_extension`, i.e. rustc >= 1.91).
+# The wasm32 target is needed by `cargo odra build`.
+[toolchain]
+channel = "nightly-2026-01-01"
+targets = ["wasm32-unknown-unknown"]

@@ -1,0 +1,7 @@
+/target
+/wasm
+.builder*
+.backend*
+.env
+/keys
+/resources/deployed_contracts.toml

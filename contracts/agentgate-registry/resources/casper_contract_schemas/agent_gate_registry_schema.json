@@ -1,0 +1,416 @@
+{
+  "casper_contract_schema_version": 1,
+  "toolchain": "rustc 1.94.0-nightly (8d670b93d 2025-12-31)",
+  "authors": [],
+  "repository": null,
+  "homepage": null,
+  "contract_name": "AgentGateRegistry",
+  "contract_version": "0.1.0",
+  "types": [
+    {
+      "struct": {
+        "name": "Attestation",
+        "description": null,
+        "members": [
+          {
+            "name": "payment_deploy_hash",
+            "description": null,
+            "ty": "String"
+          },
+          {
+            "name": "success",
+            "description": null,
+            "ty": "Bool"
+          },
+          {
+            "name": "timestamp",
+            "description": null,
+            "ty": "U64"
+          }
+        ]
+      }
+    },
+    {
+      "struct": {
+        "name": "AttestationRecorded",
+        "description": null,
+        "members": [
+          {
+            "name": "service_id",
+            "description": null,
+            "ty": "U64"
+          },
+          {
+            "name": "payment_deploy_hash",
+            "description": null,
+            "ty": "String"
+          },
+          {
+            "name": "success",
+            "description": null,
+            "ty": "Bool"
+          },
+          {
+            "name": "total_calls",
+            "description": null,
+            "ty": "U64"
+          },
+          {
+            "name": "success_calls",
+            "description": null,
+            "ty": "U64"
+          }
+        ]
+      }
+    },
+    {
+      "struct": {
+        "name": "Service",
+        "description": null,
+        "members": [
+          {
+            "name": "name",
+            "description": null,
+            "ty": "String"
+          },
+          {
+            "name": "description",
+            "description": null,
+            "ty": "String"
+          },
+          {
+            "name": "gateway_base_url",
+            "description": null,
+            "ty": "String"
+          },
+          {
+            "name": "price",
+            "description": null,
+            "ty": "U512"
+          },
+          {
+            "name": "payment_target",
+            "description": null,
+            "ty": "Key"
+          },
+          {
+            "name": "owner",
+            "description": null,
+            "ty": "Key"
+          },
+          {
+            "name": "attestor",
+            "description": null,
+            "ty": "Key"
+          },
+          {
+            "name": "active",
+            "description": null,
+            "ty": "Bool"
+          },
+          {
+            "name": "created_at",
+            "description": null,
+            "ty": "U64"
+          }
+        ]
+      }
+    },
+    {
+      "struct": {
+        "name": "ServiceRegistered",
+        "description": null,
+        "members": [
+          {
+            "name": "service_id",
+            "description": null,
+            "ty": "U64"
+          },
+          {
+            "name": "owner",
+            "description": null,
+            "ty": "Key"
+          },
+          {
+            "name": "name",
+            "description": null,
+            "ty": "String"
+          },
+          {
+            "name": "price",
+            "description": null,
+            "ty": "U512"
+          },
+          {
+            "name": "payment_target",
+            "description": null,
+            "ty": "Key"
+          },
+          {
+            "name": "attestor",
+            "description": null,
+            "ty": "Key"
+          }
+        ]
+      }
+    },
+    {
+      "struct": {
+        "name": "ServiceStatusChanged",
+        "description": null,
+        "members": [
+          {
+            "name": "service_id",
+            "description": null,
+            "ty": "U64"
+          },
+          {
+            "name": "active",
+            "description": null,
+            "ty": "Bool"
+          }
+        ]
+      }
+    }
+  ],
+  "errors": [
+    {
+      "name": "DuplicateAttestation",
+      "description": "`payment_deploy_hash` already attested for this service.",
+      "discriminant": 4
+    },
+    {
+      "name": "EmptyName",
+      "description": "Service name is empty (or whitespace-only).",
+      "discriminant": 6
+    },
+    {
+      "name": "InvalidPrice",
+      "description": "`price` below the 1000-motes minimum.",
+      "discriminant": 5
+    },
+    {
+      "name": "NotAuthorized",
+      "description": "Caller is not allowed to perform this action.",
+      "discriminant": 1
+    },
+    {
+      "name": "ServiceInactive",
+      "description": "Service exists but `active == false`.",
+      "discriminant": 3
+    },
+    {
+      "name": "ServiceNotFound",
+      "description": "Unknown `service_id`.",
+      "discriminant": 2
+    }
+  ],
+  "entry_points": [
+    {
+      "name": "register_service",
+      "description": "Register a new service. The caller becomes the owner. Returns the",
+      "is_mutable": true,
+      "arguments": [
+        {
+          "name": "name",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "description",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "gateway_base_url",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "price",
+          "description": null,
+          "ty": "U512",
+          "optional": false
+        },
+        {
+          "name": "payment_target",
+          "description": null,
+          "ty": "Key",
+          "optional": false
+        },
+        {
+          "name": "attestor",
+          "description": null,
+          "ty": "Key",
+          "optional": false
+        }
+      ],
+      "return_ty": "U64",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "record_attestation",
+      "description": "Record the outcome of one paid call, identified by the payment's",
+      "is_mutable": true,
+      "arguments": [
+        {
+          "name": "service_id",
+          "description": null,
+          "ty": "U64",
+          "optional": false
+        },
+        {
+          "name": "payment_deploy_hash",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "success",
+          "description": null,
+          "ty": "Bool",
+          "optional": false
+        }
+      ],
+      "return_ty": "Unit",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "set_active",
+      "description": "Toggle a service's `active` flag. Owner only.",
+      "is_mutable": true,
+      "arguments": [
+        {
+          "name": "service_id",
+          "description": null,
+          "ty": "U64",
+          "optional": false
+        },
+        {
+          "name": "active",
+          "description": null,
+          "ty": "Bool",
+          "optional": false
+        }
+      ],
+      "return_ty": "Unit",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "get_service",
+      "description": "Fetch a service record. `None` if the id was never registered.",
+      "is_mutable": false,
+      "arguments": [
+        {
+          "name": "service_id",
+          "description": null,
+          "ty": "U64",
+          "optional": false
+        }
+      ],
+      "return_ty": {
+        "Option": "Service"
+      },
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "get_score",
+      "description": "`(total_calls, success_calls)` for a service. `(0, 0)` if the service",
+      "is_mutable": false,
+      "arguments": [
+        {
+          "name": "service_id",
+          "description": null,
+          "ty": "U64",
+          "optional": false
+        }
+      ],
+      "return_ty": {
+        "Tuple2": [
+          "U64",
+          "U64"
+        ]
+      },
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "services_count",
+      "description": "Number of registered services. Ids are `1..=services_count()`.",
+      "is_mutable": false,
+      "arguments": [],
+      "return_ty": "U64",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "get_attestations",
+      "description": "The last (up to) 100 attestations for a service, newest first.",
+      "is_mutable": false,
+      "arguments": [
+        {
+          "name": "service_id",
+          "description": null,
+          "ty": "U64",
+          "optional": false
+        }
+      ],
+      "return_ty": {
+        "List": "Attestation"
+      },
+      "is_contract_context": true,
+      "access": "public"
+    }
+  ],
+  "events": [
+    {
+      "name": "AttestationRecorded",
+      "ty": "AttestationRecorded"
+    },
+    {
+      "name": "ServiceRegistered",
+      "ty": "ServiceRegistered"
+    },
+    {
+      "name": "ServiceStatusChanged",
+      "ty": "ServiceStatusChanged"
+    }
+  ],
+  "call": {
+    "wasm_file_name": "AgentGateRegistry.wasm",
+    "description": null,
+    "arguments": [
+      {
+        "name": "odra_cfg_package_hash_key_name",
+        "description": "The arg name for the package hash key name.",
+        "ty": "String",
+        "optional": false
+      },
+      {
+        "name": "odra_cfg_allow_key_override",
+        "description": "If true and the key specified in odra_cfg_package_hash_key_name already exists, it will be overwritten.",
+        "ty": "Bool",
+        "optional": false
+      },
+      {
+        "name": "odra_cfg_is_upgradable",
+        "description": "The arg name for the contract upgradeability setting.",
+        "ty": "Bool",
+        "optional": false
+      },
+      {
+        "name": "odra_cfg_is_upgrade",
+        "description": "The arg name for telling the installer that the contract is being upgraded.",
+        "ty": "Bool",
+        "optional": false
+      }
+    ]
+  }
+}
