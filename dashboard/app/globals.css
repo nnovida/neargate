@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ink: #0a0e14;
+  --accent: #ff3b30;
+  --line: rgba(255, 255, 255, 0.08);
+}
+
+html {
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+body {
+  background-color: var(--ink);
+  /* Layered atmosphere: faint red signal glow up top + blueprint dot grid. */
+  background-image:
+    radial-gradient(ellipse 70% 36% at 50% -8%, rgba(255, 59, 48, 0.09), transparent 70%),
+    radial-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    28px 28px;
+  background-attachment: fixed;
+}
+
+::selection {
+  background: rgba(255, 59, 48, 0.35);
+  color: #fff;
+}
+
+@layer components {
+  /* Hairline panel with corner tick marks — the house style for data surfaces. */
+  .panel {
+    @apply relative border border-line bg-panel;
+  }
+  .panel::before,
+  .panel::after {
+    content: '';
+    position: absolute;
+    width: 9px;
+    height: 9px;
+    pointer-events: none;
+  }
+  .panel::before {
+    top: -1px;
+    left: -1px;
+    border-top: 1px solid rgba(255, 59, 48, 0.7);
+    border-left: 1px solid rgba(255, 59, 48, 0.7);
+  }
+  .panel::after {
+    bottom: -1px;
+    right: -1px;
+    border-bottom: 1px solid rgba(255, 59, 48, 0.7);
+    border-right: 1px solid rgba(255, 59, 48, 0.7);
+  }
+
+  /* Uppercase mono micro-label, the telemetry voice of the UI. */
+  .microlabel {
+    @apply font-mono text-[10px] uppercase tracking-[0.22em] text-mut;
+  }
+
+  .skeleton {
+    @apply animate-shimmer rounded-sm;
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.05) 25%,
+      rgba(255, 255, 255, 0.11) 50%,
+      rgba(255, 255, 255, 0.05) 75%
+    );
+    background-size: 200% 100%;
+  }
+}
