@@ -87,7 +87,7 @@ export default function Home() {
           no API keys.
         </p>
         <div
-          className="mt-9 max-w-2xl animate-fade-up"
+          className="mt-9 animate-fade-up"
           style={{ animationDelay: '270ms' }}
         >
           <CommandBlock text={WRAP_CMD} wrap />
