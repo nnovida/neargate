@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  node:
+    name: typecheck · test · build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck (all workspaces + root scripts/e2e)
+        run: npm run typecheck
+
+      - name: Test (package units + e2e loop)
+        run: npm test
+
+      - name: Build dashboard
+        run: npm run build
+
+      - name: Demo (full offline loop, must exit 0)
+        run: npm run demo
+
+  contracts:
+    name: cargo odra test (OdraVM)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/agentgate-registry
+    steps:
+      - uses: actions/checkout@v4
+
+      # rustup picks the pinned nightly from rust-toolchain.toml automatically.
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/agentgate-registry
+
+      - name: Install cargo-odra
+        run: cargo install cargo-odra --locked
+
+      - name: Test (OdraVM)
+        run: cargo odra test
