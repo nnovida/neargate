@@ -15,38 +15,102 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
+interface TypewriterOpts {
+  /** ms per character while typing. */
+  speed?: number;
+  /** ms per character while erasing (looping only). */
+  deleteSpeed?: number;
+  /** ms to hold the full text before erasing (looping only). */
+  holdTime?: number;
+  /** ms to wait, empty, before typing again (looping only). */
+  pauseTime?: number;
+  /** ms before the first character appears. */
+  startDelay?: number;
+  /** When true, loops forever: type → hold → erase → pause → type … */
+  loop?: boolean;
+  enabled?: boolean;
+}
+
 /**
- * Reveals `text` one character at a time. Starts after `startDelay` ms and
- * advances every `speed` ms. Disabled (instant full text) when not `enabled`
- * or the user prefers reduced motion.
+ * Reveals `text` one character at a time. With `loop`, runs a type → hold →
+ * erase → pause cycle forever. The caret `blinking` flag is true only while
+ * idle (holding/pausing) so it reads as a steady caret while typing.
+ * Disabled (instant full text, no blink) when not `enabled` or the user
+ * prefers reduced motion.
  */
 function useTypewriter(
   text: string,
-  { speed = 26, startDelay = 350, enabled = true }: { speed?: number; startDelay?: number; enabled?: boolean },
-): { shown: string; done: boolean } {
+  {
+    speed = 60,
+    deleteSpeed = 30,
+    holdTime = 1900,
+    pauseTime = 700,
+    startDelay = 400,
+    loop = false,
+    enabled = true,
+  }: TypewriterOpts,
+): { shown: string; blinking: boolean } {
   const reduced = usePrefersReducedMotion();
   const [count, setCount] = useState(0);
+  const [blinking, setBlinking] = useState(false);
 
   useEffect(() => {
     if (!enabled || reduced) {
       setCount(text.length);
+      setBlinking(false);
       return;
     }
-    setCount(0);
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const after = (ms: number, fn: () => void) => {
+      timer = setTimeout(() => {
+        if (!cancelled) fn();
+      }, ms);
+    };
+
     let i = 0;
-    let tick: ReturnType<typeof setTimeout>;
-    const begin = setTimeout(function step() {
+    setCount(0);
+    setBlinking(false);
+
+    const type = () => {
       i += 1;
       setCount(i);
-      if (i < text.length) tick = setTimeout(step, speed);
-    }, startDelay);
-    return () => {
-      clearTimeout(begin);
-      clearTimeout(tick);
+      if (i < text.length) {
+        after(speed, type);
+      } else if (loop) {
+        setBlinking(true); // idle caret while the full command is held
+        after(holdTime, erase);
+      } else {
+        setBlinking(true); // one-shot: leave the caret blinking at the end
+      }
     };
-  }, [text, speed, startDelay, enabled, reduced]);
+    const erase = () => {
+      setBlinking(false);
+      step();
+    };
+    const step = () => {
+      i -= 1;
+      setCount(i);
+      if (i > 0) {
+        after(deleteSpeed, step);
+      } else {
+        setBlinking(true); // pause, empty, before typing again
+        after(pauseTime, () => {
+          setBlinking(false);
+          type();
+        });
+      }
+    };
 
-  return { shown: text.slice(0, count), done: count >= text.length };
+    after(startDelay, type);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [text, speed, deleteSpeed, holdTime, pauseTime, startDelay, loop, enabled, reduced]);
+
+  return { shown: text.slice(0, count), blinking };
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -126,7 +190,7 @@ export function CommandBlock({
   typewriter?: boolean;
 }) {
   const full = display ?? text;
-  const { shown, done } = useTypewriter(full, { enabled: typewriter });
+  const { shown, blinking } = useTypewriter(full, { enabled: typewriter, loop: typewriter });
   const visible = typewriter ? shown : full;
   return (
     <div className="panel flex items-start gap-3 bg-[#070A0F] px-4 py-3">
@@ -144,7 +208,7 @@ export function CommandBlock({
           <span
             aria-hidden
             className={`ml-0.5 inline-block h-[1.05em] w-[0.55ch] translate-y-[2px] bg-accent align-baseline ${
-              done ? 'animate-caret-blink' : ''
+              blinking ? 'animate-caret-blink' : ''
             }`}
           />
         ) : null}
