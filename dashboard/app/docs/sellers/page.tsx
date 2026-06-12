@@ -160,14 +160,17 @@ register tx:     <txHash>`}
         code 3), and buying agents filter the service out of discovery. Reactivating restores
         everything; the score is untouched.
       </P>
-      <Callout tone="info" title="current CLI surface — honest note">
-        <M>agentgate</M> currently ships <M>wrap</M>, <M>list</M>, <M>status</M> and{' '}
-        <M>demo-accounts</M> — there is no pause command yet. To toggle today: in mock mode call
-        the devnet route <M>POST /chain/services/:id/active</M> (see{' '}
-        <DocLink href="/docs/api#devnet">HTTP API → Devnet</DocLink>); in live mode call the{' '}
-        <M>set_active</M> entrypoint directly (the chain layer&apos;s <M>setActive</M> supports
-        it).
-      </Callout>
+      <CommandBlock text="npm run agentgate -- pause 1" />
+      <CommandBlock text="npm run agentgate -- resume 1" />
+      <P>
+        Both commands sign <M>set_active</M> on-chain with your seller signer (mock mode:{' '}
+        <M>MOCK_SELLER_ACCOUNT</M>, live mode: <M>SELLER_SIGNER_PEM_PATH</M>), re-fetch the
+        record and print the service, its new active state and the tx hash. Signing with a
+        key that is not the owner fails with <M>error: not_authorized</M>. While paused the
+        gateway answers <M>403 service_inactive</M> on <M>/svc/&lt;id&gt;</M> and the{' '}
+        <DocLink href="/catalog">catalog</DocLink> shows the service as inactive. Full
+        reference in <DocLink href="/docs/cli#pause">CLI → pause / resume</DocLink>.
+      </P>
 
       <H2 id="privacy">Upstream privacy guarantee</H2>
       <P>

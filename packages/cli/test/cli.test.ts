@@ -7,10 +7,12 @@ import type {
   ServiceRecord,
   ServiceScore,
 } from '@agentgate/shared';
+import { AgentGateError } from '@agentgate/shared';
 import {
   createDemoAccounts,
   listServices,
   serviceStatus,
+  setServiceActive,
   wrapService,
 } from '../src/index';
 
@@ -400,5 +402,93 @@ describe('serviceStatus', () => {
     await expect(serviceStatus({ chain, id: 1.5 })).rejects.toMatchObject({
       code: 'INVALID_SERVICE_ID',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setServiceActive (pause / resume)
+// ---------------------------------------------------------------------------
+
+describe('setServiceActive', () => {
+  const SET_ACTIVE_TX = HEX64('c');
+
+  /** Stateful fake: setActive mutates the stored record, getService reads it back. */
+  function makeToggleChain(initialActive: boolean): {
+    chain: FakeChain;
+    calls: Array<{ serviceId: number; active: boolean; signer: AnySigner }>;
+  } {
+    const record = makeService(2, { active: initialActive });
+    const calls: Array<{ serviceId: number; active: boolean; signer: AnySigner }> = [];
+    const chain = makeFakeChain();
+    chain.setActive = async (serviceId, active, signer) => {
+      calls.push({ serviceId, active, signer });
+      record.active = active;
+      return { txHash: SET_ACTIVE_TX };
+    };
+    chain.getService = async (id) => (id === 2 ? record : null);
+    return { chain, calls };
+  }
+
+  it('pause: flips active true→false and returns the tx hash + fresh record', async () => {
+    const { chain, calls } = makeToggleChain(true);
+    const result = await setServiceActive({ chain, signer: SIGNER, id: 2, active: false });
+    expect(result.txHash).toBe(SET_ACTIVE_TX);
+    expect(result.service.id).toBe(2);
+    expect(result.service.active).toBe(false);
+    expect(calls).toEqual([{ serviceId: 2, active: false, signer: SIGNER }]);
+  });
+
+  it('resume: flips active false→true and returns the tx hash + fresh record', async () => {
+    const { chain, calls } = makeToggleChain(false);
+    const result = await setServiceActive({ chain, signer: SIGNER, id: 2, active: true });
+    expect(result.txHash).toBe(SET_ACTIVE_TX);
+    expect(result.service.active).toBe(true);
+    expect(calls).toEqual([{ serviceId: 2, active: true, signer: SIGNER }]);
+  });
+
+  it('rejects invalid ids with INVALID_SERVICE_ID without touching the chain', async () => {
+    const { chain, calls } = makeToggleChain(true);
+    for (const id of [0, -1, 1.5, Number.NaN]) {
+      await expect(
+        setServiceActive({ chain, signer: SIGNER, id, active: false }),
+      ).rejects.toMatchObject({ code: 'INVALID_SERVICE_ID', httpStatus: 400 });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rewords the devnet 403 not_authorized into the owner-only message', async () => {
+    const chain = makeFakeChain();
+    chain.setActive = async () => {
+      throw new AgentGateError(
+        'not_authorized',
+        'only the service owner may change the active flag',
+        403,
+      );
+    };
+    await expect(
+      setServiceActive({ chain, signer: SIGNER, id: 2, active: false }),
+    ).rejects.toMatchObject({
+      name: 'AgentGateError',
+      code: 'not_authorized',
+      httpStatus: 403,
+      message: expect.stringContaining('only the service owner can pause/resume service 2'),
+    });
+  });
+
+  it('passes other chain errors through unchanged', async () => {
+    const chain = makeFakeChain();
+    chain.setActive = async () => {
+      throw new AgentGateError('NOT_DEPLOYED', 'registry contract is not deployed', 503);
+    };
+    await expect(
+      setServiceActive({ chain, signer: SIGNER, id: 2, active: false }),
+    ).rejects.toMatchObject({ code: 'NOT_DEPLOYED', httpStatus: 503 });
+  });
+
+  it('rejects with SERVICE_NOT_FOUND when the re-fetch after set_active finds nothing', async () => {
+    const chain = makeFakeChain(); // getService → null, setActive → tx hash
+    await expect(
+      setServiceActive({ chain, signer: SIGNER, id: 2, active: false }),
+    ).rejects.toMatchObject({ code: 'SERVICE_NOT_FOUND', httpStatus: 404 });
   });
 });

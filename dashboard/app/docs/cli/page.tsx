@@ -16,7 +16,7 @@ import {
 export const metadata: Metadata = {
   title: 'Docs — CLI',
   description:
-    'agentgate CLI reference: wrap, list, status and demo-accounts — every flag, the env each command reads, example output and exit codes.',
+    'agentgate CLI reference: wrap, list, status, pause, resume and demo-accounts — every flag, the env each command reads, example output and exit codes.',
 };
 
 export default function CliPage() {
@@ -25,7 +25,7 @@ export default function CliPage() {
       <DocHeader
         kicker="docs / cli"
         title="CLI reference"
-        lede="The agentgate CLI ships four commands: wrap (publish a service), list (the on-chain catalog), status (one service in depth) and demo-accounts (faucet-funded mock accounts). Run it from the repo root via npm run agentgate."
+        lede="The agentgate CLI ships six commands: wrap (publish a service), list (the on-chain catalog), status (one service in depth), pause / resume (toggle a service you own) and demo-accounts (faucet-funded mock accounts). Run it from the repo root via npm run agentgate."
       />
       <CommandBlock text="npm run agentgate -- <command> [args]" />
       <P>
@@ -184,6 +184,69 @@ attestations:
         <M>[INACTIVE]</M> marker after its name; the description line is omitted when empty.
       </P>
 
+      {/* ───────────────────────────── pause ───────────────────────────── */}
+      <H2 id="pause">agentgate pause</H2>
+      <P>
+        Pause a service you own: signs the registry&apos;s{' '}
+        <M>set_active(service_id, false)</M> on-chain — owner only — then re-fetches the
+        record and prints the new state. While paused the gateway answers{' '}
+        <M>403 service_inactive</M> on <M>/svc/&lt;id&gt;</M>, attestations revert with{' '}
+        <M>ServiceInactive</M>, and the catalog shows the service as inactive. The score is
+        untouched.
+      </P>
+      <CommandBlock text="npm run agentgate -- pause <id>" />
+      <DocTable
+        head={['Argument', 'Rule']}
+        rows={[
+          [
+            <M key="a">{'<id>'}</M>,
+            'Positive integer. Invalid → INVALID_SERVICE_ID; not on-chain → SERVICE_NOT_FOUND; signed by a non-owner key → not_authorized.',
+          ],
+        ]}
+      />
+      <CodeBlock
+        label="output"
+        code={`service:       #2 Premium Sentiment Feed
+active:        no (paused)
+set_active tx: <txHash>`}
+      />
+
+      {/* ───────────────────────────── resume ───────────────────────────── */}
+      <H2 id="resume">agentgate resume</H2>
+      <P>
+        Resume a paused service: <M>set_active(service_id, true)</M> — same argument rules
+        and owner-only check as <M>pause</M>. Calls flow through the paywall again
+        immediately and buying agents see the service in discovery on their next catalog
+        read.
+      </P>
+      <CommandBlock text="npm run agentgate -- resume <id>" />
+      <CodeBlock
+        label="output"
+        code={`service:       #2 Premium Sentiment Feed
+active:        yes
+set_active tx: <txHash>`}
+      />
+      <H3 id="pause-env">Environment pause / resume read</H3>
+      <DocTable
+        head={['Variable', 'When', 'Purpose']}
+        rows={[
+          [
+            <M key="v">MOCK_SELLER_ACCOUNT</M>,
+            'mock mode',
+            'Owner signer public key. Missing → SIGNER_MISSING; not the service owner → not_authorized.',
+          ],
+          [
+            <M key="v">SELLER_SIGNER_PEM_PATH</M>,
+            'live mode',
+            'Owner PEM key path. Missing → SIGNER_MISSING.',
+          ],
+        ]}
+      />
+      <P>
+        Exit codes match the rest of the CLI: 0 on success, 1 on any error (printed as{' '}
+        <M>error: &lt;CODE&gt;: &lt;message&gt;</M>).
+      </P>
+
       {/* ───────────────────────────── demo-accounts ───────────────────────────── */}
       <H2 id="demo-accounts">agentgate demo-accounts</H2>
       <P>
@@ -215,14 +278,25 @@ export MOCK_SELLER_ACCOUNT=<publicKeyHex>`}
           [
             <M key="c">INVALID_SERVICE_ID</M>,
             '400',
-            'status',
-            'service id must be a non-negative integer',
+            'status / pause / resume',
+            'service id must be a non-negative integer (positive for pause/resume)',
           ],
-          [<M key="c">SERVICE_NOT_FOUND</M>, '404', 'status', 'service <id> not found on-chain'],
+          [
+            <M key="c">SERVICE_NOT_FOUND</M>,
+            '404',
+            'status / pause / resume',
+            'service <id> not found on-chain',
+          ],
+          [
+            <M key="c">not_authorized</M>,
+            '403',
+            'pause / resume',
+            'only the service owner can pause/resume — sign with the owner key',
+          ],
           [
             <M key="c">SIGNER_MISSING</M>,
             '400',
-            'wrap (any mode)',
+            'wrap / pause / resume',
             'mock mode needs MOCK_SELLER_ACCOUNT / live mode needs SELLER_SIGNER_PEM_PATH',
           ],
           [<M key="c">MOCK_ONLY</M>, '400', 'demo-accounts', 'demo-accounts only works in mock mode'],

@@ -11,6 +11,7 @@ import {
 } from '@agentgate/shared';
 import { createDemoAccounts } from './demo-accounts';
 import { listServices } from './list';
+import { setServiceActive } from './pause';
 import { serviceStatus, STATUS_ATTESTATION_LIMIT } from './status';
 import { wrapService } from './wrap';
 
@@ -169,6 +170,41 @@ program
       );
     }
   });
+
+/** Shared action for `pause` / `resume`: toggle the on-chain active flag and report. */
+async function toggleActive(idRaw: string, active: boolean): Promise<void> {
+  if (!/^\d+$/.test(idRaw.trim())) {
+    throw new AgentGateError(
+      'INVALID_SERVICE_ID',
+      `service id must be a positive integer, got ${JSON.stringify(idRaw)}`,
+      400,
+    );
+  }
+  const config = loadConfig();
+  const chain = createChainClient(config);
+  const signer = sellerSigner(config);
+  const { txHash, service } = await setServiceActive({
+    chain,
+    signer,
+    id: Number(idRaw.trim()),
+    active,
+  });
+  console.log(`service:       #${service.id} ${service.name}`);
+  console.log(`active:        ${service.active ? 'yes' : 'no (paused)'}`);
+  console.log(`set_active tx: ${txHash}`);
+}
+
+program
+  .command('pause')
+  .description('Pause a service you own: set_active(false) on-chain, the paywall answers 403')
+  .argument('<id>', 'service id')
+  .action(async (idRaw: string) => toggleActive(idRaw, false));
+
+program
+  .command('resume')
+  .description('Resume a paused service you own: set_active(true) on-chain, calls flow again')
+  .argument('<id>', 'service id')
+  .action(async (idRaw: string) => toggleActive(idRaw, true));
 
 program
   .command('demo-accounts')

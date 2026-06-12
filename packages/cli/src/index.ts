@@ -8,6 +8,11 @@ export {
 } from './wrap';
 export { listServices, type ServiceListing } from './list';
 export {
+  setServiceActive,
+  type SetServiceActiveOpts,
+  type SetServiceActiveResult,
+} from './pause';
+export {
   serviceStatus,
   STATUS_ATTESTATION_LIMIT,
   type ServiceStatusResult,
