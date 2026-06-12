@@ -1,0 +1,37 @@
+# Keep the Docker build context tiny — only manifests + package sources are
+# COPY'd by packages/*/Dockerfile, but everything NOT listed here still gets
+# uploaded to the daemon as context.
+
+.git
+node_modules
+**/node_modules
+
+# Rust build artifacts (~7 GB) + contract sources — never needed in images.
+contracts
+
+# Next.js app: images don't run the dashboard, but `npm ci` validates the
+# lockfile against EVERY workspace manifest, so keep dashboard/package.json.
+dashboard/*
+!dashboard/package.json
+**/.next
+
+# Runtime/local state.
+logs
+data
+packages/middleware/data
+**/*.log
+**/tsconfig.tsbuildinfo
+
+# Not part of any image.
+e2e
+docs
+scripts
+.env
+.env.*
+!.env.example
+.vercel
+.vercelignore
+vercel.json
+docker-compose*.yml
+Dockerfile
+**/Dockerfile

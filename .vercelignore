@@ -1,0 +1,12 @@
+# Trim the Vercel upload: the dashboard build needs the root manifests, the
+# workspace package.json files, dashboard/, packages/shared and packages/chain.
+# Everything below is never read by `npm run build -w dashboard`.
+contracts
+logs
+e2e
+.dockerignore
+docker-compose*.yml
+packages/*/Dockerfile
+packages/middleware/data
+**/*.log
+**/tsconfig.tsbuildinfo

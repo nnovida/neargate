@@ -109,7 +109,7 @@ packages/
   client/        agent-side fetchPaid (parse 402 → pay → retry)
   oracle/        demo RWA feed: USD/IDR + gold spot + confidence            :4010
   buyer-agent/   LLM decision loop (AnthropicLlm / MockLlm)
-  cli/           agentgate wrap | list | status | demo-accounts
+  cli/           agentgate wrap | list | status | pause | resume | demo-accounts
 dashboard/       Next.js 14 landing + catalog + live activity              :3000
 contracts/       AgentGateRegistry (Rust/Odra) — registry, scores, attestations
 e2e/             full-loop test, in-process servers on port 0
@@ -148,6 +148,10 @@ scope for this build. Once deployed, set `REGISTRY_CONTRACT_PACKAGE_HASH` in `.e
 Deploying the registry to Casper Testnet is documented (not executed) in
 [docs/DEPLOY.md](docs/DEPLOY.md): build/deploy runbook, the full list of
 `NOT_DEPLOYED`-gated call paths, and the ⚠️ verify-against-deployed-contract checklist.
+
+Hosting the services is documented in [docs/HOSTING.md](docs/HOSTING.md): dashboard →
+Vercel (root `vercel.json`), middleware + oracle → Railway (per-package Dockerfiles +
+`railway.json`), plus a self-contained `docker-compose.hosting.yml` demo stack.
 
 ## Roadmap
 

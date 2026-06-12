@@ -1,0 +1,78 @@
+# Self-contained "hosted" demo stack (mock mode): devnet + oracle + middleware
+# built from the production Dockerfiles. The dashboard is NOT containerized —
+# run it locally (or on Vercel) pointed at these ports.
+#
+#   docker compose -f docker-compose.hosting.yml up -d --build
+#   curl http://localhost:14030/healthz   # devnet     (mock chain)
+#   curl http://localhost:14010/healthz   # oracle     (RWA feed)
+#   curl http://localhost:14021/healthz   # middleware (402 gateway)
+#
+# Host ports are 1xxxx so this never collides with a local dev stack on
+# 4030/4010/4021. Dashboard against this stack:
+#   AGENTGATE_MODE=mock DEVNET_URL=http://localhost:14030 npm run dev:dashboard
+#
+# Stop + wipe state:  docker compose -f docker-compose.hosting.yml down -v
+
+services:
+  devnet:
+    build:
+      context: .
+      dockerfile: packages/devnet/Dockerfile
+    image: agentgate-devnet
+    environment:
+      AGENTGATE_MODE: mock
+    ports:
+      - '14030:4030'
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:4030/healthz']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  oracle:
+    build:
+      context: .
+      dockerfile: packages/oracle/Dockerfile
+    image: agentgate-oracle
+    environment:
+      AGENTGATE_MODE: mock
+      # 1 = deterministic fixture feed (no outbound calls — demo works offline).
+      # Set to 0 to hit the real FX/gold sources from inside the container.
+      ORACLE_STATIC: '1'
+    ports:
+      - '14010:4010'
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:4010/healthz']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  middleware:
+    build:
+      context: .
+      dockerfile: packages/middleware/Dockerfile
+    image: agentgate-middleware
+    environment:
+      AGENTGATE_MODE: mock
+      # Container-to-container: service names, not localhost.
+      DEVNET_URL: http://devnet:4030
+      AGENTGATE_ADMIN_TOKEN: dev-admin-token # mock-mode default; override for anything public
+    ports:
+      - '14021:4021'
+    volumes:
+      # Upstream map (serviceId → upstream URL) survives restarts.
+      - middleware-data:/app/packages/middleware/data
+    depends_on:
+      devnet:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:4021/healthz']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  middleware-data:
