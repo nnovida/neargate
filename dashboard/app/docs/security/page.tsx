@@ -244,7 +244,7 @@ export default function SecurityPage() {
           'logger.info("startup", { adminToken: "s3cr3t-admin-token-value" });\n' +
           '// stdout:\n' +
           '{"ts":"...","level":"info","name":"middleware","msg":"startup",\n' +
-          ' "adminToken":"s3…[redacted:23]"}'
+          ' "adminToken":"s3…[redacted:24]"}'
         }
       />
       <Callout tone="info" title="Use HTTPS for the live gateway">

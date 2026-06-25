@@ -430,7 +430,7 @@ export default function Page() {
       </P>
       <CommandBlock text="cd contracts/agentgate-registry && cargo odra test" />
       <P>
-        Runs the in-process OdraVM unit suite (no WASM, no network) — 17 tests for the registry
+        Runs the in-process OdraVM unit suite (no WASM, no network) — 20 tests for the registry
         covering the register/get happy path, sequential ids and <M>services_count</M>,
         empty/whitespace-name and below-minimum-price reverts (incl. the exact 1000-motes
         boundary), default reads for unknown ids, attestor-or-owner auth (strangers revert), the

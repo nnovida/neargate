@@ -175,7 +175,7 @@ export default function Page() {
             <M key="p">--price {'<cspr>'}</M>,
             'yes',
             '—',
-            'Price per call in CSPR (e.g. 0.5). Must be > 0, at most 9 decimal places; stored as motes on-chain.',
+            'Price per call in CSPR (e.g. 0.5), up to 9 decimal places. A malformed value (non-numeric or >9 dp) fails with INVALID_AMOUNT; a non-positive value fails with INVALID_PRICE. Stored as motes on-chain.',
           ],
           [<M key="n">--name {'<name>'}</M>, 'yes', '—', 'Service name. Non-empty, no control characters, ≤ 128 chars.'],
           [

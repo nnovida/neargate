@@ -393,7 +393,7 @@ export default function DeploymentPage() {
       <Callout tone="warn" title="contract deploy is out of scope">
         Deploying the Casper contracts to Testnet is a separate, deferred step that needs a funded
         key. The <M>contracts/DEPLOY-DAY1.md</M> kit documents it, but no live contract address
-        exists yet — <M>resources/deployed_contracts.toml</M> is empty and{' '}
+        exists yet — <M>resources/deployed_contracts.toml</M> is not written until the deploy step runs, and{' '}
         <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> ships blank. Treat any deployment as mock-mode until
         that hash is filled in.
       </Callout>

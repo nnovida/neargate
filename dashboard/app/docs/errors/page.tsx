@@ -361,7 +361,7 @@ export default function Page() {
             <M key="rl">rate_limited</M>,
             '429',
             'Too many requests: /svc/* allows 60/min, /admin/* allows 20/min, keyed by client IP. Includes draft-7 RateLimit-* headers.',
-            'Back off and retry after the window; honor the RateLimit-Reset header.',
+            'Back off and retry after the window; honor the reset value in the draft-7 RateLimit / RateLimit-Policy headers.',
           ],
           [
             <M key="ptl">payload_too_large</M>,
@@ -404,7 +404,7 @@ export default function Page() {
 
       <Callout tone="info" title="Admin upstream validation">
         <M>POST /admin/services</M> also returns <M>400</M> with the SSRF-guard&apos;s own reason
-        codes (e.g. <M>not_http_url</M>, <M>forbidden_host</M>) when the supplied{' '}
+        codes (e.g. <M>invalid_upstream_url</M>, <M>forbidden_upstream_host</M>) when the supplied{' '}
         <M>upstreamUrl</M> is not an acceptable public http(s) URL. See{' '}
         <DocLink href="/docs/security">Security</DocLink> for the host policy.
       </Callout>
@@ -455,6 +455,12 @@ export default function Page() {
             '504',
             'A fetchPaid request (initial or proof retry) timed out (requestTimeoutMs, default 30 s).',
             'Retry; raise requestTimeoutMs if the upstream is legitimately slow.',
+          ],
+          [
+            <M key="iamt">INVALID_AMOUNT</M>,
+            '400',
+            'A CSPR/motes string failed to parse (e.g. maxPriceMotes, an amount, a transfer id) — raised by parseMotes / csprToMotes in @agentgate/shared. Also surfaces from the CLI (a malformed --price) and config (BUYER_BUDGET_CSPR).',
+            'Pass a non-negative decimal CSPR string with at most 9 decimal places (or an integer motes string).',
           ],
           [
             <M key="bo">BAD_OPTS</M>,

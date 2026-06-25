@@ -156,7 +156,7 @@ export default function Page() {
         code={"devnet      → http://localhost:4030\noracle      → http://localhost:4010/feed\nmiddleware  → http://localhost:4021\n\nseeding the dashboard (wrap → 402 → pay → serve → attest)…\n\n────────────────────────────────────────────────────────────────────────\nAgentGate dev stack is up (mock mode) — SEEDED and ready to view.\n\n  service #1   http://localhost:4021/svc/1\n  paid call    0.5 CSPR · deploy 0123456789abcdef…\n  attestation  0123456789abcdef…\n  score        1/1 (success/total)\n\n▶ Open the dashboard:  npm run dev:dashboard   →  http://localhost:3000\n  (the stack stays up; the dashboard polls it live every 5s)\n\nCtrl+C stops everything.\n────────────────────────────────────────────────────────────────────────"}
       />
       <Callout tone="warn" title="Port note: 3000 may shift to 3001">
-        The dashboard targets port 3000 (<M>DASHBOARD_PORT</M>), but if 3000 is already taken
+        The dashboard runs on port 3000 by default (next dev; set the <M>PORT</M> env var to change it — <M>DASHBOARD_PORT</M> only controls the link the CLI prints). If 3000 is already taken
         Next.js silently moves to the next free port — typically <M>http://localhost:3001</M>.
         Always open the URL printed in the <M>dev:dashboard</M> terminal rather than hard-coding
         3000.

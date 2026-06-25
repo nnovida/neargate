@@ -50,7 +50,7 @@ export default function Page() {
           [
             <M key="d">dashboard</M>,
             <M key="db">:3000</M>,
-            'Read-only /api/* routes (network, services, activity, stats, health)',
+            'Read-only /api/* routes (services, services/:id, activity, stats, health)',
           ],
         ]}
       />

@@ -30,7 +30,7 @@ export default function ConfigurationPage() {
       <P>
         All configuration is environment variables — there is no config file. A single function,
         <M>loadConfig(env = process.env)</M> in <M>packages/shared/src/config.ts</M>, is the source
-        of truth: it reads each variable, validates it, applies defaults, and returns a frozen
+        of truth: it reads each variable, validates it, applies defaults, and returns a validated
         <M>AgentGateConfig</M>. Every value has a working <M>mock</M>-mode default, so a fresh clone
         runs with zero setup. A commented template listing every variable lives at
         <M>.env.example</M> in the repo root.

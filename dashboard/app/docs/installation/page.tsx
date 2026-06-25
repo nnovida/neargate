@@ -76,7 +76,7 @@ export default function InstallationPage() {
         Deploying the registry to Casper Testnet is intentionally out of scope for this build — no
         live contract address exists yet. You can install, run the full payment loop, and pass
         every test without ever touching Rust. The Rust toolchain only matters if you want to run
-        the 17 OdraVM contract tests locally.
+        the 20 OdraVM contract tests locally.
       </Callout>
 
       <H2 id="clone-install">Clone and install</H2>
@@ -303,12 +303,12 @@ export default function InstallationPage() {
       <H3 id="verify-test">Run the test suite</H3>
       <CommandBlock prompt={null} text="npm test" />
       <P>
-        Runs <M>vitest</M> across every package unit suite plus the end-to-end loop — 243 tests.
+        Runs <M>vitest</M> across every package unit suite plus the end-to-end loop — 274 tests.
         A clean install passes all of them.
       </P>
       <CodeBlock
         label="expected (abbreviated)"
-        code={'Test Files  XX passed (XX)\n     Tests  243 passed (243)\n  Duration  ...s'}
+        code={'Test Files  17 passed (17)\n     Tests  274 passed (274)\n  Duration  ...s'}
       />
 
       <H3 id="verify-typecheck">Type-check the workspace</H3>

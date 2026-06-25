@@ -483,7 +483,7 @@ export default function Page() {
           ],
           [
             <M key="ia">INVALID_AMOUNT</M>,
-            '—',
+            '400',
             'maxPriceMotes is not a parseable motes string (raised by parseMotes at construction).',
           ],
         ]}
