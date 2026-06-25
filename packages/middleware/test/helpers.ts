@@ -32,6 +32,7 @@ export function testConfig(overrides: Partial<AgentGateConfig> = {}): AgentGateC
     adminToken: 'test-admin-token',
     invoiceTtlMs: 300_000,
     upstreamTimeoutMs: 5_000,
+    trustProxy: 0,
     casperNodeUrl: 'https://node.testnet.casper.network/rpc',
     csprCloudApiUrl: 'https://api.testnet.cspr.cloud',
     csprCloudApiKey: '',

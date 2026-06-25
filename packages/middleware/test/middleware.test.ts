@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Invoice402Body } from '../src/index';
+import { AgentGateError } from '@agentgate/shared';
+import { createApp, type Invoice402Body } from '../src/index';
 import {
   adminMap,
   bootGateway,
   payInvoice,
   proofHeaders,
+  silentLogger,
   sleep,
   startUpstream,
   testConfig,
@@ -446,6 +448,9 @@ describe('admin API', () => {
         mode: 'live',
         adminToken: 'live-admin-secret',
         csprCloudApiKey: 'test-key',
+        // Live mode now requires an attestor signer path (fail-closed); this
+        // test never attests, so a placeholder path is sufficient.
+        gateSignerPemPath: '/tmp/agentgate-test-gate-signer.pem',
       }),
     });
     try {
@@ -492,6 +497,55 @@ describe('admin API', () => {
     } finally {
       await mockGw.close();
     }
+  });
+});
+
+describe('request hardening', () => {
+  it('rejects a non-JSON request body with 415 before charging or proxying', async () => {
+    const gw = await bootGateway();
+    const upstream = await startUpstream();
+    try {
+      gw.fake.addService({ id: 1 });
+      await adminMap(gw, 1, `${upstream.url}/echo`);
+      const res = await fetch(`${gw.baseUrl}/svc/1`, {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain' },
+        body: 'not json',
+      });
+      expect(res.status).toBe(415);
+      expect(await res.json()).toEqual({ error: 'unsupported_media_type' });
+      // Never charged, never delivered: the upstream saw nothing.
+      expect(upstream.seen.length).toBe(0);
+    } finally {
+      await upstream.close();
+      await gw.close();
+    }
+  });
+
+  it('serves /readyz when the chain is reachable', async () => {
+    const gw = await bootGateway();
+    try {
+      const res = await fetch(`${gw.baseUrl}/readyz`);
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { ready: boolean }).ready).toBe(true);
+    } finally {
+      await gw.close();
+    }
+  });
+
+  it('refuses to build a live-mode app without a gate signer (fail closed)', () => {
+    expect(() =>
+      createApp({
+        config: testConfig({
+          mode: 'live',
+          csprCloudApiKey: 'k',
+          adminToken: 'a-strong-unique-token',
+          gateSignerPemPath: '',
+        }),
+        chain: new FakeChainClient(),
+        logger: silentLogger,
+      }),
+    ).toThrow(AgentGateError);
   });
 });
 

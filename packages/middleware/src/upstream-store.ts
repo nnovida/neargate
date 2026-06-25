@@ -31,8 +31,14 @@ export class UpstreamStore {
     this.logger = logger;
   }
 
-  /** Loads the mapping file at boot. Missing file → empty map. Corrupt file → throws. */
-  loadSync(): void {
+  /**
+   * Loads the mapping file at boot. Missing file → empty map. Corrupt file →
+   * throws. An optional `validate(url, serviceId)` predicate (e.g. the SSRF
+   * guard) lets the caller drop entries that are no longer acceptable — a
+   * persisted mapping to a now-forbidden host is skipped (with a loud warn)
+   * rather than silently trusted.
+   */
+  loadSync(validate?: (upstreamUrl: string, serviceId: number) => boolean): void {
     let raw: string;
     try {
       raw = readFileSync(this.filePath, 'utf8');
@@ -65,7 +71,14 @@ export class UpstreamStore {
           500,
         );
       }
-      this.map.set(Number(key), value);
+      const serviceId = Number(key);
+      if (validate && !validate(value, serviceId)) {
+        // Defense-in-depth: a persisted mapping that fails the current guard
+        // (e.g. a now-forbidden private host) is dropped, not trusted.
+        this.logger?.warn('upstream_entry_rejected_on_load', { serviceId });
+        continue;
+      }
+      this.map.set(serviceId, value);
     }
     this.logger?.info('upstreams_loaded', { count: this.map.size });
   }

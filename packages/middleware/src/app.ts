@@ -26,7 +26,7 @@ import { MemoryInvoiceStore, type InvoiceStore } from './invoice-store';
 import { UpstreamStore } from './upstream-store';
 import { ServiceCache } from './service-cache';
 import { isUpstreamSuccess, proxyToUpstream } from './proxy';
-import { validateUpstreamUrl } from './ssrf';
+import { resolvedHostIsPublic, validateUpstreamUrl } from './ssrf';
 import {
   HEADER_AGENTGATE_NONCE,
   HEADER_AGENTGATE_PRICE,
@@ -60,8 +60,26 @@ const DEFAULT_ATTESTATION_RETRY_DELAY_MS = 5_000;
 const PENDING_RETRY_AFTER_MS = 2_000;
 const JSON_BODY_LIMIT = '256kb';
 const SVC_RATE_LIMIT_PER_MINUTE = 60;
+const ADMIN_RATE_LIMIT_PER_MINUTE = 20;
 const NONCE_RE = /^\d{1,20}$/;
 const SERVICE_ID_RE = /^\d{1,15}$/;
+
+/**
+ * True when the request carries a body the gateway cannot faithfully forward.
+ * We only relay JSON bodies (express.json parsed them); a non-JSON body would be
+ * silently dropped, so we reject it BEFORE charging rather than bill the buyer
+ * for an upstream call that receives an empty body.
+ */
+function hasUnsupportedRequestBody(req: Request): boolean {
+  const method = req.method.toUpperCase();
+  if (method === 'GET' || method === 'HEAD') return false;
+  const contentLength = req.header('content-length');
+  const hasBody =
+    (contentLength !== undefined && contentLength !== '0') ||
+    req.header('transfer-encoding') !== undefined;
+  if (!hasBody) return false;
+  return !req.is('application/json');
+}
 
 function defaultUpstreamsFile(): string {
   // <package>/src/app.ts → <package>/data/upstreams.json
@@ -97,6 +115,15 @@ export function createApp(deps: MiddlewareDeps): Express {
     throw new AgentGateError('BAD_DEPS', 'createApp requires { config, chain }', 500);
   }
   const { config, chain } = deps;
+  // Fail closed: live mode must use a real attestor key, never the mock-signer
+  // fallback (which would record attestations with no key material).
+  if (config.mode === 'live' && config.gateSignerPemPath.trim() === '') {
+    throw new AgentGateError(
+      'CONFIG_INVALID',
+      'live mode requires GATE_SIGNER_PEM_PATH (the attestor signing key) — refusing the mock-signer fallback',
+      500,
+    );
+  }
   const logger = deps.logger ?? createLogger('middleware');
   const invoices = deps.invoiceStore ?? new MemoryInvoiceStore();
   const ownsInvoiceStore = deps.invoiceStore === undefined;
@@ -106,13 +133,25 @@ export function createApp(deps: MiddlewareDeps): Express {
       : defaultUpstreamsFile(),
     logger,
   );
-  upstreams.loadSync(); // boot-time load; throws on corrupt file
+  // Boot-time load (throws on corrupt file); re-apply the SSRF guard so a
+  // persisted mapping to a now-forbidden host is dropped, not trusted.
+  upstreams.loadSync(
+    (url) => validateUpstreamUrl(url, { rejectPrivateHosts: config.mode === 'live' }).ok,
+  );
   const services = new ServiceCache(chain);
   const attestationRetryDelayMs = deps.attestationRetryDelayMs ?? DEFAULT_ATTESTATION_RETRY_DELAY_MS;
 
   const app = express();
   app.disable('x-powered-by');
+  // Number of trusted reverse-proxy hops, so req.ip (and thus rate-limit keying)
+  // reflects the real client behind Railway/Vercel. Default 0 (trust none); set
+  // TRUST_PROXY to the real hop count in production. Never blindly trust all
+  // hops, which would make X-Forwarded-For spoofable.
+  app.set('trust proxy', config.trustProxy);
   app.use(helmet());
+  // CORS is intentionally OFF: the gateway is a server-to-server API for agents,
+  // not called directly from browsers (the dashboard reads via its own server
+  // routes). Add an explicit allowlist here only if a browser client is needed.
   app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
   // Structured request logs (no upstream URLs, no tokens — path + outcome only).
@@ -242,11 +281,38 @@ export function createApp(deps: MiddlewareDeps): Express {
     }),
   );
 
+  // Stricter limit on the admin API to blunt admin-token brute force.
+  app.use(
+    '/admin',
+    rateLimit({
+      windowMs: 60_000,
+      limit: ADMIN_RATE_LIMIT_PER_MINUTE,
+      standardHeaders: 'draft-7',
+      legacyHeaders: false,
+      message: { error: 'rate_limited' },
+    }),
+  );
+
   // ------------------------------------------------------- public endpoints
 
+  // Liveness: the process is up. Cheap and dependency-free (for Docker/Railway).
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true, network: chain.network });
   });
+
+  // Readiness: the backing chain is reachable (bounded). Returns 503 when not,
+  // so a load balancer can stop routing traffic to a gateway that can't serve.
+  app.get(
+    '/readyz',
+    wrap(async (_req, res) => {
+      try {
+        if (chain.ping) await chain.ping();
+        res.json({ ready: true, network: chain.network });
+      } catch {
+        res.status(503).json({ ready: false });
+      }
+    }),
+  );
 
   // Public, unpaid metadata: service record + score + trust tier.
   app.get(
@@ -293,6 +359,29 @@ export function createApp(deps: MiddlewareDeps): Express {
         // and we must not charge for something we cannot deliver.
         res.status(503).json({ error: 'service_unavailable' });
         return;
+      }
+
+      // 1b. Reject a body we cannot forward BEFORE issuing/charging an invoice,
+      //     so the buyer is never billed for a request the upstream can't receive.
+      if (hasUnsupportedRequestBody(req)) {
+        res.status(415).json({ error: 'unsupported_media_type' });
+        return;
+      }
+
+      // 1c. Live-mode SSRF re-check at request time (defeats DNS rebinding of a
+      //     host that was public at registration). Refuse before any payment.
+      if (config.mode === 'live') {
+        let host = '';
+        try {
+          host = new URL(upstreamUrl).hostname;
+        } catch {
+          host = '';
+        }
+        if (!(await resolvedHostIsPublic(host))) {
+          logger.warn('upstream_host_forbidden', { serviceId: id });
+          res.status(503).json({ error: 'service_unavailable' });
+          return;
+        }
       }
 
       // 2. No payment proof → 402 challenge with a fresh invoice.
