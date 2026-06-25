@@ -16,7 +16,9 @@ export function TxHash({
 }) {
   const label = truncateHash(hash);
   const base = `font-mono text-xs ${className}`;
-  if (network === 'mock') {
+  // Only build an explorer link for a well-formed 64-hex deploy hash; anything
+  // else (mock network, or a malformed on-chain value) renders as plain text.
+  if (network === 'mock' || !/^[0-9a-fA-F]{64}$/.test(hash)) {
     return (
       <code title={hash} className={`${base} text-mut`}>
         {label}
@@ -25,7 +27,7 @@ export function TxHash({
   }
   return (
     <a
-      href={`https://testnet.cspr.live/deploy/${hash}`}
+      href={`https://testnet.cspr.live/deploy/${encodeURIComponent(hash)}`}
       target="_blank"
       rel="noopener noreferrer"
       title={hash}

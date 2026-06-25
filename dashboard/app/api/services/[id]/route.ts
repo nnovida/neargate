@@ -11,9 +11,10 @@ const ATTESTATION_LIMIT = 50;
 
 export async function GET(
   _req: Request,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
-  const id = parseServiceId(params.id);
+  const { id: rawId } = await params;
+  const id = parseServiceId(rawId);
   if (id === null) {
     return NextResponse.json({ error: 'invalid_id' }, { status: 400 });
   }
@@ -55,7 +56,7 @@ export async function GET(
     };
     return NextResponse.json(body);
   } catch (err) {
-    const { status, body } = toApiFailure(err, `/api/services/${params.id}`);
+    const { status, body } = toApiFailure(err, `/api/services/${rawId}`);
     return NextResponse.json(body, { status });
   }
 }

@@ -12,12 +12,16 @@ export class ApiError extends Error {
   }
 }
 
+/** Client-side request cap so a hung server route can't leave the UI spinning. */
+const FETCH_TIMEOUT_MS = 20_000;
+
 export async function fetcher<T>(url: string): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(url, { cache: 'no-store' });
+    res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   } catch {
-    // Dashboard server itself unreachable — treat like the chain banner case.
+    // Dashboard server itself unreachable or timed out — treat like the chain
+    // banner case so the "chain unreachable" UI shows promptly.
     throw new ApiError(0, 'network_error');
   }
   if (!res.ok) {

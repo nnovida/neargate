@@ -4,7 +4,8 @@ import { notFound } from 'next/navigation';
 import { ServiceDetail } from '@/components/service-detail';
 
 interface Props {
-  params: { id: string };
+  // Next 15+ delivers route params as a Promise.
+  params: Promise<{ id: string }>;
 }
 
 /** Strict numeric id — anything else is a hard 404 before any data fetching. */
@@ -14,13 +15,15 @@ function parseId(raw: string): number | null {
   return Number.isSafeInteger(id) ? id : null;
 }
 
-export function generateMetadata({ params }: Props): Metadata {
-  const id = parseId(params.id);
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { id: rawId } = await params;
+  const id = parseId(rawId);
   return { title: id === null ? 'Service' : `Service #${id}` };
 }
 
-export default function ServicePage({ params }: Props) {
-  const id = parseId(params.id);
+export default async function ServicePage({ params }: Props) {
+  const { id: rawId } = await params;
+  const id = parseId(rawId);
   if (id === null) notFound();
 
   return (
