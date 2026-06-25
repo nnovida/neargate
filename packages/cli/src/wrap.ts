@@ -1,17 +1,30 @@
-import type { AnySigner, ChainClient, Motes, RegisterServiceInput } from '@agentgate/shared';
+import type {
+  AgentGateMode,
+  AnySigner,
+  ChainClient,
+  Motes,
+  RegisterServiceInput,
+} from '@agentgate/shared';
 import { AgentGateError, csprToMotes, parseMotes } from '@agentgate/shared';
 import { signerAccountHash, signerPublicKeyHex } from './identity';
 import type { FetchLike } from './types';
 import {
+  MAX_DESCRIPTION_LENGTH,
+  MAX_NAME_LENGTH,
   normalizeBaseUrl,
+  optionalSafeText,
   requireAccountHash,
   requireHttpUrl,
   requireNonEmpty,
   requirePublicKeyHex,
+  requireSafeText,
 } from './validate';
 
 /** Where the dashboard detail link points when not overridden. */
 export const DEFAULT_DASHBOARD_BASE_URL = 'http://localhost:3000';
+
+/** Fallback fetch timeout when no upstreamTimeoutMs is supplied (ms). */
+export const DEFAULT_WRAP_FETCH_TIMEOUT_MS = 15_000;
 
 export interface WrapServiceOpts {
   /** Upstream API URL to wrap. Kept private — only ever sent to the gateway admin API. */
@@ -32,6 +45,10 @@ export interface WrapServiceOpts {
   signer: AnySigner;
   /** Bearer token for `POST <gateway>/admin/services`. */
   adminToken: string;
+  /** Runtime mode; in 'live' a non-localhost gateway must use https:// (token safety). */
+  mode?: AgentGateMode;
+  /** Timeout (ms) for the admin-mapping POST. Defaults to DEFAULT_WRAP_FETCH_TIMEOUT_MS. */
+  timeoutMs?: number;
   fetchImpl?: FetchLike;
 }
 
@@ -80,11 +97,16 @@ export function adminRetryCurl(adminUrl: string, serviceId: number, upstreamUrl:
  */
 export async function wrapService(opts: WrapServiceOpts): Promise<WrapServiceResult> {
   // -- validation (fail fast, before any side effect) ------------------------
-  const name = requireNonEmpty(opts.name, 'name');
-  const description = opts.description?.trim() ?? '';
+  const name = requireSafeText(opts.name, 'name', MAX_NAME_LENGTH);
+  const description = optionalSafeText(opts.description, 'description', MAX_DESCRIPTION_LENGTH);
   requireHttpUrl(opts.upstreamUrl, 'upstreamUrl');
   const upstreamUrl = opts.upstreamUrl.trim();
-  const gatewayBase = normalizeBaseUrl(opts.gateway, 'gateway');
+  // The admin Bearer token is POSTed to the gateway, so reject cleartext http
+  // to a non-localhost gateway in live mode.
+  const gatewayBase = normalizeBaseUrl(opts.gateway, 'gateway', {
+    mode: opts.mode,
+    requireHttpsInLiveMode: true,
+  });
   const dashboardBase = normalizeBaseUrl(
     opts.dashboardBaseUrl ?? DEFAULT_DASHBOARD_BASE_URL,
     'dashboardBaseUrl',
@@ -126,6 +148,7 @@ export async function wrapService(opts: WrapServiceOpts): Promise<WrapServiceRes
 
   // -- step 2: gateway upstream mapping ---------------------------------------
   const fetchImpl: FetchLike = opts.fetchImpl ?? ((u, i) => fetch(u, i));
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_WRAP_FETCH_TIMEOUT_MS;
   let adminFailure: string | undefined;
   try {
     const res = await fetchImpl(adminUrl, {
@@ -135,13 +158,18 @@ export async function wrapService(opts: WrapServiceOpts): Promise<WrapServiceRes
         'content-type': 'application/json',
       },
       body: JSON.stringify({ serviceId, upstreamUrl }),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
       const body = (await res.text().catch(() => '')).slice(0, 200);
       adminFailure = `gateway answered HTTP ${res.status}${body ? ` — ${body}` : ''}`;
     }
   } catch (err) {
-    adminFailure = `request failed — ${err instanceof Error ? err.message : String(err)}`;
+    const name = err instanceof Error ? err.name : '';
+    adminFailure =
+      name === 'TimeoutError' || name === 'AbortError'
+        ? `request timed out after ${timeoutMs}ms`
+        : `request failed — ${err instanceof Error ? err.message : String(err)}`;
   }
 
   if (adminFailure === undefined) {

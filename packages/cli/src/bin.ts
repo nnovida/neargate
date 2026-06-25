@@ -94,6 +94,8 @@ program
       chain,
       signer,
       adminToken: config.adminToken,
+      mode: config.mode,
+      timeoutMs: config.upstreamTimeoutMs,
     });
     console.log(`service id:      ${result.serviceId}`);
     console.log(`public endpoint: ${result.publicUrl}`);
@@ -135,10 +137,11 @@ program
   .description('Show one service: record, score, trust tier and recent attestations')
   .argument('<id>', 'service id')
   .action(async (idRaw: string) => {
-    if (!/^\d+$/.test(idRaw.trim())) {
+    // Service ids are 1-based (matches pause/resume); serviceStatus also enforces id >= 1.
+    if (!/^\d+$/.test(idRaw.trim()) || Number(idRaw.trim()) < 1) {
       throw new AgentGateError(
         'INVALID_SERVICE_ID',
-        `service id must be a non-negative integer, got ${JSON.stringify(idRaw)}`,
+        `service id must be a positive integer, got ${JSON.stringify(idRaw)}`,
         400,
       );
     }
@@ -218,7 +221,10 @@ program
         400,
       );
     }
-    const result = await createDemoAccounts({ devnetUrl: config.devnetUrl });
+    const result = await createDemoAccounts({
+      devnetUrl: config.devnetUrl,
+      timeoutMs: config.upstreamTimeoutMs,
+    });
     console.log(`buyer:  ${result.buyer.publicKey}  (${formatCspr(result.buyer.balanceMotes)})`);
     console.log(`seller: ${result.seller.publicKey}  (${formatCspr(result.seller.balanceMotes)})`);
     console.log('');

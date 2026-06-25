@@ -22,7 +22,25 @@ async function pemIdentity(pemPath: string): Promise<PemIdentity> {
     );
   }
 
-  const { readFile } = await import('node:fs/promises');
+  const { readFile, stat } = await import('node:fs/promises');
+
+  // POSIX: warn LOUDLY (but don't refuse) when the PEM is group/other-readable —
+  // a private key the rest of the box can read is one cp away from compromise.
+  if (process.platform !== 'win32') {
+    try {
+      const { mode } = await stat(path);
+      if ((mode & 0o077) !== 0) {
+        const octal = (mode & 0o777).toString(8).padStart(3, '0');
+        process.stderr.write(
+          `warning: signer PEM ${path} is group/other-accessible (mode ${octal}). ` +
+            `Anyone who can read it can sign as you — run \`chmod 600 ${path}\`.\n`,
+        );
+      }
+    } catch {
+      // stat may fail (race, perms): never block on the permission check itself.
+    }
+  }
+
   let pem: string;
   try {
     pem = await readFile(path, 'utf8');

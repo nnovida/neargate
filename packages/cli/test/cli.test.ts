@@ -264,6 +264,17 @@ describe('wrapService', () => {
     },
     { title: 'malformed attestor', patch: { attestor: 'zz' }, code: 'INVALID_PUBLIC_KEY' },
     { title: 'empty admin token', patch: { adminToken: ' ' }, code: 'INVALID_INPUT' },
+    // name/description sanitization (these go on-chain unmodified)
+    { title: 'name with a control char', patch: { name: 'bad\x01name' }, code: 'INVALID_INPUT' },
+    { title: 'name with a NUL byte', patch: { name: 'a\x00b' }, code: 'INVALID_INPUT' },
+    { title: 'name with a DEL byte', patch: { name: 'a\x7fb' }, code: 'INVALID_INPUT' },
+    { title: 'overlong name', patch: { name: 'n'.repeat(129) }, code: 'INVALID_INPUT' },
+    {
+      title: 'description with a control char',
+      patch: { description: 'line1\nline2' },
+      code: 'INVALID_INPUT',
+    },
+    { title: 'overlong description', patch: { description: 'd'.repeat(513) }, code: 'INVALID_INPUT' },
   ];
 
   for (const { title, patch, code } of rejectionCases) {
@@ -277,6 +288,67 @@ describe('wrapService', () => {
       expect(calls).toHaveLength(0);
     });
   }
+
+  // -------------------------------------------------------------------------
+  // cleartext-token-over-http guard (live mode)
+  // -------------------------------------------------------------------------
+
+  it('rejects a cleartext-http non-localhost gateway in live mode (the admin token would leak)', async () => {
+    const chain = makeFakeChain();
+    const { impl, calls } = makeFakeFetch(() => new Response(null, { status: 204 }));
+    await expect(
+      wrapService({
+        ...baseWrapOpts(chain, impl),
+        gateway: 'http://gw.example:4021/',
+        mode: 'live',
+      }),
+    ).rejects.toMatchObject({ name: 'AgentGateError', code: 'INSECURE_URL' });
+    expect(chain.registered).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('allows a cleartext-http localhost gateway in live mode (token never leaves the box)', async () => {
+    const chain = makeFakeChain();
+    const { impl } = makeFakeFetch(() => new Response(null, { status: 204 }));
+    const result = await wrapService({
+      ...baseWrapOpts(chain, impl),
+      gateway: 'http://localhost:4021/',
+      mode: 'live',
+    });
+    expect(result.adminOk).toBe(true);
+  });
+
+  it('allows an https non-localhost gateway in live mode', async () => {
+    const chain = makeFakeChain();
+    const { impl } = makeFakeFetch(() => new Response(null, { status: 204 }));
+    const result = await wrapService({
+      ...baseWrapOpts(chain, impl),
+      gateway: 'https://gw.example/',
+      mode: 'live',
+    });
+    expect(result.adminOk).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // admin POST timeout (keeps the registration + prints the retry curl)
+  // -------------------------------------------------------------------------
+
+  it('treats an admin POST timeout as a failure: keeps the registration + retry curl', async () => {
+    const chain = makeFakeChain();
+    const impl = async (): Promise<Response> => {
+      const err = new Error('The operation timed out.');
+      err.name = 'TimeoutError';
+      throw err;
+    };
+
+    const result = await wrapService({ ...baseWrapOpts(chain, impl), timeoutMs: 1 });
+
+    expect(result.adminOk).toBe(false);
+    expect(result.adminWarning).toContain('timed out');
+    expect(result.adminWarning).toContain('curl -X POST');
+    expect(chain.registered).toHaveLength(1); // registration untouched
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -394,14 +466,14 @@ describe('serviceStatus', () => {
     });
   });
 
-  it('rejects invalid ids with INVALID_SERVICE_ID', async () => {
+  it('rejects invalid ids with INVALID_SERVICE_ID (ids are 1-based, so 0 is invalid)', async () => {
     const chain = makeFakeChain();
-    await expect(serviceStatus({ chain, id: -1 })).rejects.toMatchObject({
-      code: 'INVALID_SERVICE_ID',
-    });
-    await expect(serviceStatus({ chain, id: 1.5 })).rejects.toMatchObject({
-      code: 'INVALID_SERVICE_ID',
-    });
+    for (const id of [0, -1, 1.5, Number.NaN]) {
+      await expect(serviceStatus({ chain, id })).rejects.toMatchObject({
+        code: 'INVALID_SERVICE_ID',
+        httpStatus: 400,
+      });
+    }
   });
 });
 

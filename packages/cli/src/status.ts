@@ -16,16 +16,17 @@ export interface ServiceStatusResult {
  * Programmatic `agentgate status <id>`: service record + score + trust tier +
  * recent attestations. Throws AgentGateError('SERVICE_NOT_FOUND', 404) for
  * unknown ids and AgentGateError('INVALID_SERVICE_ID', 400) for bad ids.
+ * Service ids are 1-based, so 0 is rejected (matches pause/resume).
  */
 export async function serviceStatus(opts: {
   chain: ChainClient;
   id: number;
 }): Promise<ServiceStatusResult> {
   const { chain, id } = opts;
-  if (!Number.isSafeInteger(id) || id < 0) {
+  if (!Number.isSafeInteger(id) || id < 1) {
     throw new AgentGateError(
       'INVALID_SERVICE_ID',
-      `service id must be a non-negative integer, got ${String(id)}`,
+      `service id must be a positive integer, got ${String(id)}`,
       400,
     );
   }
