@@ -6,9 +6,16 @@
 // hydration bootstrap and next/font inlines its CSS; a nonce-based policy would
 // need custom middleware. This still blocks external script/object sources and
 // framing. Fonts are self-hosted by next/font, so font-src 'self' suffices.
+// React's DEV mode uses eval() for debugging (it never does in production), so
+// allow 'unsafe-eval' only in development — the production CSP stays strict.
+const isDev = process.env.NODE_ENV !== 'production';
+const scriptSrc = isDev
+  ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+  : "script-src 'self' 'unsafe-inline'";
+
 const csp = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  scriptSrc,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self' data:",
