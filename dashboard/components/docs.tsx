@@ -199,6 +199,71 @@ export function CardGrid({
   );
 }
 
+/** HTTP-method + path header for an API/endpoint reference entry. */
+export function ApiBadge({ method, path }: { method: string; path?: string }) {
+  const m = method.toUpperCase();
+  const tone =
+    m === 'GET'
+      ? 'border-ok/50 text-ok'
+      : m === 'DELETE'
+        ? 'border-warn/50 text-warn'
+        : 'border-accent/50 text-accent';
+  return (
+    <div className="mt-6 flex flex-wrap items-center gap-3">
+      <span
+        className={`border ${tone} px-2 py-0.5 font-mono text-[11px] font-bold uppercase tracking-[0.14em]`}
+      >
+        {m}
+      </span>
+      {path ? (
+        <code className="font-mono text-[13px] text-zinc-200">{path}</code>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Definition list for parameters, fields, headers or env vars. Each prop shows
+ * a name, an optional type/required/default meta line, and a description.
+ */
+export function PropList({
+  items,
+}: {
+  items: {
+    name: string;
+    type?: string;
+    required?: boolean;
+    default?: string;
+    desc: ReactNode;
+  }[];
+}) {
+  return (
+    <dl className="mt-5 divide-y divide-line border-y border-line">
+      {items.map((it) => (
+        <div key={it.name} className="py-3.5">
+          <dt className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <code className="font-mono text-[13px] text-white">{it.name}</code>
+            {it.type ? <span className="font-mono text-[11px] text-zinc-500">{it.type}</span> : null}
+            {it.required ? (
+              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-accent">
+                required
+              </span>
+            ) : (
+              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-600">
+                optional
+              </span>
+            )}
+            {it.default ? (
+              <span className="font-mono text-[11px] text-zinc-500">default {it.default}</span>
+            ) : null}
+          </dt>
+          <dd className="mt-1.5 text-[13px] leading-6 text-mut">{it.desc}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 /** End-of-page “keep reading” strip. */
 export function NextLinks({ links }: { links: { href: string; label: string }[] }) {
   return (

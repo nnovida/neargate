@@ -6,295 +6,265 @@ import {
   DocLink,
   DocTable,
   H2,
+  H3,
   M,
   NextLinks,
   P,
-  StepFlow,
 } from '@/components/docs';
 
 export const metadata: Metadata = {
-  title: 'Docs — Overview',
+  title: 'Overview',
   description:
-    'What AgentGate is, how the 402 payment loop works, and where to go next: quickstart, seller and buyer guides, protocol, API, CLI, contract and configuration reference.',
+    'What AgentGate is, the HTTP 402 + Casper mental model, the seller / buyer / operator roles, mock vs live modes, and a map of the full documentation.',
 };
 
-export default function DocsOverviewPage() {
+export default function Page() {
   return (
     <>
       <DocHeader
-        kicker="documentation"
+        kicker="OVERVIEW"
         title="AgentGate Docs"
-        lede="Everything you need to wrap an API behind a 402 paywall, pay for one as an agent, and read what AgentGate writes on-chain — from the five-minute quickstart to the full protocol and contract reference."
+        lede="Stripe for AI agents on Casper. Wrap any HTTP API behind an HTTP 402 paywall, register and score it on-chain, and let buying agents pay per call in native CSPR — no accounts, no API keys, no subscriptions."
       />
 
-      <H2 id="what-is-agentgate">What is AgentGate?</H2>
+      <H2 id="what-is-agentgate">What AgentGate is</H2>
       <P>
-        AgentGate is Stripe for AI agents on Casper: it wraps any HTTP API into a pay-per-call
-        service behind an HTTP <M>402 Payment Required</M> paywall, registered and scored
-        on-chain. Sellers run one command to publish a service with a price; buying agents
-        discover it in the on-chain catalog, pay per call in native CSPR, and get the response —
-        no cards, no KYC, no API keys.
+        AgentGate is an x402-style payment gateway for machine-to-machine APIs. A seller puts any
+        HTTP endpoint behind a <M>402 Payment Required</M> paywall and registers it in an on-chain
+        Casper registry. A buying agent discovers that service, receives a machine-readable invoice,
+        settles it on-chain, then retries with cryptographic proof of payment — and the gateway
+        records an on-chain attestation that feeds the service&apos;s trust score. The whole loop is{' '}
+        <M>register → 402 → pay → serve → attest → score</M>.
       </P>
       <P>
-        Payment is a native CSPR transfer that carries the invoice nonce as its{' '}
-        <M>transfer_id</M> (the “Plan B” settlement scheme). The gateway verifies that transfer
-        on-chain — against the in-memory devnet in mock mode, or via CSPR.cloud on Casper
-        Testnet in live mode — then proxies the request to the seller&apos;s upstream API and
-        records a reputation attestation back on-chain.
+        Nothing about it is human-shaped. There is no signup form, no credit card, no KYC, and no API
+        key to copy into a config file. The only credentials an agent needs are a Casper wallet and
+        the ability to make an HTTP request — which is exactly what an autonomous agent already has.
       </P>
 
-      <H2 id="the-problem">The problem: agents can&apos;t pay APIs</H2>
+      <H3 id="mental-model">The mental model: HTTP 402 + Casper</H3>
       <P>
-        Every useful API today is gated by a human-shaped funnel: sign up with an email, add a
-        credit card, pass KYC, copy an API key into a config file. An autonomous agent can do
-        none of that mid-task. It can, however, hold a wallet and make an HTTP request — so
-        AgentGate turns “Payment Required” into a machine-readable invoice the agent can settle
-        on-chain in seconds, with cryptographic proof instead of credentials.
+        HTTP reserved the status code <M>402 Payment Required</M> for decades without a standard way
+        to use it. AgentGate gives it a concrete meaning. When an agent calls a paid endpoint with no
+        proof, the gateway answers <M>402</M> with an <M>Invoice402</M> — a JSON body carrying the{' '}
+        <M>priceMotes</M>, the <M>paymentTarget</M> account, a single-use <M>nonce</M>, and an{' '}
+        <M>expiresAt</M> timestamp. The agent reads the invoice, sends a{' '}
+        <strong className="text-white">native CSPR transfer</strong> to the payment target with{' '}
+        <M>transfer_id = nonce</M>, then retries the request with the payment proof in HTTP headers.
+        The gateway verifies that transfer on-chain (target, amount, transfer id, and age), burns the
+        nonce so it can never be reused, proxies to the seller&apos;s upstream API, and returns the
+        response — then records a success attestation that lifts the service&apos;s trust tier.
       </P>
+      <Callout tone="info" title="PAYMENT IS NATIVE CSPR">
+        Settlement is a plain native CSPR transfer whose <M>transfer_id</M> equals the invoice nonce
+        — the &ldquo;Plan B&rdquo; scheme. It is not a CEP-18 token transfer and it does not call any
+        vault contract. The gateway never custodies funds; payment goes straight from the buyer to
+        the seller&apos;s account.
+      </Callout>
 
-      <H2 id="how-it-works">How it works — the six-step loop</H2>
+      <H2 id="when-to-use">When to use AgentGate</H2>
       <P>
-        Every paid call runs the same loop: <M>register → 402 → pay → serve → attest → score</M>.
-      </P>
-      <StepFlow
-        steps={[
-          {
-            title: 'Register',
-            body: (
-              <>
-                The seller runs <M>agentgate wrap</M> once. The service — name, price in motes,
-                payment target, attestor — is written to the on-chain registry, and the upstream
-                URL is mapped privately on the gateway. See{' '}
-                <DocLink href="/docs/sellers">Sellers</DocLink>.
-              </>
-            ),
-            code: 'npx agentgate wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed"',
-          },
-          {
-            title: '402 challenge',
-            body: (
-              <>
-                A buying agent calls the public endpoint <M>/svc/:id</M> with no proof attached.
-                The gateway answers <M>402</M> with a fresh <M>Invoice402</M>: price, payment
-                target and a single-use nonce. See{' '}
-                <DocLink href="/docs/protocol">Protocol</DocLink>.
-              </>
-            ),
-            code: 'GET /svc/1 → 402 { priceMotes, paymentTarget, nonce, expiresAt }',
-          },
-          {
-            title: 'Pay',
-            body: (
-              <>
-                The agent sends a native CSPR transfer to the payment target with{' '}
-                <M>transfer_id = nonce</M>. This is the first of the two on-chain transactions
-                in the loop.
-              </>
-            ),
-            code: 'transfer { to: paymentTarget, amountMotes: priceMotes, transferId: nonce }',
-          },
-          {
-            title: 'Serve',
-            body: (
-              <>
-                The agent retries the same request with <M>X-Payment-Deploy-Hash</M> and{' '}
-                <M>X-Payment-Nonce</M> headers. The gateway verifies the transfer on-chain
-                (target, amount, transfer_id, age), burns the nonce atomically, and proxies the
-                request to the upstream API.
-              </>
-            ),
-            code: 'GET /svc/1 + proof headers → 200 OK (upstream response)',
-          },
-          {
-            title: 'Attest',
-            body: (
-              <>
-                After responding, the gateway asynchronously records an attestation on-chain:
-                the payment deploy hash plus a success flag. This is the second on-chain
-                transaction of the loop.
-              </>
-            ),
-            code: 'record_attestation(serviceId, paymentDeployHash, success)',
-          },
-          {
-            title: 'Score',
-            body: (
-              <>
-                The registry bumps the service&apos;s <M>totalCalls</M>/<M>successCalls</M>{' '}
-                counters and the trust tier (<M>new</M> → <M>reliable</M> → <M>trusted</M>)
-                recomputes. Buyers read it from the{' '}
-                <DocLink href="/catalog">catalog</DocLink> on the next discovery pass.
-              </>
-            ),
-            code: 'score 1/1 · tier recomputed from successCalls/totalCalls',
-          },
-        ]}
-      />
-
-      <H2 id="two-sided">A two-sided marketplace</H2>
-      <CardGrid
-        cards={[
-          {
-            href: '/docs/sellers',
-            title: 'Sellers',
-            desc: 'Wrap an upstream API in one command, set a per-call price in CSPR, and collect payments straight to your account — the gateway never holds your funds.',
-          },
-          {
-            href: '/docs/buyers',
-            title: 'Buyers',
-            desc: 'Agents discover services on-chain, pay per call with a native CSPR transfer, and retry with proof. Via the buyer agent, the client SDK, or plain curl.',
-          },
-        ]}
-      />
-
-      <H2 id="on-chain">What&apos;s real on-chain</H2>
-      <P>
-        Per paid call, exactly <strong className="text-white">two transactions</strong> land on
-        the chain:
+        Reach for AgentGate when the consumer of an API is software that holds a wallet rather than a
+        person with a card. Typical fits:
       </P>
       <DocTable
-        head={['TX', 'What it is', 'Proof']}
+        head={['You want to…', 'AgentGate gives you']}
         rows={[
           [
-            <M key="t1">1 · payment</M>,
-            'Native CSPR transfer from the buyer to the service’s paymentTarget, carrying transfer_id = invoice nonce.',
-            'payment deploy hash',
+            'Sell data or compute to autonomous agents',
+            'A pay-per-call paywall in front of your existing API — no billing system to build.',
           ],
           [
-            <M key="t2">2 · attestation</M>,
-            'record_attestation call by the gateway: payment deploy hash + success flag, bumping the service score.',
-            'attestation tx hash',
+            'Let an agent buy capabilities mid-task',
+            'On-chain discovery plus a 402 invoice the agent can settle in seconds, with proof instead of credentials.',
+          ],
+          [
+            'Charge per request without accounts',
+            'Native CSPR settlement that lands directly in your account; the gateway holds nothing.',
+          ],
+          [
+            'Pick providers by reputation',
+            'An on-chain attestation trail and trust tier (new → reliable → trusted) computed from real calls.',
           ],
         ]}
       />
       <P>
-        Registration itself (<M>register_service</M>) is a one-time third transaction at wrap
-        time. <M>npm run demo</M> prints both loop hashes plus the final <M>1/1</M> score as its
-        proof lines — see <DocLink href="/docs/quickstart">Quickstart</DocLink>.
+        It is a poor fit for human-facing checkout flows, subscriptions, or anything that needs
+        chargebacks and refunds — those are the human-shaped patterns AgentGate deliberately
+        replaces.
       </P>
 
-      <H2 id="architecture">Architecture at a glance</H2>
-      <DocTable
-        head={['Package', 'Role', 'Port']}
-        rows={[
-          [<M key="p">packages/shared</M>, 'Types · config · bigint money · trust tiers (zero runtime deps)', '—'],
-          [<M key="p">packages/devnet</M>, 'In-memory mock chain HTTP server', <M key="v">:4030</M>],
-          [<M key="p">packages/chain</M>, 'ChainClient seam: MockChainHttpClient + LiveCasperClient', '—'],
-          [<M key="p">packages/middleware</M>, 'The product core — 402 paywall reverse proxy + admin API', <M key="v">:4021</M>],
-          [<M key="p">packages/client</M>, 'Agent-side fetchPaid (parse 402 → pay → retry)', '—'],
-          [<M key="p">packages/oracle</M>, 'Demo RWA feed: USD/IDR + gold spot + confidence', <M key="v">:4010</M>],
-          [<M key="p">packages/buyer-agent</M>, 'LLM decision loop (AnthropicLlm / MockLlm)', '—'],
-          [<M key="p">packages/cli</M>, 'agentgate wrap | list | status | demo-accounts', '—'],
-          [<M key="p">dashboard/</M>, 'Next.js 14 landing + catalog + live activity', <M key="v">:3000</M>],
-          [<M key="p">contracts/</M>, 'AgentGateRegistry (Rust/Odra) — registry, scores, attestations', '—'],
-        ]}
-      />
-
-      <H2 id="modes">Mock vs live mode</H2>
+      <H2 id="roles">The roles: seller, buyer, operator</H2>
       <P>
-        One env var — <M>AGENTGATE_MODE</M> (default <M>mock</M>) — selects the chain backend.
-        Both modes share identical code above the <M>ChainClient</M> seam.
+        Three actors meet at the gateway. Each has its own guide; this is the one-paragraph version
+        of each.
+      </P>
+      <H3 id="role-seller">Seller — wraps an API</H3>
+      <P>
+        A seller owns an upstream HTTP API and wants to charge per call. Running{' '}
+        <M>agentgate wrap</M> once registers the service on-chain (name, price in motes, payment
+        target, attestor) and maps the private upstream URL on the gateway. After that, every call to
+        the public <M>/svc/:id</M> endpoint is metered and paid. Full walkthrough in{' '}
+        <DocLink href="/docs/sellers">Wrap an API</DocLink>.
+      </P>
+      <H3 id="role-buyer">Buyer — builds an agent that consumes a service</H3>
+      <P>
+        A buyer writes an agent that discovers services in the on-chain catalog, calls{' '}
+        <M>/svc/:id</M>, handles the <M>402</M>, pays with a native CSPR transfer carrying the nonce,
+        and retries with proof headers. You can do this with the bundled LLM buyer agent, the client
+        SDK&apos;s <M>fetchPaid</M> helper, or plain <M>curl</M>. See{' '}
+        <DocLink href="/docs/buyers">Build an agent</DocLink>.
+      </P>
+      <H3 id="role-operator">Operator — runs the gateway</H3>
+      <P>
+        An operator runs the middleware (the 402 reverse proxy + admin API) and, in live mode, the
+        chain plumbing. The operator sets the admin token, the SSRF policy on upstream URLs, and the
+        chain backend, and is responsible for deploying the registry contract before going live. See{' '}
+        <DocLink href="/docs/deployment">Deploy to production</DocLink>.
+      </P>
+
+      <H2 id="modes">Mock vs live modes</H2>
+      <P>
+        A single environment variable — <M>AGENTGATE_MODE</M> (default <M>mock</M>) — selects the
+        chain backend behind the <M>ChainClient</M> seam. Everything above that seam is identical, so
+        you build and test offline and flip one flag to go on-chain.
       </P>
       <DocTable
-        head={['Concern', 'Mock (default)', 'Live (Casper Testnet)']}
+        head={['Concern', 'mock (default)', 'live (Casper Testnet)']}
         rows={[
           [
             'Chain backend',
             <span key="m">
-              <M>@agentgate/devnet</M> in-memory REST server at <M>:4030</M>
+              In-memory devnet (<M>@agentgate/devnet</M>) at <M>:4030</M>
             </span>,
-            'casper-js-sdk v5 + node RPC + CSPR.cloud REST',
+            'casper-js-sdk v5 + CSPR.cloud REST',
           ],
           [
             'Registry',
-            'Devnet in-memory state mirroring the Odra contract rules exactly',
+            'Devnet mirrors the Odra contract rules in memory',
             <span key="l">
-              Deployed AgentGateRegistry contract (requires <M>REGISTRY_CONTRACT_PACKAGE_HASH</M>)
+              Deployed <M>AgentGateRegistry</M> contract
             </span>,
           ],
           [
-            'Payment verification',
-            <M key="m">GET /chain/transfers/:deployHash</M>,
-            <span key="l">
-              CSPR.cloud <M>GET /transfers?deploy_hash=…</M>
+            'Payment verify',
+            'Devnet transfer lookup',
+            <span key="v">
+              CSPR.cloud <M>GET /transfers?deploy_hash=</M>
             </span>,
           ],
+          ['Signers', 'Mock account strings', 'PEM keys'],
           [
-            'Signers',
-            <span key="m">
-              <M>{"{ kind: 'mock', publicKey }"}</M>
-            </span>,
-            <span key="l">
-              <M>{"{ kind: 'pem', pemPath }"}</M> (ed25519 or secp256k1)
-            </span>,
+            'Guardrails',
+            'Default admin token allowed; SSRF guard off',
+            'Default token refused; SSRF guard on',
           ],
-          [
-            'Account hash',
-            <span key="m">
-              <M>account-hash-</M> + sha256(publicKey) hex
-            </span>,
-            'Native Casper account-hash',
-          ],
-          ['Settle delay', '0 ms (synchronous devnet)', '~3000 ms default'],
-          [
-            'Admin token',
-            <span key="m">
-              Default <M>dev-admin-token</M> allowed
-            </span>,
-            'Default token refused — a strong unique token is required',
-          ],
-          ['SSRF guard on upstreams', 'Off (local demos OK)', 'On (private/loopback hosts rejected)'],
         ]}
       />
-      <Callout tone="info" title="contract deploy status">
-        Live mode reads and contract writes are gated behind <M>NOT_DEPLOYED</M> until the
-        registry contract is deployed and <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> is set — see{' '}
-        <DocLink href="/docs/contract#deploy-status">Contract → Deploy status</DocLink>.
+      <Callout tone="warn" title="LIVE MODE PREREQUISITES">
+        Live mode requires <M>CSPR_CLOUD_API_KEY</M> and a non-default <M>AGENTGATE_ADMIN_TOKEN</M>{' '}
+        (both enforced by config), plus a deployed registry whose package hash is set as{' '}
+        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M>. Deploying that contract is documented but intentionally
+        out of scope for this build — there is no live contract address yet. Until it is deployed,
+        live chain reads and contract writes are gated behind <M>NOT_DEPLOYED</M>. See{' '}
+        <DocLink href="/docs/contract">Smart contracts</DocLink>.
       </Callout>
 
-      <H2 id="explore">Explore the docs</H2>
+      <H2 id="get-started">Browse the docs — Get started</H2>
       <CardGrid
         cards={[
           {
             href: '/docs/quickstart',
             title: 'Quickstart',
-            desc: 'Clone, install, run the one-shot demo, then bring the stack up with seeded data and open the dashboard.',
+            desc: 'Run the offline one-shot demo (register → 402 → pay → serve → attest → score) in about 60 seconds, then bring the stack up with seeded data and open the dashboard.',
           },
           {
-            href: '/docs/protocol',
-            title: 'AgentGate-402 protocol',
-            desc: 'Invoice402 fields, proof headers, the four verification checks, single-use nonce burning and the full error-code table.',
-          },
-          {
-            href: '/docs/api',
-            title: 'HTTP API reference',
-            desc: 'Every surface: middleware paywall + admin, oracle feed, mock devnet routes and the dashboard /api endpoints.',
-          },
-          {
-            href: '/docs/cli',
-            title: 'CLI reference',
-            desc: 'agentgate wrap, list, status and demo-accounts — flags, env, output and exit codes.',
-          },
-          {
-            href: '/docs/contract',
-            title: 'Smart contract',
-            desc: 'AgentGateRegistry entrypoints, events, error codes, storage layout, build/test commands and deploy status.',
-          },
-          {
-            href: '/docs/configuration',
-            title: 'Configuration',
-            desc: 'Every environment variable, the mock/live guardrails and the ports table.',
+            href: '/docs/installation',
+            title: 'Installation',
+            desc: 'Node ≥ 22 prerequisites, npm install, the monorepo package layout, and the dev scripts that boot the devnet, oracle, and middleware.',
           },
         ]}
       />
 
-      <NextLinks
-        links={[
-          { href: '/docs/quickstart', label: 'Quickstart' },
-          { href: '/catalog', label: 'Browse the catalog' },
-          { href: '/activity', label: 'Live activity' },
+      <H2 id="guides">Guides</H2>
+      <CardGrid
+        cards={[
+          {
+            href: '/docs/sellers',
+            title: 'Wrap an API',
+            desc: 'Put a 402 paywall in front of your upstream in one command, set a per-call price in CSPR, register on-chain, and collect payments straight to your account.',
+          },
+          {
+            href: '/docs/buyers',
+            title: 'Build an agent',
+            desc: 'Discover services on-chain, parse the 402, pay with a native CSPR transfer, and retry with proof — via the buyer agent, the client SDK, or plain curl.',
+          },
+          {
+            href: '/docs/deployment',
+            title: 'Deploy to production',
+            desc: 'Host the dashboard, middleware, and oracle; configure live-mode guardrails; and follow the registry deploy runbook (deploy itself is deferred).',
+          },
         ]}
       />
+
+      <H2 id="concepts">Concepts</H2>
+      <CardGrid
+        cards={[
+          {
+            href: '/docs/protocol',
+            title: 'How it works',
+            desc: 'The AgentGate-402 protocol end to end: Invoice402 fields, proof headers, the on-chain verification checks, single-use nonce burning, and the attestation that feeds the trust score.',
+          },
+          {
+            href: '/docs/architecture',
+            title: 'Architecture',
+            desc: 'The monorepo packages, the ChainClient seam that swaps mock and live, the middleware reverse proxy, and how each piece fits together.',
+          },
+          {
+            href: '/docs/security',
+            title: 'Security model',
+            desc: 'Single-use nonces, admin-token enforcement, the SSRF guard on upstream URLs, on-chain payment verification, and the trust system that makes attestations meaningful.',
+          },
+        ]}
+      />
+
+      <H2 id="reference">Reference</H2>
+      <CardGrid
+        cards={[
+          {
+            href: '/docs/cli',
+            title: 'CLI',
+            desc: 'agentgate wrap, list, status, pause, resume, and demo-accounts — flags, environment, output, and exit codes.',
+          },
+          {
+            href: '/docs/api',
+            title: 'HTTP API',
+            desc: 'Every surface: the middleware paywall and admin API, the oracle feed, the mock devnet routes, and the dashboard /api endpoints.',
+          },
+          {
+            href: '/docs/sdk',
+            title: 'Client SDK',
+            desc: 'The agent-side fetchPaid helper that parses a 402, pays, and retries — signatures, options, and return shapes.',
+          },
+          {
+            href: '/docs/configuration',
+            title: 'Configuration',
+            desc: 'Every environment variable, the mock vs live guardrails, and the ports table for the full stack.',
+          },
+          {
+            href: '/docs/contract',
+            title: 'Smart contracts',
+            desc: 'AgentGateRegistry entrypoints, events, error codes, storage layout, build/test commands, and deploy status.',
+          },
+          {
+            href: '/docs/errors',
+            title: 'Error codes',
+            desc: 'The full table of 402 and gateway error codes, what each one means, and how a buying agent should respond.',
+          },
+        ]}
+      />
+
+      <NextLinks links={[{ href: '/docs/quickstart', label: 'Next: Quickstart' }]} />
     </>
   );
 }
