@@ -12,6 +12,25 @@ deployable contract, and the `*_build_contract` / `*_build_schema` bins that
 > workspace. All `cargo odra` commands below run from
 > `contracts/agentgate-registry/`.
 
+## SpendGuard integration status — NOT yet wired into the product
+
+A second contract, **SpendGuard** (`contracts/spend-guard/`), is implemented and
+unit-tested (`open_policy` / `deposit` / `debit` / `getPolicy` / `getRemaining`,
+plus a new **owner-only `withdraw`** entrypoint so escrowed funds are never
+locked). **However, it is NOT integrated into the running AgentGate product:**
+
+- there is **no off-chain `SpendGuardClient`** (`packages/chain/` has only the
+  registry client);
+- the middleware **does not call `debit` before proxying** (`/svc/:id` in
+  `packages/middleware/src/app.ts` has no policy-proxy hook);
+- `loadConfig()` does **not** read `SPENDGUARD_CONTRACT_PACKAGE_HASH`, and it is
+  absent from `.env.example`.
+
+Until that wiring exists (the roadmap is in `contracts/DEPLOY-DAY1.md` §5),
+**SpendGuard must not be presented as an active spend-firewall.** The contract
+is real and tested; the live spend-control path it would enable is not yet
+built.
+
 ## What the contract does
 
 | Concern | Mechanism |

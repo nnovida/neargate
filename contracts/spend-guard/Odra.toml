@@ -1,0 +1,7 @@
+# cargo-odra contract manifest.
+#
+# The single deployable contract. `cargo odra build` produces
+# `wasm/SpendGuard.wasm`; `cargo odra schema` writes
+# `resources/casper_contract_schemas/spend_guard_schema.json`.
+[[contracts]]
+fqn = "spend_guard::SpendGuard"

@@ -114,6 +114,15 @@ pub struct ServiceStatusChanged {
     pub active: bool,
 }
 
+/// Emitted on `set_attestor`.
+#[odra::event]
+pub struct ServiceAttestorChanged {
+    /// Service whose attestor key changed.
+    pub service_id: u64,
+    /// The new authorised attestor.
+    pub attestor: Address,
+}
+
 /// Registry errors (SPEC §10).
 ///
 /// Note: SPEC names the legacy `odra::execution_error!` macro; in Odra 2.x the
@@ -137,7 +146,7 @@ pub enum Error {
 
 /// AgentGate service registry + reputation ledger.
 #[odra::module(
-    events = [ServiceRegistered, AttestationRecorded, ServiceStatusChanged],
+    events = [ServiceRegistered, AttestationRecorded, ServiceStatusChanged, ServiceAttestorChanged],
     errors = Error
 )]
 pub struct AgentGateRegistry {
@@ -291,6 +300,26 @@ impl AgentGateRegistry {
         self.services.set(&service_id, service);
 
         self.env().emit_event(ServiceStatusChanged { service_id, active });
+    }
+
+    /// Rotate a service's authorised attestor key. Owner only. Lets an owner
+    /// replace a compromised/rotated middleware signer without re-registering the
+    /// service (which would mint a new id and reset its score) and without having
+    /// to disable it via `set_active`.
+    ///
+    /// Reverts with [`Error::ServiceNotFound`] for unknown ids and
+    /// [`Error::NotAuthorized`] for non-owners. Emits [`ServiceAttestorChanged`].
+    pub fn set_attestor(&mut self, service_id: u64, attestor: Address) {
+        let mut service = self.load_service(service_id);
+
+        if self.env().caller() != service.owner {
+            self.env().revert(Error::NotAuthorized);
+        }
+
+        service.attestor = attestor;
+        self.services.set(&service_id, service);
+
+        self.env().emit_event(ServiceAttestorChanged { service_id, attestor });
     }
 
     /// Fetch a service record. `None` if the id was never registered.
@@ -668,6 +697,54 @@ mod tests {
         let (_env, mut registry) = setup();
         assert_eq!(
             registry.try_set_active(7, false).unwrap_err(),
+            Error::ServiceNotFound.into()
+        );
+    }
+
+    // ───────────────────────── set_attestor auth ─────────────────────────
+
+    #[test]
+    fn owner_can_rotate_attestor_and_event_is_emitted() {
+        let (env, mut registry) = setup();
+        let id = register(&env, &mut registry);
+        let new_attestor = env.get_account(STRANGER);
+
+        registry.set_attestor(id, new_attestor);
+        assert_eq!(registry.get_service(id).unwrap().attestor, new_attestor);
+        assert!(env.emitted_event(
+            &registry,
+            ServiceAttestorChanged { service_id: id, attestor: new_attestor }
+        ));
+
+        // The rotated-in key can now attest; the old attestor can no longer.
+        env.set_caller(new_attestor);
+        registry.record_attestation(id, "pay-rotated".to_string(), true);
+        env.set_caller(env.get_account(ATTESTOR));
+        assert_eq!(
+            registry.try_record_attestation(id, "pay-old".to_string(), true).unwrap_err(),
+            Error::NotAuthorized.into()
+        );
+    }
+
+    #[test]
+    fn non_owner_cannot_rotate_attestor() {
+        let (env, mut registry) = setup();
+        let id = register(&env, &mut registry);
+        for account in [ATTESTOR, STRANGER] {
+            env.set_caller(env.get_account(account));
+            assert_eq!(
+                registry.try_set_attestor(id, env.get_account(STRANGER)).unwrap_err(),
+                Error::NotAuthorized.into()
+            );
+        }
+        assert_eq!(registry.get_service(id).unwrap().attestor, env.get_account(ATTESTOR));
+    }
+
+    #[test]
+    fn rotating_attestor_on_unknown_service_reverts() {
+        let (env, mut registry) = setup();
+        assert_eq!(
+            registry.try_set_attestor(7, env.get_account(ATTESTOR)).unwrap_err(),
             Error::ServiceNotFound.into()
         );
     }

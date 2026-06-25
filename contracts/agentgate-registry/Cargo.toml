@@ -3,9 +3,16 @@
 # Layout follows the `cargo odra new --template full` conventions for Odra 2.7.x:
 # one crate, `Odra.toml` listing the deployable contract, and the
 # `*_build_contract` / `*_build_schema` bins that `cargo odra build` /
-# `cargo odra schema` drive. Versions pinned to 2.7.2 — the newest Odra 2.x
-# verified working on this machine; `odra-test` MUST track the exact same
-# version as `odra`.
+# `cargo odra schema` drive.
+#
+# NOTE on the Odra version: the `2.7.2` requirement below is a caret range, so
+# Cargo.lock currently resolves odra-core 2.8.1 (the prebuilt wasm is built
+# against 2.8.1). The sibling spend-guard crate exact-pins `=2.7.2`. This drift
+# is immaterial to AgentGate: the module-state dictionary-key codec
+# (ContractEnv::index_bytes / current_key, used by packages/chain/src/live.ts)
+# is byte-identical across 2.7.2 and 2.8.1. To remove the drift, exact-pin both
+# crates to the same version and regenerate the lockfiles at deploy time.
+# `odra-test` MUST track the same version as `odra`.
 
 [package]
 name = "agentgate-registry"

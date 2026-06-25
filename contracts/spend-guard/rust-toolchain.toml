@@ -1,0 +1,5 @@
+# Odra requires nightly for every build, including `cargo odra test` (OdraVM).
+# Pinned to the same nightly as the agentgate-registry crate.
+[toolchain]
+channel = "nightly-2026-01-01"
+targets = ["wasm32-unknown-unknown"]

@@ -1,0 +1,60 @@
+# AgentGate x402 SpendGuard — on-chain spend-firewall escrow (Odra 2.7.x).
+#
+# Sibling crate to `agentgate-registry`. An agent pre-funds a per-policy escrow;
+# the AgentGate middleware calls `debit(...)` before serving an x402 paid call.
+# `debit` ATOMICALLY REVERTS (OverBudget / PerCallExceeded / RateExceeded /
+# UntrustedService / Paused / NotAuthorized / DuplicateRef) when a spend breaks
+# the agent's on-chain policy — so a runaway/prompt-injected agent cannot drain
+# the budget. Layout/idioms mirror `agentgate-registry` 1:1 (Odra 2.7.2).
+
+[package]
+name = "spend-guard"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "SpendGuard — on-chain x402 spend-firewall escrow for AI-agent payments on Casper (Odra)."
+
+[dependencies]
+odra = { version = "=2.7.2", features = [], default-features = false }
+
+[dev-dependencies]
+odra-test = { version = "=2.7.2", features = [], default-features = false }
+
+[build-dependencies]
+odra-build = { version = "=2.7.2", features = [], default-features = false }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+odra-build = { version = "=2.7.2", features = [], default-features = false }
+# Livenet deploy tooling — only pulled in by `--features livenet` (see bin/deploy.rs).
+odra-cli = { version = "=2.7.2", features = [], default-features = false, optional = true }
+
+[features]
+# Enables the documented testnet deploy binary (bin/deploy.rs).
+livenet = ["dep:odra-cli"]
+
+# Bin names must be `<crate name with - replaced by _>_build_{contract,schema}`
+# — cargo-odra 0.1.7 derives them from the package name.
+[[bin]]
+name = "spend_guard_build_contract"
+path = "bin/build_contract.rs"
+test = false
+
+[[bin]]
+name = "spend_guard_build_schema"
+path = "bin/build_schema.rs"
+test = false
+
+[[bin]]
+name = "spend_guard_deploy"
+path = "bin/deploy.rs"
+test = false
+required-features = ["livenet"]
+
+# Odra-recommended release profile for small WASM artifacts.
+[profile.release]
+codegen-units = 1
+lto = true
+
+# Speed up OdraVM test runs (template default).
+[profile.dev.package."*"]
+opt-level = 3
