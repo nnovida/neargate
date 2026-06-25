@@ -143,6 +143,11 @@ export class MockChainHttpClient implements ChainClient {
     return (await this.request<T>('POST', path, body)) as T;
   }
 
+  /** Readiness probe: a bounded GET to the devnet health endpoint. */
+  async ping(): Promise<void> {
+    await this.get('/healthz');
+  }
+
   // ---- reads ----------------------------------------------------------------
 
   async getService(id: number): Promise<ServiceRecord | null> {

@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { BigNumber } from '@ethersproject/bignumber';
 import { blake2b } from '@noble/hashes/blake2b';
 import {
@@ -42,13 +42,19 @@ const GAS_REGISTER_SERVICE_MOTES = 5_000_000_000;
 const GAS_RECORD_ATTESTATION_MOTES = 2_500_000_000;
 const GAS_SET_ACTIVE_MOTES = 1_500_000_000;
 
-// ⚠️ verify against deployed contract — Odra 2.x assigns each module field a
-// storage index in declaration order; SPEC §10 declares:
-//   services_count, services, scores, seen_payments, attestations.
+// Odra 2.x assigns each module field a 1-based storage index in declaration
+// order (odra-macros emits `idx as u8 + 1`). The registry declares, in order,
+//   services_count(1), services(2), scores(3), seen_payments(4), attestations(5)
+// — see contracts/agentgate-registry/src/registry.rs. These indices feed the
+// dictionary-item-key derivation (odraDictionaryItemKey); an off-by-one here
+// silently reads the WRONG dictionary item (e.g. scores[id] would collide with
+// services[id]).
+// ⚠️ confirm once against a real testnet dictionary read before relying on live
+// reads (docs/DEPLOY.md read-path smoke test) — the deploy itself is out of scope.
 const STATE_INDEX = {
-  servicesCount: 0,
-  services: 1,
-  scores: 2,
+  servicesCount: 1,
+  services: 2,
+  scores: 3,
 } as const;
 
 /** Odra 2.x keeps all module state in a single contract dictionary named "state". */
@@ -69,6 +75,54 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Bounds a node-RPC call so a slow/half-open Casper node cannot hang the caller
+ * forever. casper-js-sdk's HttpHandler exposes no timeout option and axios
+ * defaults to `timeout: 0`, so we race the call against a timer (the underlying
+ * socket may keep going, but we stop waiting and surface a clean error).
+ */
+async function withRpcTimeout<T>(label: string, ms: number, fn: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guard = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new AgentGateError('RPC_TIMEOUT', `${label} timed out after ${ms}ms`, 504)),
+      ms,
+    );
+  });
+  try {
+    return await Promise.race([fn(), guard]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Bounded retry-with-backoff for idempotent node-RPC reads. Retries transient
+ * transport/timeout failures (jittered backoff, capped by the per-call timeout)
+ * but never retries deterministic on-chain failures.
+ */
+async function withReadRetry<T>(
+  label: string,
+  timeoutMs: number,
+  fn: () => Promise<T>,
+  attempts = 3,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await withRpcTimeout(label, timeoutMs, fn);
+    } catch (error) {
+      lastError = error;
+      // Deterministic on-chain failures will not change on retry.
+      if (error instanceof AgentGateError && error.code === 'TX_FAILED') throw error;
+      if (attempt < attempts - 1) {
+        await sleep(Math.min(200 * 2 ** attempt + attempt * 50, timeoutMs));
+      }
+    }
+  }
+  throw lastError;
+}
+
 function bytesToHex(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('hex');
 }
@@ -85,6 +139,53 @@ function u64LeBytes(value: number | bigint): Uint8Array {
   const buf = new ArrayBuffer(8);
   new DataView(buf).setBigUint64(0, BigInt(value), true);
   return new Uint8Array(buf);
+}
+
+/**
+ * Odra 2.x dictionary item key for a module-state field (Var or Mapping entry).
+ *
+ * Odra keeps all module state in one contract dictionary named "state". The item
+ * key is the lowercase-hex blake2b-256 digest of `index_bytes ++ mapping_key`,
+ * where `index_bytes` is the field's storage index — see `odra-core`
+ * (2.7.2/2.8.1, identical codec) `ContractEnv::index_bytes()` / `current_key()`.
+ * For top-level fields (index ≤ 15) the index is packed into a u32 and emitted
+ * as 4 BIG-ENDIAN bytes; a u64 mapping key serializes as 8 little-endian bytes
+ * (Casper `ToBytes`). NOTE: field indices are 1-based — see {@link STATE_INDEX}.
+ */
+export function odraDictionaryItemKey(index: number, keyBytes?: Uint8Array): string {
+  // Field index as a 4-byte big-endian u32 (Odra `index_bytes()` for fields ≤ 15).
+  const prefix = new Uint8Array(4);
+  new DataView(prefix.buffer).setUint32(0, index, false);
+  const material = keyBytes ? Uint8Array.from([...prefix, ...keyBytes]) : prefix;
+  return bytesToHex(blake2b(material, { dkLen: 32 }));
+}
+
+/**
+ * Strips the CLValue `List<U8>` framing from a stored Odra value. Odra persists
+ * every module-state field via `CLValue::from_t(bytes.to_vec())`, whose CLType is
+ * `List<U8>`; the SDK serializes that as a 4-byte little-endian element count
+ * followed by the payload. We read the declared length, assert it matches the
+ * remaining buffer, and return the bare payload. A mismatch means the stored
+ * shape is not what we expect — fail loudly instead of silently mis-decoding.
+ */
+function stripListU8Prefix(raw: Uint8Array): Uint8Array {
+  if (raw.length < 4) {
+    throw new AgentGateError(
+      'STATE_PARSE_FAILED',
+      `dictionary value too short for a List<U8> length prefix (${raw.length} bytes)`,
+      502,
+    );
+  }
+  const declaredLen = new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getUint32(0, true);
+  const payload = raw.subarray(4);
+  if (declaredLen !== payload.length) {
+    throw new AgentGateError(
+      'STATE_PARSE_FAILED',
+      `List<U8> length prefix (${declaredLen}) != payload length (${payload.length}) — unexpected stored value shape`,
+      502,
+    );
+  }
+  return payload;
 }
 
 /** Sequential reader for Casper `ToBytes` payloads stored by the Odra contract. */
@@ -256,6 +357,13 @@ export class LiveCasperClient implements ChainClient {
 
   // ---- plumbing -------------------------------------------------------------
 
+  /** Readiness probe: a bounded node-RPC status call (throws if unreachable). */
+  async ping(): Promise<void> {
+    await withRpcTimeout('node RPC getStatus', this.cfg.upstreamTimeoutMs, () =>
+      this.rpc.getStatus(),
+    );
+  }
+
   private requireContract(): string {
     const hash = this.cfg.registryContractPackageHash.trim();
     if (hash === '') throw notDeployed();
@@ -322,6 +430,21 @@ export class LiveCasperClient implements ChainClient {
     const cached = this.pemCache.get(pemSigner.pemPath);
     if (cached) return cached;
 
+    // Warn loudly if the signing key is group/other-accessible (POSIX only).
+    if (process.platform !== 'win32') {
+      try {
+        const st = await stat(pemSigner.pemPath);
+        if ((st.mode & 0o077) !== 0) {
+          process.stderr.write(
+            `[agentgate] WARNING: signer key ${pemSigner.pemPath} is group/other-accessible ` +
+              `(mode ${(st.mode & 0o777).toString(8)}); run \`chmod 600\` on it.\n`,
+          );
+        }
+      } catch {
+        // A stat failure surfaces as SIGNER_PEM_UNREADABLE from readFile below.
+      }
+    }
+
     let content: string;
     try {
       content = await readFile(pemSigner.pemPath, 'utf8');
@@ -354,7 +477,9 @@ export class LiveCasperClient implements ChainClient {
 
   private async putTransaction(tx: ReturnType<NativeTransferBuilder['build']>): Promise<string> {
     try {
-      const result = await this.rpc.putTransaction(tx);
+      const result = await withRpcTimeout('node RPC putTransaction', this.cfg.upstreamTimeoutMs, () =>
+        this.rpc.putTransaction(tx),
+      );
       return result.transactionHash.toHex();
     } catch (error) {
       if (error instanceof AgentGateError) throw error;
@@ -371,7 +496,11 @@ export class LiveCasperClient implements ChainClient {
     const deadline = Date.now() + TX_WAIT_TIMEOUT_MS;
     while (Date.now() < deadline) {
       try {
-        const info = await this.rpc.getTransactionByTransactionHash(txHash);
+        const info = await withRpcTimeout(
+          'node RPC getTransaction',
+          this.cfg.upstreamTimeoutMs,
+          () => this.rpc.getTransactionByTransactionHash(txHash),
+        );
         const exec = info.executionInfo;
         if (exec?.executionResult) {
           const errorMessage = exec.executionResult.errorMessage;
@@ -385,8 +514,10 @@ export class LiveCasperClient implements ChainClient {
           return;
         }
       } catch (error) {
-        if (error instanceof AgentGateError) throw error;
-        // not found / not executed yet — keep polling
+        // A real on-chain failure is terminal; a per-call timeout or
+        // "not found / not executed yet" is transient — keep polling until the
+        // overall deadline below.
+        if (error instanceof AgentGateError && error.code === 'TX_FAILED') throw error;
       }
       await sleep(TX_POLL_INTERVAL_MS);
     }
@@ -428,38 +559,39 @@ export class LiveCasperClient implements ChainClient {
     return this.contractHashCache;
   }
 
-  /**
-   * ⚠️ verify against deployed contract — Odra 2.x dictionary item keys are the
-   * lowercase-hex blake2b-256 digest of (field index byte ++ serialized mapping
-   * key); Vars use the bare index byte.
-   */
+  /** Odra 2.x dictionary item key — see {@link odraDictionaryItemKey}. */
   private odraStateKey(index: number, keyBytes?: Uint8Array): string {
-    const prefix = Uint8Array.of(index);
-    const material = keyBytes
-      ? Uint8Array.from([...prefix, ...keyBytes])
-      : prefix;
-    return bytesToHex(blake2b(material, { dkLen: 32 }));
+    return odraDictionaryItemKey(index, keyBytes);
   }
 
   /** Reads one item from the registry's "state" dictionary; null when absent. */
   private async readStateBytes(itemKey: string): Promise<Uint8Array | null> {
     const contractHash = await this.resolveContractHash();
     try {
-      const result = await this.rpc.getDictionaryItemByIdentifier(
-        null,
-        new ParamDictionaryIdentifier(
-          undefined,
-          new ParamDictionaryIdentifierContractNamedKey(
-            `hash-${contractHash}`,
-            ODRA_STATE_DICTIONARY,
-            itemKey,
+      const result = await withReadRetry(
+        'node RPC getDictionaryItem',
+        this.cfg.upstreamTimeoutMs,
+        () =>
+          this.rpc.getDictionaryItemByIdentifier(
+            null,
+            new ParamDictionaryIdentifier(
+              undefined,
+              new ParamDictionaryIdentifierContractNamedKey(
+                `hash-${contractHash}`,
+                ODRA_STATE_DICTIONARY,
+                itemKey,
+              ),
+            ),
           ),
-        ),
       );
       const clValue = result.storedValue.clValue;
       if (!clValue) return null;
-      // Odra persists values as CLValue::Any — bytes() yields the raw payload.
-      return clValue.bytes();
+      // Odra stores each module-state value as a CLValue `List<U8>`
+      // (`CLValue::from_t(bytes.to_vec())` in odra-casper-wasm-env), so the
+      // SDK's clValue.bytes() is the List serialization: a 4-byte LITTLE-ENDIAN
+      // element count followed by the raw payload. Strip and validate the
+      // prefix; if it doesn't match we fail loudly rather than mis-decode.
+      return stripListU8Prefix(clValue.bytes());
     } catch (error) {
       if (error instanceof AgentGateError) throw error;
       // Dictionary item not found ⇒ value was never written.
