@@ -245,13 +245,14 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
   );
   decisions.append('budget_ok', { priceMotes: price, budgetMotes, spentMotes });
 
-  // 4. Pay & consume via the 402 client. maxPriceMotes = remaining budget (defense in depth:
-  // the invoice could disagree with the on-chain price).
-  const remaining: Motes = (parseMotes(budgetMotes) - parseMotes(spentMotes)).toString();
+  // 4. Pay & consume via the 402 client. maxPriceMotes is bound to the on-chain
+  // price the budget gate just approved — NOT the whole remaining budget — so a
+  // 402 invoice that quotes more than the advertised price is refused instead of
+  // silently charged up to the full budget.
   const client = createAgentGateClient({
     chain,
     signer,
-    maxPriceMotes: remaining,
+    maxPriceMotes: price,
     logger,
     ...(opts.settleDelayMs !== undefined ? { settleDelayMs: opts.settleDelayMs } : {}),
     ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),

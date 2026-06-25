@@ -268,6 +268,27 @@ describe('createAgentGateClient · fetchPaid', () => {
       }),
     ).toThrowError(/invalid amount/);
   });
+
+  it('refuses a private/loopback host in live mode (SSRF guard)', async () => {
+    const { impl } = queuedFetch([json({ unreachable: true }, 200)]);
+    const chain = makeChain({ network: 'casper-test' });
+    const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
+    const err = await client.fetchPaid('http://127.0.0.1:8080/x').catch((e: unknown) => e);
+    expect(isAgentGateError(err)).toBe(true);
+    if (isAgentGateError(err)) expect(err.code).toBe('FORBIDDEN_HOST');
+    expect(chain.transfer).not.toHaveBeenCalled();
+  });
+
+  it('refuses to pay when the invoice network != chain network', async () => {
+    const invoice = makeInvoice({ network: 'casper-test' });
+    const { impl } = queuedFetch([json(invoice, 402)]);
+    const chain = makeChain({ network: 'mock' });
+    const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
+    const err = await client.fetchPaid('http://gateway/svc/1').catch((e: unknown) => e);
+    expect(isAgentGateError(err)).toBe(true);
+    if (isAgentGateError(err)) expect(err.code).toBe('NETWORK_MISMATCH');
+    expect(chain.transfer).not.toHaveBeenCalled();
+  });
 });
 
 describe('parseInvoice402', () => {

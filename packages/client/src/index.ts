@@ -1,5 +1,6 @@
 import type { AnySigner, ChainClient, Invoice402, Logger, Motes } from '@agentgate/shared';
 import { AgentGateError, compareMotes, parseMotes } from '@agentgate/shared';
+import { resolvedHostIsPublic, validateHttpUrl } from '@agentgate/shared/net-guard';
 
 /** Result of a fetchPaid call (SPEC §6). */
 export interface PayAndFetchResult {
@@ -21,6 +22,14 @@ export interface AgentGateClientOpts {
   settleDelayMs?: number;
   /** Injectable fetch implementation (dependency injection for tests). Defaults to globalThis.fetch. */
   fetchImpl?: typeof fetch;
+  /** Per-request timeout for the upstream GETs (ms). Default 30000. */
+  requestTimeoutMs?: number;
+  /**
+   * Reject private/loopback/link-local upstream hosts (SSRF guard). Defaults to
+   * true off-mock (live). The fetched URL comes from seller-controlled on-chain
+   * data, so in live mode it must not point at internal infrastructure.
+   */
+  rejectPrivateHosts?: boolean;
 }
 
 export interface AgentGateClient {
@@ -185,13 +194,57 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
   }
   const fetchImpl: typeof fetch = opts.fetchImpl ?? fetch;
   const settleDelayMs = opts.settleDelayMs ?? (chain.network === 'mock' ? 0 : 3000);
+  const requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
+  const rejectPrivateHosts = opts.rejectPrivateHosts ?? chain.network !== 'mock';
+
+  /** Adds a per-request timeout unless the caller supplied their own signal. */
+  function withTimeout(init?: RequestInit): RequestInit {
+    if (init?.signal) return init;
+    return { ...init, signal: AbortSignal.timeout(requestTimeoutMs) };
+  }
+
+  /** fetch + readBody, mapping abort/timeout to a typed error. */
+  async function doFetch(url: string, init?: RequestInit): Promise<FetchedBody> {
+    try {
+      return await readBody(await fetchImpl(url, init));
+    } catch (err) {
+      const name = err instanceof Error ? err.name : '';
+      if (name === 'TimeoutError' || name === 'AbortError') {
+        throw new AgentGateError(
+          'UPSTREAM_TIMEOUT',
+          `request to ${url} timed out after ${requestTimeoutMs}ms`,
+          504,
+        );
+      }
+      throw err;
+    }
+  }
 
   async function fetchPaid(url: string, init?: RequestInit): Promise<PayAndFetchResult> {
     if (typeof url !== 'string' || url.trim() === '') {
       throw new AgentGateError('BAD_URL', 'fetchPaid requires a non-empty url', 400);
     }
 
-    const first = await readBody(await fetchImpl(url, init));
+    // SSRF guard: the URL is seller-controlled (on-chain endpointUrl). Require
+    // http(s) and, in live mode, refuse private/loopback/link-local hosts —
+    // including DNS names that resolve to them (rebinding) — before connecting.
+    const parsed = validateHttpUrl(url, { rejectPrivateHosts });
+    if (!parsed.ok) {
+      throw new AgentGateError(
+        parsed.error === 'forbidden_host' ? 'FORBIDDEN_HOST' : 'BAD_URL',
+        `fetchPaid refused url ${url}: ${parsed.error}`,
+        400,
+      );
+    }
+    if (rejectPrivateHosts && !(await resolvedHostIsPublic(parsed.url.hostname))) {
+      throw new AgentGateError(
+        'FORBIDDEN_HOST',
+        `fetchPaid refused url ${url}: host resolves to a private/unreachable address`,
+        400,
+      );
+    }
+
+    const first = await doFetch(url, withTimeout(init));
 
     // Non-402 first responses pass straight through, unpaid.
     if (first.status !== 402) {
@@ -201,6 +254,14 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
 
     if (!first.isJson) throw badInvoice('402 response body is not JSON');
     const invoice = parseInvoice402(first.body);
+    // Never pay on a different chain than the one we transfer on.
+    if (invoice.network !== chain.network) {
+      throw new AgentGateError(
+        'NETWORK_MISMATCH',
+        `invoice network ${invoice.network} != chain network ${chain.network} — refusing to pay`,
+        502,
+      );
+    }
     logger?.info('fetchPaid: received 402 invoice', {
       url,
       serviceId: invoice.serviceId,
@@ -234,7 +295,7 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
 
     let pendingRetries = 0;
     for (;;) {
-      const res = await readBody(await fetchImpl(url, proofInit));
+      const res = await doFetch(url, withTimeout(proofInit));
       if (res.status !== 402) {
         logger?.info('fetchPaid: paid request completed', { url, status: res.status });
         return {
