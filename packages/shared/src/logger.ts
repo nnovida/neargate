@@ -17,6 +17,39 @@ export interface Logger {
   child(name: string): Logger;
 }
 
+// Field keys whose values must never be logged in cleartext. Matched
+// case-insensitively as a substring so e.g. `adminToken`, `csprCloudApiKey`,
+// `Authorization`, `gateSignerPem`, `privateKey` all redact.
+const SENSITIVE_KEY_RE =
+  /(token|secret|api[-_]?key|password|passwd|authorization|private[-_]?key|privatekey|pem|mnemonic|seed|credential|signature|bearer)/i;
+
+/** Masks a secret value while keeping a hint that it was present and its length. */
+function maskSecret(value: unknown): string {
+  if (typeof value === 'string' && value.length > 8) {
+    return `${value.slice(0, 2)}…[redacted:${value.length}]`;
+  }
+  return '[redacted]';
+}
+
+/**
+ * Recursively redacts values whose key looks sensitive. Defense-in-depth so a
+ * stray `logger.info('x', { adminToken })` cannot leak a secret to stdout.
+ * Depth- and cycle-guarded so it cannot loop on circular structures.
+ */
+function redactFields(value: unknown, seen: WeakSet<object> = new WeakSet(), depth = 0): unknown {
+  if (depth > 6 || value === null || typeof value !== 'object') return value;
+  if (seen.has(value)) return '[circular]';
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.map((v) => redactFields(v, seen, depth + 1));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = SENSITIVE_KEY_RE.test(k) ? maskSecret(v) : redactFields(v, seen, depth + 1);
+  }
+  return out;
+}
+
 function safeStringify(obj: Record<string, unknown>): string {
   try {
     return JSON.stringify(obj);
@@ -50,12 +83,13 @@ export function createLogger(
 
   const write = (lvl: LogLevel, msg: string, fields?: Record<string, unknown>): void => {
     if (LEVEL_WEIGHT[lvl] < threshold) return;
+    const safeFields = redactFields(fields ?? {}) as Record<string, unknown>;
     const line = safeStringify({
       ts: new Date().toISOString(),
       level: lvl,
       name,
       msg,
-      ...(fields ?? {}),
+      ...safeFields,
     });
     process.stdout.write(`${line}\n`);
   };

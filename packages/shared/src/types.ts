@@ -74,6 +74,12 @@ export type AnySigner = SignerRef | PemSignerRef;
 
 export interface ChainClient {
   readonly network: string;
+  /**
+   * Cheap, bounded reachability check for readiness probes (mock: ping devnet;
+   * live: node-RPC status). Resolves when the backing chain is reachable, throws
+   * otherwise. Optional so injected/test clients need not implement it.
+   */
+  ping?(): Promise<void>;
   getService(id: number): Promise<ServiceRecord | null>;
   listServices(): Promise<ServiceRecord[]>;
   getScore(id: number): Promise<ServiceScore>;

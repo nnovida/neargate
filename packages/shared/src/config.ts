@@ -21,6 +21,14 @@ export interface AgentGateConfig {
   adminToken: string;
   invoiceTtlMs: number;
   upstreamTimeoutMs: number;
+  /**
+   * Number of trusted reverse-proxy hops in front of the gateway (Express
+   * `trust proxy`). 0 = trust none (req.ip is the direct socket peer). Behind a
+   * single platform proxy (Railway/Vercel) set TRUST_PROXY=1 so rate limiting
+   * keys off the real client IP. Never set this higher than the real hop count
+   * or X-Forwarded-For becomes spoofable.
+   */
+  trustProxy: number;
   // live mode (Casper Testnet)
   casperNodeUrl: string;
   csprCloudApiUrl: string;
@@ -115,6 +123,7 @@ export function loadConfig(env: Env = process.env): AgentGateConfig {
   const adminToken = readStr(env, 'AGENTGATE_ADMIN_TOKEN', DEFAULT_ADMIN_TOKEN);
   const invoiceTtlMs = readInt(env, 'INVOICE_TTL_MS', 300_000, 1, Number.MAX_SAFE_INTEGER);
   const upstreamTimeoutMs = readInt(env, 'UPSTREAM_TIMEOUT_MS', 30_000, 1, Number.MAX_SAFE_INTEGER);
+  const trustProxy = readInt(env, 'TRUST_PROXY', 0, 0, 10);
 
   const casperNodeUrl = readUrl(
     env,
@@ -179,6 +188,7 @@ export function loadConfig(env: Env = process.env): AgentGateConfig {
     adminToken,
     invoiceTtlMs,
     upstreamTimeoutMs,
+    trustProxy,
     casperNodeUrl,
     csprCloudApiUrl,
     csprCloudApiKey,
