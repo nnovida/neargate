@@ -3,6 +3,7 @@
 # only (docker-compose.hosting.yml); a live deployment never runs this image.
 # Build from the REPO ROOT (workspace-aware):
 #   docker build -f packages/devnet/Dockerfile -t agentgate-devnet .
+# For production, pin to a digest: FROM node:22-alpine@sha256:<digest>
 FROM node:22-alpine
 
 WORKDIR /app
@@ -40,6 +41,9 @@ USER node
 
 ENV NODE_ENV=production
 EXPOSE 4030
+
+# Liveness: hit /healthz.
+HEALTHCHECK --interval=10s --timeout=3s --retries=5 CMD wget -qO- http://127.0.0.1:${PORT:-4030}/healthz || exit 1
 
 # PaaS injects PORT; our config contract reads DEVNET_PORT — map it.
 # Shell form so ${PORT:-4030} expands; `exec` so tsx is PID 1 and gets SIGTERM.

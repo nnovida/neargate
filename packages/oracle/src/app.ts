@@ -1,8 +1,18 @@
 import express, { type Express } from 'express';
+import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { createLogger, loadConfig, type AgentGateConfig, type Logger } from '@agentgate/shared';
 import type { FeedResponse, FetchLike, PairKey, SinglePairResponse } from './types';
 import { FeedProvider } from './feed';
 import { fixtureFeed } from './fixture';
+
+/** Routes a rejected async handler into express's error pipeline (`.catch(next)`). */
+function asyncWrap(
+  fn: (req: Request, res: Response) => Promise<void>,
+): RequestHandler {
+  return (req, res, next) => {
+    fn(req, res).catch(next);
+  };
+}
 
 export interface OracleDeps {
   config?: AgentGateConfig;
@@ -49,17 +59,26 @@ export function createApp(deps: OracleDeps = {}): Express {
   const app = express();
   app.disable('x-powered-by');
 
-  app.get('/feed', async (_req, res) => {
-    res.json(await safeFeed());
-  });
+  app.get(
+    '/feed',
+    asyncWrap(async (_req, res) => {
+      res.json(await safeFeed());
+    }),
+  );
 
-  app.get('/feed/usd-idr', async (_req, res) => {
-    res.json(singlePair(await safeFeed(), 'usd_idr'));
-  });
+  app.get(
+    '/feed/usd-idr',
+    asyncWrap(async (_req, res) => {
+      res.json(singlePair(await safeFeed(), 'usd_idr'));
+    }),
+  );
 
-  app.get('/feed/gold', async (_req, res) => {
-    res.json(singlePair(await safeFeed(), 'xau_usd'));
-  });
+  app.get(
+    '/feed/gold',
+    asyncWrap(async (_req, res) => {
+      res.json(singlePair(await safeFeed(), 'xau_usd'));
+    }),
+  );
 
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true, static: config.oracleStatic });
@@ -67,6 +86,19 @@ export function createApp(deps: OracleDeps = {}): Express {
 
   app.use((_req, res) => {
     res.status(404).json({ error: 'not_found' });
+  });
+
+  // Unexpected errors (e.g. a future async route rejection) → JSON 500 (4-arg
+  // signature is required by express). Mirrors the devnet error-handling pattern.
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    logger.error('unhandled oracle error', {
+      path: req.path,
+      method: req.method,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'internal_error' });
+    }
   });
 
   return app;

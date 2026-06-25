@@ -1,5 +1,5 @@
 import type { Server } from 'node:http';
-import { createLogger, loadConfig } from '@agentgate/shared';
+import { AgentGateError, createLogger, loadConfig } from '@agentgate/shared';
 import { createApp } from './app';
 import type { DevnetDeps } from './app';
 
@@ -9,6 +9,8 @@ export {
   ACTIVITY_LOG_CAP,
   ATTESTATIONS_PER_SERVICE_CAP,
   MIN_PRICE_MOTES,
+  TRANSFER_LOG_CAP,
+  MAX_SERVICES,
   deriveAccountHash,
 } from './state';
 export type { TransferRecord } from './state';
@@ -26,6 +28,15 @@ export interface RunningServer {
 /** Boots the devnet HTTP server; resolves with the bound port and a close() handle. */
 export async function startServer(opts: DevnetStartOpts = {}): Promise<RunningServer> {
   const config = opts.config ?? loadConfig();
+  // Fail closed: devnet is the in-memory mock chain and must never stand in for
+  // a real backend. Code-enforce the guarantee so it can't be a doc-only promise.
+  if (config.mode === 'live') {
+    throw new AgentGateError(
+      'DEVNET_LIVE_REFUSED',
+      'devnet is the mock chain and must not run in live mode',
+      500,
+    );
+  }
   const logger = opts.logger ?? createLogger('devnet');
   const app = createApp({ config, logger });
   const requestedPort = opts.port ?? config.devnetPort;

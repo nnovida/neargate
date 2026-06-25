@@ -89,15 +89,16 @@ export async function fetchSource(
   logger: Logger,
 ): Promise<SourceResult | null> {
   try {
-    const body = await withTimeout(
-      (async (): Promise<unknown> => {
-        const res = await fetchImpl(def.url, { signal: AbortSignal.timeout(SOURCE_TIMEOUT_MS) });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })(),
-      SOURCE_TIMEOUT_MS,
-      def.name,
-    );
+    const inner = (async (): Promise<unknown> => {
+      const res = await fetchImpl(def.url, { signal: AbortSignal.timeout(SOURCE_TIMEOUT_MS) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    })();
+    // If withTimeout's timer wins the race, `inner` may still reject later (the
+    // AbortSignal abort or a slow socket). Swallow that loser rejection so it
+    // can never surface as an unhandledRejection — the AbortSignal still fires.
+    inner.catch(() => {});
+    const body = await withTimeout(inner, SOURCE_TIMEOUT_MS, def.name);
     const parsed = def.parse(body);
     if (parsed.usdIdr === null && parsed.xauUsd === null) {
       logger.warn('oracle source returned no usable rates', { source: def.name });

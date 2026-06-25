@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AgentGateError, loadConfig } from '@agentgate/shared';
 import { ACTIVITY_LOG_CAP, startServer } from '../src/index';
 import type { RunningServer } from '../src/index';
 
@@ -57,6 +58,23 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server.close();
+});
+
+describe('live-mode fail-closed', () => {
+  it('refuses to boot when config.mode === "live" (the mock chain must never run live)', async () => {
+    const liveConfig = loadConfig({
+      AGENTGATE_MODE: 'live',
+      CSPR_CLOUD_API_KEY: 'test-key',
+      AGENTGATE_ADMIN_TOKEN: 'a-strong-unique-admin-token',
+    });
+    expect(liveConfig.mode).toBe('live');
+
+    await expect(startServer({ port: 0, config: liveConfig })).rejects.toMatchObject({
+      code: 'DEVNET_LIVE_REFUSED',
+      httpStatus: 500,
+    });
+    await expect(startServer({ port: 0, config: liveConfig })).rejects.toBeInstanceOf(AgentGateError);
+  });
 });
 
 describe('devnet basics', () => {

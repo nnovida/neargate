@@ -14,6 +14,16 @@ export const ACTIVITY_LOG_CAP = 500;
 export const ATTESTATIONS_PER_SERVICE_CAP = 100;
 /** Mirrors the on-chain contract: price must be ≥ 1000 motes. SPEC §10. */
 export const MIN_PRICE_MOTES = 1000n;
+/**
+ * Transfer-lookup ring buffer cap (oldest deploy hash dropped). The mock chain's
+ * faucet/transfer are unauthenticated, so bound this map to keep memory finite.
+ */
+export const TRANSFER_LOG_CAP = 2000;
+/**
+ * Hard ceiling on registered services. register-service is unauthenticated on
+ * the mock chain; cap it so the registry can't grow without bound.
+ */
+export const MAX_SERVICES = 1000;
 
 const ACCOUNT_HASH_RE = /^account-hash-[0-9a-f]{64}$/;
 
@@ -99,6 +109,8 @@ function stripTrailingSlashes(url: string): string {
 export class DevnetState {
   private readonly balances = new Map<string, bigint>();
   private readonly transfers = new Map<string, TransferRecord>();
+  /** Insertion order of `transfers` keys, oldest first — drives TRANSFER_LOG_CAP eviction. */
+  private readonly transferOrder: string[] = [];
   private readonly services = new Map<number, InternalService>();
   private readonly scores = new Map<number, { total: number; success: number }>();
   /** Newest first, capped at ATTESTATIONS_PER_SERVICE_CAP per service. */
@@ -171,6 +183,11 @@ export class DevnetState {
       timestamp,
     };
     this.transfers.set(deployHash, record);
+    this.transferOrder.push(deployHash);
+    while (this.transferOrder.length > TRANSFER_LOG_CAP) {
+      const evicted = this.transferOrder.shift();
+      if (evicted !== undefined) this.transfers.delete(evicted);
+    }
 
     const service = [...this.services.values()].find((s) => s.paymentTarget === to) ?? null;
     this.pushActivity({
@@ -193,6 +210,9 @@ export class DevnetState {
   // ---- registry (mirrors the Odra contract) ---------------------------------
 
   registerService(input: RegisterInput): { serviceId: number; txHash: string } {
+    if (this.services.size >= MAX_SERVICES) {
+      throw err(429, 'service_limit_reached', `mock chain caps the registry at ${MAX_SERVICES} services`);
+    }
     if (input.name.trim() === '') throw err(400, 'empty_name', 'service name must not be empty');
     if (BigInt(input.priceMotes) < MIN_PRICE_MOTES) {
       throw err(400, 'invalid_price', `priceMotes must be ≥ ${MIN_PRICE_MOTES} motes`);
