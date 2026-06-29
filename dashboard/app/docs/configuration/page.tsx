@@ -204,9 +204,11 @@ export default function ConfigurationPage() {
             </span>,
             'effectively (for registry use)',
             <span key="m">
-              Package hash of the deployed registry contract (<M>hash-&lt;64hex&gt;</M>). Not
-              enforced by <M>loadConfig()</M>, but while empty every live registry path is
-              undeployed. Contract deploy is out of scope for now — see{' '}
+              Package hash of the deployed AgentGateRegistry contract (<M>hash-&lt;64hex&gt;</M>).
+              For Casper Testnet live mode set this to{' '}
+              <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. Not
+              enforced by <M>loadConfig()</M>, but when left empty every live registry call returns{' '}
+              <M>NOT_DEPLOYED</M> (fallback only — the registry is live on Testnet). See{' '}
               <DocLink href="/docs/contract">Smart contract</DocLink>.
             </span>,
           ],

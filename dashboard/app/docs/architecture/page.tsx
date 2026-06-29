@@ -222,12 +222,16 @@ export default function ArchitecturePage() {
           ],
         ]}
       />
-      <Callout tone="warn" title="LIVE BACKEND IS DEPLOY-GATED">
-        <M>LiveCasperClient</M> needs a deployed registry whose package hash is set as{' '}
-        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M>. Until that exists, contract reads and writes throw{' '}
-        <M>NOT_DEPLOYED</M> (HTTP 503). Several CSPR.cloud response shapes and the Odra state-key
-        derivation carry <M>⚠️ verify-against-deployed-contract</M> notes in the source, because the
-        deploy itself is intentionally out of scope for this build. See{' '}
+      <Callout tone="info" title="LIVE CONTRACT IS DEPLOYED ON CASPER TESTNET">
+        <M>AgentGateRegistry</M> is live on Casper Testnet (network <M>casper-test</M>). The
+        registry package hash is{' '}
+        <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. Set{' '}
+        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> to that value (along with <M>CSPR_CLOUD_API_KEY</M>{' '}
+        and signer PEM paths) to run live mode end-to-end. <M>NOT_DEPLOYED</M> (HTTP 503) is a
+        fallback thrown only when <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> is unset — for example, on
+        a fresh checkout with no <M>.env</M>. Several CSPR.cloud response shapes and the Odra
+        state-key derivation carry <M>⚠️ verify-against-deployed-contract</M> notes in the source.
+        See{' '}
         <DocLink href="/docs/contract">Smart contracts</DocLink>.
       </Callout>
 

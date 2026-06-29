@@ -72,11 +72,12 @@ export default function InstallationPage() {
           ],
         ]}
       />
-      <Callout tone="info" title="Contracts are deferred">
-        Deploying the registry to Casper Testnet is intentionally out of scope for this build — no
-        live contract address exists yet. You can install, run the full payment loop, and pass
-        every test without ever touching Rust. The Rust toolchain only matters if you want to run
-        the 20 OdraVM contract tests locally.
+      <Callout tone="ok" title="Contract is deployed">
+        AgentGateRegistry is live on Casper Testnet (network <M>casper-test</M>). The registry
+        package hash is{' '}
+        <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. You can
+        install, run the full payment loop, and pass every test without ever touching Rust. The
+        Rust toolchain only matters if you want to run the 20 OdraVM contract tests locally.
       </Callout>
 
       <H2 id="clone-install">Clone and install</H2>
@@ -235,12 +236,15 @@ export default function InstallationPage() {
           ],
         ]}
       />
-      <Callout tone="warn" title="Live mode is not yet deployable end to end">
-        Live mode requires <M>CSPR_CLOUD_API_KEY</M>, PEM signer keys, and a deployed registry
-        contract whose package hash you set in <M>REGISTRY_CONTRACT_PACKAGE_HASH</M>. Because the
-        contract deploy is out of scope for this build, there is no published package hash yet —
-        live calls that need the registry are gated until one exists. Use{' '}
-        <M>AGENTGATE_MODE=mock</M> for everything in these docs.
+      <Callout tone="ok" title="Live mode is deployable end to end">
+        AgentGateRegistry is deployed on Casper Testnet. Set{' '}
+        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> to{' '}
+        <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>, plus{' '}
+        <M>CSPR_CLOUD_API_KEY</M> and your PEM signer paths in <M>.env</M>, then set{' '}
+        <M>AGENTGATE_MODE=live</M>. The full loop (register_service, pay, record_attestation,
+        trust score reads) runs on-chain. Real transaction links are in the repo README under
+        "Deployed addresses (Casper Testnet)". Use <M>AGENTGATE_MODE=mock</M> for a keys-free
+        local run.
       </Callout>
       <P>
         The full mode matrix, guardrails and every variable are documented in{' '}

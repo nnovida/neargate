@@ -166,10 +166,12 @@ export default function Page() {
       />
       <Callout tone="warn" title="LIVE MODE PREREQUISITES">
         Live mode requires <M>CSPR_CLOUD_API_KEY</M> and a non-default <M>AGENTGATE_ADMIN_TOKEN</M>{' '}
-        (both enforced by config), plus a deployed registry whose package hash is set as{' '}
-        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M>. Deploying that contract is documented but intentionally
-        out of scope for this build — there is no live contract address yet. Until it is deployed,
-        live chain reads and contract writes are gated behind <M>NOT_DEPLOYED</M>. See{' '}
+        (both enforced by config), plus the registry package hash set as{' '}
+        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M>. The <M>AgentGateRegistry</M> contract is LIVE on
+        Casper Testnet (network <M>casper-test</M>) — package hash{' '}
+        <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. If{' '}
+        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> is unset (e.g. a fresh checkout with no .env), the
+        gateway falls back to <M>NOT_DEPLOYED</M> (503). See{' '}
         <DocLink href="/docs/contract">Smart contracts</DocLink>.
       </Callout>
 
@@ -205,7 +207,7 @@ export default function Page() {
           {
             href: '/docs/deployment',
             title: 'Deploy to production',
-            desc: 'Host the dashboard, middleware, and oracle; configure live-mode guardrails; and follow the registry deploy runbook (deploy itself is deferred).',
+            desc: 'Host the dashboard, middleware, and oracle; configure live-mode guardrails; and set REGISTRY_CONTRACT_PACKAGE_HASH to connect to the live AgentGateRegistry on Casper Testnet.',
           },
         ]}
       />

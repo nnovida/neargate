@@ -43,7 +43,7 @@ export default function Page() {
           [
             <M key="c">AgentGateRegistry</M>,
             'Service discovery catalog + per-service payment-attestation reputation ledger.',
-            'Implemented, unit-tested, and wired into the off-chain product (a live registry client). Deploy is deferred.',
+            'Deployed to Casper Testnet (casper-test, Casper 2.0) and wired into the off-chain product (a live registry client). Package hash: hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9',
           ],
           [
             <M key="c">SpendGuard</M>,
@@ -448,17 +448,18 @@ export default function Page() {
         entrypoint/type/event JSON under <M>resources/casper_contract_schemas/</M>. Any committed
         wasm in the repo is rebuilt at deploy time from source.
       </P>
-      <Callout tone="warn" title="DEPLOY IS OUT OF SCOPE">
-        Deployment to Casper Testnet is documented but intentionally not executed in this build.
-        There is no live contract address. The committed wasm is rebuilt at deploy. The verified
-        runbook — keys and faucet, install via <M>casper-client put-deploy</M> with the required{' '}
-        <M>odra_cfg_*</M> session args (or the Odra livenet deploy bin), and how to find and record
-        the package hash afterward — lives in <M>contracts/README.md</M> and{' '}
+      <Callout tone="info" title="DEPLOYED TO CASPER TESTNET">
+        AgentGateRegistry is live on Casper Testnet (network <M>casper-test</M>, Casper 2.0). The
+        full loop &mdash; <M>register_service</M> &rarr; pay (native CSPR transfer, transfer_id =
+        invoice nonce) &rarr; <M>record_attestation</M> &rarr; trust-score reads (1,1) &mdash; runs
+        on-chain. Real transaction links are in the repo README under &ldquo;Deployed addresses
+        (Casper Testnet)&rdquo;. The deploy runbook (keys, faucet,{' '}
+        <M>casper-client put-deploy</M> session args) is in <M>contracts/README.md</M> and{' '}
         <M>contracts/DEPLOY-DAY1.md</M>.
       </Callout>
       <CodeBlock
-        label="root .env (set after the first install — not yet populated)"
-        code={'REGISTRY_CONTRACT_PACKAGE_HASH=hash-<64 hex>'}
+        label="root .env"
+        code={'REGISTRY_CONTRACT_PACKAGE_HASH=hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9'}
       />
 
       <NextLinks

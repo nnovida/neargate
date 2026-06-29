@@ -123,10 +123,14 @@ export default function Page() {
         Testnet; in mock mode the in-process devnet is used instead.
       </P>
 
-      <Callout tone="warn" title="Contract deploy is out of scope">
-        Until <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> is set, every contract-dependent live path throws{' '}
-        <M>NOT_DEPLOYED</M> (503). The registry contract deploy is deferred — there is no live
-        contract address yet, so live reads/writes are expected to surface this code.
+      <Callout tone="info" title="Contract is live on Casper Testnet">
+        <M>AgentGateRegistry</M> is deployed and live on Casper Testnet (network{' '}
+        <M>casper-test</M>, Casper 2.0). Package hash:{' '}
+        <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. Set{' '}
+        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> to this value (along with{' '}
+        <M>CSPR_CLOUD_API_KEY</M> and signer PEM paths) to enable live reads/writes.{' '}
+        <M>NOT_DEPLOYED</M> (503) is a fallback — it fires only when the env var is unset (e.g. a
+        fresh checkout with no <M>.env</M>).
       </Callout>
 
       <H3 id="chain-deploy">Deploy &amp; transactions</H3>
@@ -137,7 +141,7 @@ export default function Page() {
             <M key="nd">NOT_DEPLOYED</M>,
             '503',
             'A contract call/read was attempted while REGISTRY_CONTRACT_PACKAGE_HASH is unset.',
-            'Deploy the registry contract and set REGISTRY_CONTRACT_PACKAGE_HASH to its package hash (deferred — see the deploy notes).',
+            'Set REGISTRY_CONTRACT_PACKAGE_HASH to the live package hash (hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9) in your .env. The contract is deployed on Casper Testnet; this error only fires on a fresh checkout with no .env configured.',
           ],
           [
             <M key="tf">TX_FAILED</M>,

@@ -390,12 +390,13 @@ export default function DeploymentPage() {
       </P>
 
       <H2 id="deferred">What is deferred</H2>
-      <Callout tone="warn" title="contract deploy is out of scope">
-        Deploying the Casper contracts to Testnet is a separate, deferred step that needs a funded
-        key. The <M>contracts/DEPLOY-DAY1.md</M> kit documents it, but no live contract address
-        exists yet — <M>resources/deployed_contracts.toml</M> is not written until the deploy step runs, and{' '}
-        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> ships blank. Treat any deployment as mock-mode until
-        that hash is filled in.
+      <Callout tone="info" title="Registry contract is live on Casper Testnet">
+        AgentGateRegistry is deployed and running on Casper Testnet (network{' '}
+        <M>casper-test</M>, Casper 2.0). Package hash:{' '}
+        <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. Set this as{' '}
+        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> in <M>.env</M> to enable live contract reads and
+        writes. Real transaction links are in the repo README under &ldquo;Deployed addresses
+        (Casper Testnet)&rdquo;.
       </Callout>
       <DocTable
         head={['Item', 'Status']}
@@ -403,9 +404,10 @@ export default function DeploymentPage() {
           [
             'Registry contract deploy',
             <span key="s">
-              Out of scope here. Needs a funded ed25519 Testnet key (~600 CSPR for both installs) and
-              the Odra livenet deploy run — see <M>contracts/DEPLOY-DAY1.md</M>. No live address is
-              claimed.
+              <strong className="text-white">Live on Casper Testnet.</strong> Package hash:{' '}
+              <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. Set
+              this as <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> in <M>.env</M>. Transaction links are in
+              the repo README under &ldquo;Deployed addresses (Casper Testnet)&rdquo;.
             </span>,
           ],
           [
