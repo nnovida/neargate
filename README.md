@@ -4,7 +4,7 @@
 service in one command:
 
 ```bash
-npx agentgate wrap https://api.example.com/data --price 0.5 --name "My Data API"
+npx @neargate/cli wrap https://api.example.com/data --price 0.5 --name "My Data API"
 ```
 
 Sellers put a **402 paywall** in front of their API and register it in an on-chain

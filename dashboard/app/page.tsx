@@ -3,14 +3,14 @@ import { StatsStrip } from '@/components/stats-strip';
 import { CommandBlock } from '@/components/copy';
 
 const WRAP_CMD =
-  'npx agentgate wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed"';
+  'npx @neargate/cli wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed"';
 
 const STEPS = [
   {
     n: '01',
     title: 'Wrap',
     body: 'One command registers your API on the Casper registry contract and drops a 402 paywall in front of it. No billing code, no accounts, no keys to issue.',
-    code: 'npx agentgate wrap <url> --price 0.5',
+    code: 'npx @neargate/cli wrap <url> --price 0.5',
   },
   {
     n: '02',
