@@ -337,10 +337,26 @@ describe('createAgentGateClient · fetchPaid', () => {
     expect(chain.transfer).not.toHaveBeenCalled();
   });
 
-  it('refuses to pay when no accepts entry matches chain network (BAD_INVOICE)', async () => {
-    // accepts[0].network = 'casper-test' but chain.network = 'mock' → no match
+  it('refuses to pay when no accepts entry matches chain network (NETWORK_MISMATCH)', async () => {
+    // accepts[0].network = 'casper-test' but chain.network = 'mock' → network mismatch
     const req = requirements('42', 'casper-test');
     const { impl } = queuedFetch([json(req, 402)]);
+    const chain = makeChain({ network: 'mock' });
+    const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
+    const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
+    expect(isAgentGateError(err)).toBe(true);
+    if (isAgentGateError(err)) {
+      expect(err.code).toBe('NETWORK_MISMATCH');
+      expect(err.httpStatus).toBe(502);
+    }
+    expect(chain.transfer).not.toHaveBeenCalled();
+  });
+
+  it('refuses to pay when accepts entry has wrong scheme (BAD_INVOICE)', async () => {
+    // scheme is not X402_SCHEME → structural bad invoice
+    const req = requirements('42', 'mock');
+    const badReq = { ...req, accepts: [{ ...req.accepts[0]!, scheme: 'upto' }] };
+    const { impl } = queuedFetch([json(badReq, 402)]);
     const chain = makeChain({ network: 'mock' });
     const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
     const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
@@ -371,9 +387,26 @@ describe('parsePaymentRequired', () => {
     ).toThrowError(/invalid 402 invoice/);
   });
 
-  it('rejects when no accepts entry matches chain network', () => {
-    expect(() =>
-      parsePaymentRequired(requirements('42', 'casper-test'), 'mock'),
-    ).toThrowError(/invalid 402 invoice/);
+  it('rejects when no accepts entry matches chain network (NETWORK_MISMATCH)', () => {
+    let thrown: unknown;
+    try { parsePaymentRequired(requirements('42', 'casper-test'), 'mock'); }
+    catch (e) { thrown = e; }
+    expect(isAgentGateError(thrown)).toBe(true);
+    if (isAgentGateError(thrown)) expect(thrown.code).toBe('NETWORK_MISMATCH');
+  });
+
+  it('rejects when no accepts entry matches scheme (BAD_INVOICE)', () => {
+    const req = requirements('42', 'mock');
+    const badReq = { ...req, accepts: [{ ...req.accepts[0]!, scheme: 'upto' }] };
+    expect(() => parsePaymentRequired(badReq, 'mock')).toThrowError(/invalid 402 invoice/);
+  });
+
+  it('rejects expiresAtMs: NaN (BAD_INVOICE)', () => {
+    const req = requirements('42', 'mock');
+    const badReq = {
+      ...req,
+      accepts: [{ ...req.accepts[0]!, extra: { ...req.accepts[0]!.extra, expiresAtMs: NaN } }],
+    };
+    expect(() => parsePaymentRequired(badReq, 'mock')).toThrowError(/invalid 402 invoice/);
   });
 });

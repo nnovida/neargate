@@ -81,10 +81,12 @@ export function parsePaymentRequired(
   if (raw['x402Version'] !== X402_VERSION) throw badInvoice(`unsupported x402Version (expected ${X402_VERSION})`);
   const accepts = raw['accepts'];
   if (!Array.isArray(accepts) || accepts.length === 0) throw badInvoice('accepts must be a non-empty array');
-  const req = accepts.find(
-    (a): a is PaymentRequirements => isRecord(a) && a['scheme'] === X402_SCHEME && a['network'] === chainNetwork,
+  const schemeMatches = accepts.filter(
+    (a): a is PaymentRequirements => isRecord(a) && a['scheme'] === X402_SCHEME,
   );
-  if (!req) throw badInvoice(`no accepts entry for scheme "${X402_SCHEME}" on network "${chainNetwork}"`);
+  if (schemeMatches.length === 0) throw badInvoice(`no accepts entry for scheme "${X402_SCHEME}"`);
+  const req = schemeMatches.find((a) => a['network'] === chainNetwork);
+  if (!req) throw new AgentGateError('NETWORK_MISMATCH', `invoice offers no payment on network "${chainNetwork}" — refusing to pay`, 502);
   if (typeof req.maxAmountRequired !== 'string') throw badInvoice('maxAmountRequired must be a string');
   try {
     parseMotes(req.maxAmountRequired);
@@ -98,7 +100,7 @@ export function parsePaymentRequired(
   if (typeof nonce !== 'string' || !NONCE_RE.test(nonce) || BigInt(nonce) > U64_MAX) {
     throw badInvoice('extra.nonce must be a u64 decimal string');
   }
-  if (typeof req.extra?.expiresAtMs !== 'number' || req.extra.expiresAtMs <= now) {
+  if (typeof req.extra?.expiresAtMs !== 'number' || !Number.isFinite(req.extra.expiresAtMs) || req.extra.expiresAtMs <= now) {
     throw badInvoice('invoice is expired — refusing to pay');
   }
   return req;
