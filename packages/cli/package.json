@@ -1,22 +1,42 @@
 {
   "name": "@neargate/cli",
   "version": "0.1.0",
-  "private": true,
+  "description": "Wrap any HTTP API into a paid x402 service on Casper — HTTP 402 micropayments in native CSPR with on-chain discovery and reputation.",
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
+  "bin": { "agentgate": "./dist/bin.js" },
+  "exports": { ".": "./src/index.ts" },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=22" },
+  "license": "MIT",
+  "homepage": "https://example.invalid/AgentGate#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://example.invalid/AgentGate.git",
+    "directory": "packages/cli"
   },
-  "bin": {
-    "agentgate": "./src/bin.ts"
+  "bugs": { "url": "https://example.invalid/AgentGate/issues" },
+  "keywords": ["casper", "x402", "http-402", "ai-agents", "micropayments", "agentgate", "web3", "cli"],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "exports": { ".": "./dist/index.js" }
   },
   "scripts": {
+    "build": "tsup",
+    "prepack": "tsup",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run"
   },
   "dependencies": {
+    "casper-js-sdk": "^5.0.12",
+    "commander": "^12.0.0",
+    "@noble/hashes": "^1.2.0",
+    "@ethersproject/bignumber": "^5.7.0"
+  },
+  "devDependencies": {
     "@agentgate/chain": "*",
     "@agentgate/shared": "*",
-    "casper-js-sdk": "^5.0.12",
-    "commander": "^12.0.0"
+    "tsup": "^8.3.0",
+    "@types/node": "^22.0.0"
   }
 }
