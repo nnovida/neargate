@@ -1,9 +1,21 @@
-# AgentGate — Live-mode deploy runbook (documented, NOT executed)
+# AgentGate — Live-mode deploy runbook
 
-> SPEC §13: live-mode code paths compile and are unit-tested without a node; every spot
-> that needs the deployed contract throws `AgentGateError('NOT_DEPLOYED', …, 503)` and is
-> listed here. Deploying is **out of scope for the current milestone** — this runbook is
-> the recipe for when it happens.
+> **DEPLOYED to Casper Testnet 2026-06-29.** Package hash
+> `hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9` (see README for tx
+> links). The full loop runs on-chain (register → pay → attest → score `(1,1)`). This runbook
+> is the recipe + the three gotchas that actually bit us:
+>
+> 1. **Wasm toolchain matters (root-cause bug):** build with **binaryen ≥ 123** + real **wabt
+>    `wasm-strip`**. Binaryen 121 / a `wasm-opt --strip` shim leaves a **bulk-memory `DataCount`
+>    section** in the wasm — the install succeeds but every *stored entry-point call* reverts
+>    on-chain with **"Sections out of order"** (`consumed: 0`). Verify the wasm has no section
+>    id 12: section order must be `[1,2,3,4,5,6,7,9,10,11]`.
+> 2. **Deploy via casper-js-sdk `SessionBuilder`** (`.wasm().installOrUpgrade().runtimeArgs(odra_cfg_* args)
+>    .payment(300e9).build()` + `tx.sign(key)` + `RpcClient.putTransaction`). The odra livenet bin
+>    additionally needs `ODRA_CASPER_LIVENET_EVENTS_URL=https://node.testnet.casper.network/events`
+>    and still fails reading back the package hash on Casper 2.0 — the SDK path is simpler.
+> 3. **Native transfers have a ~2.5 CSPR minimum** — a 0.5 CSPR payment is rejected "Invalid
+>    transaction". Price services ≥ 2.5 CSPR for the Plan-B native rail (buyer pays ≥ price).
 
 ## 1. Prerequisites
 
@@ -23,11 +35,13 @@ cargo odra test            # 20 OdraVM tests, must be green
 cargo odra build           # writes wasm/AgentGateRegistry.wasm (~291 KiB post wasm-opt)
 ```
 
-> **Build toolchain:** `cargo odra build`'s optimize step needs **`wasm-opt` (binaryen ≥ 121)** —
-> older versions abort with `Unknown option '--llvm-memory-copy-fill-lowering'` (that pass lowers
-> `memory.copy`/`memory.fill` for the Casper VM, so it is load-bearing, not just size) — plus a
-> **`wasm-strip`** on `PATH` (wabt, or a `wasm-opt --strip-debug --strip-producers <f> -o <f>` shim).
-> Always regenerate the committed schema after any contract change: `cargo odra schema`.
+> **Build toolchain (CRITICAL — see gotcha #1 above):** use **`wasm-opt` (binaryen ≥ 123)** + real
+> **wabt `wasm-strip`** on `PATH` (the repo pins both in git-ignored `contracts/.tools/bin/`; prefix
+> `PATH="$(pwd)/../.tools/bin:$PATH"`). Binaryen < 123 (e.g. 121) or a `wasm-opt`-based `wasm-strip`
+> *shim* leaves a bulk-memory `DataCount` section → stored calls revert "Sections out of order".
+> Binaryen ≥ 121 is needed at minimum for `--llvm-memory-copy-fill-lowering`; **123 is what actually
+> produces a DataCount-free, callable wasm.** Verify: section ids must be `[1,2,3,4,5,6,7,9,10,11]`
+> (no id 12). Always regenerate the committed schema after any contract change: `cargo odra schema`.
 
 ## 3. Deploy the registry (when the time comes)
 

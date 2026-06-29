@@ -9,3 +9,8 @@ logs/
 data/
 coverage/
 *.tsbuildinfo
+# Casper secret keys — NEVER commit (key material)
+/Priv_key_*/
+*.pem
+*_secret_key.pem
+keys/

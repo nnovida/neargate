@@ -133,21 +133,25 @@ Contract tests: `cd contracts/agentgate-registry && cargo odra test` (20 OdraVM 
 
 ## Deployed addresses (Casper Testnet)
 
-Filled in after running the deploy runbook; deployment itself is intentionally out of
-scope for this build. Once deployed, set `REGISTRY_CONTRACT_PACKAGE_HASH` in `.env`.
+**Live on Casper Testnet** (Casper 2.0, network `casper-test`). The full loop —
+register → pay (native CSPR transfer, `transfer_id` = invoice nonce) → attest → score —
+runs on-chain; the trust score reads `(1,1)` after the attestation below. Set
+`REGISTRY_CONTRACT_PACKAGE_HASH` to the package hash for live mode.
 
 | Artifact | Value |
 |---|---|
-| `AgentGateRegistry` package hash | _TBD — `hash-…` after deploy_ |
-| Example `register_service` tx | _TBD — link to `testnet.cspr.live/deploy/…`_ |
-| Example payment transfer tx | _TBD_ |
-| Example `record_attestation` tx | _TBD_ |
+| `AgentGateRegistry` package hash | `hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9` |
+| Install (contract deploy) tx | [`4eace325…`](https://testnet.cspr.live/transaction/4eace32597f40bf432736ccc2e839dbb04627a2094d245dde0d73474ef2ad8db) |
+| `register_service` tx | [`35d10755…`](https://testnet.cspr.live/transaction/35d10755398108bd4838575dbd7760838e826a0ae4196de7626edfe94cd5b3b2) |
+| Payment transfer tx (`transfer_id` = nonce) | [`7cbba41d…`](https://testnet.cspr.live/transaction/7cbba41da6d3ebb4520ee2cd87dbc2387b56cd25c185b6514234d6fd04e8c1b0) |
+| `record_attestation` tx | [`f9759829…`](https://testnet.cspr.live/transaction/f9759829f536db00e981bcc53540455ef8141ff2ab3732909806b80da054ee01) |
 
 ## Going live
 
-Deploying the registry to Casper Testnet is documented (not executed) in
-[docs/DEPLOY.md](docs/DEPLOY.md): build/deploy runbook, the full list of
-`NOT_DEPLOYED`-gated call paths, and the ⚠️ verify-against-deployed-contract checklist.
+The registry is **deployed to Casper Testnet** (addresses above). The deploy runbook is in
+[docs/DEPLOY.md](docs/DEPLOY.md), including the wasm toolchain requirement (**binaryen ≥ 123** +
+`wasm-strip`; older binaryen leaves a bulk-memory `DataCount` section that makes stored
+entry-point calls revert with *"Sections out of order"*) and the verify-against-deployed-contract notes.
 
 Hosting the services is documented in [docs/HOSTING.md](docs/HOSTING.md): dashboard →
 Vercel (root `vercel.json`), middleware + oracle → Railway (per-package Dockerfiles +
