@@ -34,20 +34,6 @@ export interface ActivityEvent {
   detail: string;            // human-readable one-liner for the dashboard feed
 }
 
-export interface Invoice402 {
-  version: 'agentgate-402/1';
-  network: string;           // 'mock' | 'casper-test'
-  serviceId: number;
-  serviceName: string;
-  priceMotes: Motes;
-  paymentTarget: string;     // account-hash
-  nonce: string;             // u64 decimal string → use as transfer_id
-  expiresAt: number;         // unix ms
-  instructions: string;      // human-readable how-to-pay
-}
-
-export interface PaymentProof { deployHash: string; nonce: string; }
-
 export interface RegisterServiceInput {
   name: string;
   description: string;
