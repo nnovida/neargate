@@ -1,8 +1,9 @@
 # Day-1 deploy kit — AgentGateRegistry + SpendGuard → Casper Testnet
 
 Generated 18 Jun 2026. Day-1 gate already validated on this machine:
-`cargo-odra 0.1.7` + `nightly-2026-01-01` + `wasm32` ✓ · registry 17/17 tests ✓ ·
-livenet deploy bin compiles ✓ · **SpendGuard 19/19 tests ✓** · `SpendGuard.wasm` built ✓.
+`cargo-odra 0.1.7` + `nightly-2026-01-01` + `wasm32` ✓ · registry 20/20 tests ✓ ·
+livenet deploy bin compiles ✓ · **SpendGuard 25/25 tests ✓** · `SpendGuard.wasm` built ✓.
+> Build needs `wasm-opt` (binaryen ≥ 121) + `wasm-strip` on `PATH` — see `docs/DEPLOY.md` §2.
 
 Everything below is the ONE remaining step that needs a funded key (your part).
 

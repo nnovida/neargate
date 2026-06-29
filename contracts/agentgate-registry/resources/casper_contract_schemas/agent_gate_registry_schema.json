@@ -118,6 +118,24 @@
     },
     {
       "struct": {
+        "name": "ServiceAttestorChanged",
+        "description": null,
+        "members": [
+          {
+            "name": "service_id",
+            "description": null,
+            "ty": "U64"
+          },
+          {
+            "name": "attestor",
+            "description": null,
+            "ty": "Key"
+          }
+        ]
+      }
+    },
+    {
+      "struct": {
         "name": "ServiceRegistered",
         "description": null,
         "members": [
@@ -303,6 +321,28 @@
       "access": "public"
     },
     {
+      "name": "set_attestor",
+      "description": "Rotate a service's authorised attestor key. Owner only. Lets an owner",
+      "is_mutable": true,
+      "arguments": [
+        {
+          "name": "service_id",
+          "description": null,
+          "ty": "U64",
+          "optional": false
+        },
+        {
+          "name": "attestor",
+          "description": null,
+          "ty": "Key",
+          "optional": false
+        }
+      ],
+      "return_ty": "Unit",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
       "name": "get_service",
       "description": "Fetch a service record. `None` if the id was never registered.",
       "is_mutable": false,
@@ -373,6 +413,10 @@
     {
       "name": "AttestationRecorded",
       "ty": "AttestationRecorded"
+    },
+    {
+      "name": "ServiceAttestorChanged",
+      "ty": "ServiceAttestorChanged"
     },
     {
       "name": "ServiceRegistered",

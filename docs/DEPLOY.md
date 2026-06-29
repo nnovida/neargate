@@ -19,9 +19,15 @@
 
 ```bash
 cd contracts/agentgate-registry
-cargo odra test            # 17 OdraVM tests, must be green
-cargo odra build           # writes wasm/AgentGateRegistry.wasm (~288 KiB post wasm-opt)
+cargo odra test            # 20 OdraVM tests, must be green
+cargo odra build           # writes wasm/AgentGateRegistry.wasm (~291 KiB post wasm-opt)
 ```
+
+> **Build toolchain:** `cargo odra build`'s optimize step needs **`wasm-opt` (binaryen ≥ 121)** —
+> older versions abort with `Unknown option '--llvm-memory-copy-fill-lowering'` (that pass lowers
+> `memory.copy`/`memory.fill` for the Casper VM, so it is load-bearing, not just size) — plus a
+> **`wasm-strip`** on `PATH` (wabt, or a `wasm-opt --strip-debug --strip-producers <f> -o <f>` shim).
+> Always regenerate the committed schema after any contract change: `cargo odra schema`.
 
 ## 3. Deploy the registry (when the time comes)
 
@@ -74,18 +80,24 @@ Every assumption that can only be confirmed on-chain is marked
 deploy, walk this list top to bottom:
 
 - [ ] **Gas constants** (`GAS_*`, live.ts top) — measure real costs, update.
-- [ ] **Odra state layout** — `STATE_INDEX` (services_count=0, services=1, scores=2) and
-      the `"state"` dictionary name match the deployed Odra 2.x layout.
-- [ ] **Dictionary item key scheme** — blake2b256(index byte ++ LE key bytes) matches
-      Odra's key derivation for `Var`/`Mapping`.
+- [ ] **Odra state layout** — `STATE_INDEX` is **1-based** (odra-macros emits `idx as u8 + 1`):
+      services_count=1, services=2, scores=3 (then seen_payments=4, attestations=5), and the
+      `"state"` dictionary name matches the deployed Odra 2.x layout. *(A 0-based index here makes
+      `scores[id]` collide byte-for-byte with `services[id]` — the bug fixed in `live.ts`.)*
+- [ ] **Dictionary item key scheme** — blake2b256(**4-byte big-endian u32** field index ++ LE key
+      bytes) matches Odra's key derivation for `Var`/`Mapping` (see `odraDictionaryItemKey`).
+- [ ] **Stored-value `List<U8>` prefix** — Odra stores each value as `CLValue::from_t(Vec<u8>)` →
+      CLType `List<U8>`; the SDK's `.bytes()` prepends a **4-byte little-endian length** that
+      `stripListU8Prefix` must remove before `ByteReader` decodes the struct.
 - [ ] **Service struct byte layout** — the `ByteReader` field order/types decode the
       deployed `Service` (name, description, gateway_base_url, price, payment_target,
       owner, attestor, active, created_at) incl. Address tag values.
 - [ ] **Service ids are 1-based** and `registerService` may assume `id == services_count`
       after insert.
 - [ ] **Entrypoint arg names/encodings** — `register_service` / `record_attestation` /
-      `set_active` args (CLString/CLU512/CLKey/CLU64/CLBool) match the contract schema
-      (`cargo odra schema` output is the source of truth).
+      `set_active` / `set_attestor` args (CLString/CLU512/CLKey/CLU64/CLBool) match the contract
+      schema (`cargo odra schema` is the source of truth — the regenerated schema now includes
+      `set_attestor` and the `ServiceAttestorChanged` event).
 - [ ] **CSPR.cloud payload field names** — `/transfers?deploy_hash=`, `/deploys`,
       `/accounts/:id`, contract-package resolution, pending-deploy detection
       (`block_hash`/`error_message` fields).

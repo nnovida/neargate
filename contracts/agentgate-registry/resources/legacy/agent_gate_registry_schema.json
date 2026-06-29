@@ -106,6 +106,25 @@
           "is_required": true
         }
       ]
+    },
+    {
+      "name": "ServiceAttestorChanged",
+      "args": [
+        {
+          "name": "service_id",
+          "ty": "U64",
+          "is_ref": false,
+          "is_slice": false,
+          "is_required": true
+        },
+        {
+          "name": "attestor",
+          "ty": "Key",
+          "is_ref": false,
+          "is_slice": false,
+          "is_required": true
+        }
+      ]
     }
   ],
   "entrypoints": [
@@ -203,6 +222,29 @@
         {
           "name": "active",
           "ty": "Bool",
+          "is_ref": false,
+          "is_slice": false,
+          "is_required": true
+        }
+      ],
+      "is_mutable": true,
+      "return_ty": "Unit",
+      "ty": "Public",
+      "attributes": []
+    },
+    {
+      "name": "set_attestor",
+      "args": [
+        {
+          "name": "service_id",
+          "ty": "U64",
+          "is_ref": false,
+          "is_slice": false,
+          "is_required": true
+        },
+        {
+          "name": "attestor",
+          "ty": "Key",
           "is_ref": false,
           "is_slice": false,
           "is_required": true
