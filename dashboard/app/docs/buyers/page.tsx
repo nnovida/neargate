@@ -304,11 +304,11 @@ export default function Page() {
       </P>
       <H3 id="network-binding">Invoice network binding</H3>
       <P>
-        The client refuses to pay an invoice whose <M>network</M> field does not equal{' '}
-        <M>chain.network</M> (<M>NETWORK_MISMATCH</M>). You never sign a transfer on one chain for
-        a paywall expecting another. The invoice is also fully validated — exact version, future{' '}
-        <M>expiresAt</M>, u64 <M>nonce</M>, <M>account-hash</M> target — or it is rejected as{' '}
-        <M>BAD_INVOICE</M> before any payment.
+        The client refuses to pay unless the <M>PaymentRequiredResponse</M> offers an{' '}
+        <M>accepts[]</M> entry matching <M>chain.network</M> (<M>NETWORK_MISMATCH</M>). You never
+        sign a transfer on one chain for a paywall expecting another. The invoice is also fully
+        validated — exact version, future <M>expiresAtMs</M>, u64 <M>nonce</M>,{' '}
+        <M>account-hash</M> target — or it is rejected as <M>BAD_INVOICE</M> before any payment.
       </P>
       <H3 id="prompt-injection">Prompt-injection containment</H3>
       <P>
