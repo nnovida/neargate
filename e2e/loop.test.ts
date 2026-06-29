@@ -23,6 +23,7 @@ import { startServer as startDevnet } from '@agentgate/devnet';
 import { startServer as startMiddleware } from '@agentgate/middleware';
 import { startServer as startOracle } from '@agentgate/oracle';
 import {
+  decodeXPaymentResponse,
   encodeXPayment,
   loadConfig,
   X402_SCHEME,
@@ -218,6 +219,14 @@ describe('full mock-mode loop (e2e)', () => {
     expect(feed.pairs.usd_idr.value).toBe(16250.5);
     expect(feed.pairs.xau_usd.value).toBe(3310.25);
     expect(feed.attribution).toBe('static-fixture');
+
+    // Settlement header must be present and carry the correct proof metadata.
+    const xPaymentResponse = res.headers.get('x-payment-response');
+    expect(xPaymentResponse, 'x-payment-response header should be present').not.toBeNull();
+    const settlement = decodeXPaymentResponse(xPaymentResponse!);
+    expect(settlement.success).toBe(true);
+    expect(settlement.transaction).toBe(deployHash);
+    expect(settlement.network).toBe(chain.network);
 
     paidDeployHash = deployHash;
     paidNonce = freshAfterUnderpay.accepts[0]!.extra.nonce;

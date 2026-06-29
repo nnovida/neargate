@@ -9,7 +9,7 @@ import type {
   ServiceRecord,
   ServiceScore,
 } from '@agentgate/shared';
-import { isAgentGateError, trustTier, X402_SCHEME, X402_VERSION } from '@agentgate/shared';
+import { decodeXPayment, isAgentGateError, trustTier, X402_SCHEME, X402_VERSION } from '@agentgate/shared';
 import { MockLlm, runBuyerAgent } from '@agentgate/buyer-agent';
 import type { BuyerRunReport, CatalogEntry } from '@agentgate/buyer-agent';
 
@@ -105,7 +105,13 @@ function json(body: unknown, status = 200): Response {
 function paywallFetch(service: ServiceRecord, data: unknown) {
   return vi.fn(async (_input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> => {
     const headers = new Headers(init?.headers);
-    if (headers.get('X-PAYMENT') !== null) return json(data, 200);
+    const xp = headers.get('X-PAYMENT');
+    if (xp !== null) {
+      const decoded = decodeXPayment(xp);
+      expect(decoded.payload.transaction).toBe(DEPLOY_HASH);
+      expect(decoded.payload.transferId).toBe('424242');
+      return json(data, 200);
+    }
     return json(invoiceFor(service), 402);
   }) as unknown as typeof fetch;
 }
