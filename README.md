@@ -126,7 +126,7 @@ scripts/         dev.ts (stack) · demo.ts (one-shot scripted demo)
 | `npm run agentgate -- …` | the `agentgate` CLI |
 | `npm run agent -- --task "…"` | run the buyer agent once |
 | `npm run typecheck` | `tsc --noEmit` in every package + dashboard + root scripts/e2e |
-| `npm test` | vitest: all package units + the e2e loop (274 tests) |
+| `npm test` | vitest: all package units + the e2e loop (288 tests) |
 | `npm run build` | dashboard `next build` |
 
 Contract tests: `cd contracts/agentgate-registry && cargo odra test` (20 OdraVM tests).

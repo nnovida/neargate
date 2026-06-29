@@ -327,6 +327,18 @@ export default function Page() {
               </>
             ),
           },
+          {
+            name: 'accepts[].asset',
+            type: '"CSPR"',
+            required: false,
+            desc: <>Native CSPR (no token contract).</>,
+          },
+          {
+            name: 'accepts[].extra.transferIdEncoding',
+            type: '"u64-decimal"',
+            required: false,
+            desc: <>How the nonce is encoded as the native transfer_id.</>,
+          },
         ]}
       />
       <H3 id="invoice-rejection-fields">Rejection fields in the 402 body</H3>
@@ -379,7 +391,7 @@ export default function Page() {
       <P>
         When a retry arrives with proof headers, the gateway first checks the invoice behind the
         presented nonce (it must exist, match the requested <M>serviceId</M>, be unused, and be
-        within <M>expiresAt</M>). It then verifies the transfer on-chain via{' '}
+        within <M>expiresAtMs</M>). It then verifies the transfer on-chain via{' '}
         <M>
           chain.verifyTransfer({'{'} deployHash, expectedTarget, minAmountMotes, expectedTransferId,
           maxAgeMs {'}'})
@@ -424,7 +436,7 @@ export default function Page() {
         ]}
       />
       <P>
-        A transfer that exists but has not finalized yet returns <M>pending</M> rather than a
+        A transfer that exists but has not finalized yet returns <M>settlement_pending</M> rather than a
         failure: the gateway keeps the same <M>accepts[]</M> alive (same nonce) and answers{' '}
         <M>402</M> with <M>error:"settlement_pending"</M> and a standard{' '}
         <M>Retry-After: 2</M> response header (seconds) so the buyer can re-present the identical

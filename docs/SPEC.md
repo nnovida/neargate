@@ -255,7 +255,7 @@ Flow for `ALL /svc/:id` (GET/POST pass-through):
 3. With `X-PAYMENT` header (base64-encoded `PaymentPayload`):
    - Decode and validate `x402Version===1`, `scheme==="exact"`, `network===chain.network`; extract `payload.transaction` + `payload.transferId`. Malformed → **402** + fresh requirements + `error:"invalid_payment_header"`.
    - Invoice lookup by `transferId`: must exist, match serviceId, be unused, be within `expiresAtMs` — else **402** fresh requirements + reason (`invoice_expired`, `invoice_used`, `unknown_nonce`).
-   - `chain.verifyTransfer({deployHash: transaction, expectedTarget: service.payTo, minAmountMotes: service.priceMotes, expectedTransferId: transferId, maxAgeMs: INVOICE_TTL_MS})` → on `{ok:false}` **402** + fresh requirements + reason. `pending` → **402** + same requirements (nonce kept) + `Retry-After: 2` (seconds) + `error:"settlement_pending"`.
+   - `chain.verifyTransfer({deployHash: transaction, expectedTarget: service.paymentTarget, minAmountMotes: service.priceMotes, expectedTransferId: transferId, maxAgeMs: INVOICE_TTL_MS})` → on `{ok:false}` **402** + fresh requirements + reason. `pending` → **402** + same requirements (nonce kept) + `Retry-After: 2` (seconds) + `error:"settlement_pending"`.
    - Mark nonce used **before** proxying (single-use even if upstream fails).
 4. Proxy to upstream (undici/fetch, timeout `UPSTREAM_TIMEOUT_MS`, max body 1 MiB both ways, strip hop-by-hop headers, forward query string + JSON body, pass through status/content-type).
 5. Respond to buyer, then **async** `chain.recordAttestation({serviceId, paymentDeployHash, success: upstreamOk})` signed by gate signer; never blocks the response; on failure log + retry once after 5s.

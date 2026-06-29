@@ -500,7 +500,7 @@ export default function Page() {
           [
             <M key="nm">NETWORK_MISMATCH</M>,
             '502',
-            'The invoice network field does not equal chain.network — refusing to pay across chains.',
+            'No accepts[] entry in the PaymentRequiredResponse matches the chain client network — refusing to pay on the wrong chain.',
           ],
           [
             <M key="pe">PRICE_EXCEEDED</M>,

@@ -200,7 +200,7 @@ export default function SecurityPage() {
         service&apos;s <M>paymentTarget</M>, carry at least <M>priceMotes</M>{' '}
         (<M>minAmountMotes</M> — an underpayment fails), carry the matching{' '}
         <M>transfer_id</M> (the nonce), and be no older than the invoice TTL (<M>maxAgeMs</M>). A still-settling
-        transfer returns <M>pending</M>, which keeps the <em>same</em> invoice alive and tells the buyer
+        transfer returns <M>settlement_pending</M>, which keeps the <em>same</em> invoice alive and tells the buyer
         to retry the identical proof after <M>Retry-After: 2</M> (seconds) — it does not burn the
         nonce or issue a new one.
       </P>
