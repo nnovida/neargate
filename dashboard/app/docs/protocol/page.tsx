@@ -17,7 +17,7 @@ import {
 export const metadata: Metadata = {
   title: 'How it works',
   description:
-    'A concepts walkthrough of the AgentGate-402 protocol: discovery, the 402 Invoice402 challenge, a native CSPR transfer carrying the nonce as transfer_id, on-chain verification, single-use nonce burning, the upstream proxy, and the attestation that feeds a trust score.',
+    'A concepts walkthrough of the x402 V1 payment protocol: discovery, the 402 PaymentRequiredResponse challenge (accepts[] / PaymentRequirements), a native CSPR transfer carrying the nonce as transfer_id, the X-PAYMENT proof header, on-chain verification, single-use nonce burning, the upstream proxy, and the attestation that feeds a trust score.',
 };
 
 export default function Page() {
@@ -26,7 +26,7 @@ export default function Page() {
       <DocHeader
         kicker="CONCEPTS"
         title="How it works"
-        lede="AgentGate is an HTTP-402 payment gateway for AI agents. A buyer agent discovers a service, receives a machine-readable 402 invoice, pays with a native CSPR transfer whose transfer_id is the invoice nonce, then retries with proof headers. The gateway verifies the transfer on-chain, burns the nonce, proxies to the upstream API, and records an attestation that updates the service's trust score."
+        lede="AgentGate is an HTTP-402 payment gateway for AI agents following the x402 V1 wire format. A buyer agent discovers a service, receives a machine-readable 402 PaymentRequiredResponse (accepts[] with PaymentRequirements), pays with a native CSPR transfer whose transfer_id is the invoice nonce, then retries with the X-PAYMENT proof header. The gateway verifies the transfer on-chain, burns the nonce, proxies to the upstream API, and records an attestation that updates the service's trust score."
       />
 
       <H2 id="flow">The flow at a glance</H2>
@@ -63,25 +63,28 @@ export default function Page() {
             ),
           },
           {
-            title: 'Receive a 402 Invoice402',
+            title: 'Receive the 402 challenge (PaymentRequiredResponse)',
             body: (
               <>
-                With no proof present, the gateway mints a fresh invoice — a random nonce plus an{' '}
-                <M>expiresAt</M> deadline (<M>now + invoiceTtlMs</M>) — persists it, and replies{' '}
-                <M>402</M> with the <M>Invoice402</M> body and the{' '}
-                <M>X-AgentGate-Price</M> / <M>X-AgentGate-Nonce</M> headers.
+                With no <M>X-PAYMENT</M> header, the gateway mints a fresh invoice — a random nonce
+                plus an <M>expiresAtMs</M> deadline — persists it, and replies <M>402</M> with a{' '}
+                <M>PaymentRequiredResponse</M> JSON body: <M>x402Version:1</M>,{' '}
+                <M>error:"X-PAYMENT header is required"</M>, and an <M>accepts[]</M> array containing
+                one <M>PaymentRequirements</M> entry.
               </>
             ),
-            code: 'HTTP/1.1 402 Payment Required\nX-AgentGate-Price: 500000000\nX-AgentGate-Nonce: 4521903117755646001',
+            code: 'HTTP/1.1 402 Payment Required\nContent-Type: application/json\n\n{"x402Version":1,"error":"X-PAYMENT header is required","accepts":[{"scheme":"exact","network":"casper-test",...}]}',
           },
           {
             title: 'Pay with a native CSPR transfer',
             body: (
               <>
-                The client validates the invoice (<M>parseInvoice402</M>), refuses prices above its
-                cap, then sends a native CSPR transfer of <M>priceMotes</M> to{' '}
-                <M>paymentTarget</M> with <M>transfer_id = nonce</M>. The transfer&apos;s deploy
-                hash becomes the payment proof.
+                The client validates the response (<M>parsePaymentRequired</M> — selects the{' '}
+                <M>accepts[]</M> entry matching the chain network and <M>scheme:"exact"</M>),
+                refuses prices above its cap (<M>PRICE_EXCEEDED</M>), then sends a native CSPR
+                transfer of <M>maxAmountRequired</M> motes to <M>payTo</M> with{' '}
+                <M>transfer_id = extra.nonce</M>. The transfer&apos;s deploy hash becomes the
+                payment proof.
               </>
             ),
           },
@@ -89,9 +92,11 @@ export default function Page() {
             title: 'Retry with proof',
             body: (
               <>
-                After a settle delay the client retries the same request, now carrying{' '}
-                <M>X-Payment-Deploy-Hash</M> (the transfer&apos;s deploy hash) and{' '}
-                <M>X-Payment-Nonce</M> (the invoice nonce).
+                After a settle delay the client retries the same request with the{' '}
+                <M>X-PAYMENT</M> header — a base64-encoded{' '}
+                <M>PaymentPayload</M>: <M>x402Version:1</M>, <M>scheme:"exact"</M>,{' '}
+                <M>network:"casper-test"</M>, and <M>payload.transaction</M> (the deploy hash),{' '}
+                <M>payload.transferId</M> (the nonce), <M>payload.from</M> (payer account).
               </>
             ),
           },
@@ -99,10 +104,12 @@ export default function Page() {
             title: 'Verify on-chain',
             body: (
               <>
-                The gateway revalidates the invoice, then calls <M>chain.verifyTransfer</M> to
-                check the transfer&apos;s target, amount, transfer id, and age against the invoice
-                (see <DocLink href="/docs/protocol">Verification rules</DocLink>). A
-                still-settling transfer returns <M>402 pending</M> with <M>retry_after_ms</M>.
+                The gateway decodes the <M>X-PAYMENT</M> header, validates invoice state (nonce
+                must exist, be unused, and be within <M>expiresAtMs</M>), then calls{' '}
+                <M>chain.verifyTransfer</M> to check the transfer&apos;s target, amount, transfer
+                id, and age (see <DocLink href="/docs/protocol">Verification rules</DocLink>). A
+                still-settling transfer returns <M>402</M> with <M>error:"settlement_pending"</M>{' '}
+                and a <M>Retry-After: 2</M> response header.
               </>
             ),
           },
@@ -121,8 +128,11 @@ export default function Page() {
             body: (
               <>
                 The gateway forwards the request to the mapped upstream URL (a strict header
-                whitelist; payment headers are stripped), passing the upstream status and
-                content-type back to the agent. The upstream URL never appears in any response.
+                whitelist; the <M>X-PAYMENT</M> proof header is stripped), passing the upstream
+                status and content-type back to the agent. The <M>200</M> response carries{' '}
+                <M>X-PAYMENT-RESPONSE</M> (base64 <M>SettlementResponse</M> with{' '}
+                <M>success:true</M>, <M>transaction</M>, <M>network</M>, <M>payer</M>). The
+                upstream URL never appears in any response.
               </>
             ),
           },
@@ -151,164 +161,218 @@ export default function Page() {
         ]}
       />
 
-      <H2 id="invoice">The Invoice402 body</H2>
+      <H2 id="invoice">The 402 challenge body (PaymentRequiredResponse)</H2>
       <P>
-        The body of every <M>402</M> response is an <M>Invoice402</M> — the agent&apos;s single
-        source of truth for how to pay. It is defined in <M>packages/shared/src/types.ts</M> and
-        built by the gateway in <M>buildInvoiceBody</M>. The protocol version string is fixed:{' '}
-        <M>agentgate-402/1</M>.
+        The body of every <M>402</M> response is a <M>PaymentRequiredResponse</M> — the x402 V1
+        envelope that tells the agent exactly how to pay. It is defined in{' '}
+        <M>packages/shared/src/types.ts</M> and built by the gateway in{' '}
+        <M>buildRequirements()</M>/<M>respond402</M>. The protocol version number is fixed:{' '}
+        <M>x402Version: 1</M>.
       </P>
       <CodeBlock
-        label="402 response body (Invoice402)"
+        label="402 response body (PaymentRequiredResponse)"
         code={[
           '{',
-          '  "version": "agentgate-402/1",',
-          '  "network": "casper-test",',
-          '  "serviceId": 7,',
-          '  "serviceName": "Weather Oracle",',
-          '  "priceMotes": "500000000",',
-          '  "paymentTarget": "account-hash-3b0c...e91f",',
-          '  "nonce": "4521903117755646001",',
-          '  "expiresAt": 1750000000000,',
-          '  "instructions": "Pay 0.5 CSPR as a native CSPR transfer to account-hash-3b0c...e91f with transfer_id=4521903117755646001 before 2026-06-25T12:00:00.000Z, then retry this request with headers \'X-Payment-Deploy-Hash: <your deploy hash>\' and \'X-Payment-Nonce: 4521903117755646001\'."',
+          '  "x402Version": 1,',
+          '  "error": "X-PAYMENT header is required",',
+          '  "accepts": [',
+          '    {',
+          '      "scheme": "exact",',
+          '      "network": "casper-test",',
+          '      "maxAmountRequired": "500000000",',
+          '      "asset": "CSPR",',
+          '      "payTo": "account-hash-3b0c...e91f",',
+          '      "resource": "http://gateway:4021/svc/7",',
+          '      "description": "Weather Oracle",',
+          '      "maxTimeoutSeconds": 300,',
+          '      "extra": {',
+          '        "nonce": "4521903117755646001",',
+          '        "serviceId": 7,',
+          '        "expiresAtMs": 1750000300000,',
+          '        "settlement": "casper-native-transfer",',
+          '        "transferIdEncoding": "u64-decimal"',
+          '      }',
+          '    }',
+          '  ]',
           '}',
         ].join('\n')}
       />
+      <P>
+        <strong className="text-white">Settlement model:</strong>{' '}
+        <M>scheme:"exact"</M> with <M>extra.settlement:"casper-native-transfer"</M> is a
+        settled-transfer-proof variant — the buyer broadcasts the native CSPR transfer themselves
+        (using <M>extra.nonce</M> as the <M>transfer_id</M>) and the gateway verifies it. There is
+        no x402 facilitator on Casper testnet.
+      </P>
       <PropList
         items={[
           {
-            name: 'version',
-            type: "'agentgate-402/1'",
+            name: 'x402Version',
+            type: 'number (1)',
             required: true,
-            desc: <>Fixed protocol version string. The client requires an exact match.</>,
+            desc: <>Fixed x402 protocol version. The client requires an exact match.</>,
           },
           {
-            name: 'network',
+            name: 'error',
             type: 'string',
             required: true,
             desc: (
               <>
-                Chain name — <M>mock</M> or <M>casper-test</M>. The client refuses to pay if this
-                differs from its own chain&apos;s network.
+                Human-readable reason. Fresh challenge: <M>"X-PAYMENT header is required"</M>.
+                Rejected proof: one of the <M>PaywallErrorCode</M> strings (e.g.{' '}
+                <M>"amount_too_low"</M>). Pending: <M>"settlement_pending"</M>.
               </>
             ),
           },
           {
-            name: 'serviceId',
-            type: 'number',
+            name: 'accepts',
+            type: 'PaymentRequirements[]',
             required: true,
-            desc: <>The on-chain service id (non-negative integer).</>,
+            desc: (
+              <>
+                One or more acceptable payment methods. Clients select the entry whose{' '}
+                <M>network</M> matches the chain they are on and <M>scheme === "exact"</M>.
+              </>
+            ),
           },
           {
-            name: 'serviceName',
+            name: 'accepts[].scheme',
+            type: '"exact"',
+            required: true,
+            desc: <>x402 payment scheme — always <M>"exact"</M> for AgentGate.</>,
+          },
+          {
+            name: 'accepts[].network',
             type: 'string',
             required: true,
-            desc: <>The service name from on-chain registration (non-empty).</>,
+            desc: (
+              <>
+                Chain name — <M>mock</M> or <M>casper-test</M>. The client throws{' '}
+                <M>NETWORK_MISMATCH</M> if no entry matches its own network.
+              </>
+            ),
           },
           {
-            name: 'priceMotes',
-            type: 'Motes (string)',
+            name: 'accepts[].maxAmountRequired',
+            type: 'string (motes)',
             required: true,
             desc: (
               <>
                 Price in motes of native CSPR as a decimal string. 1 CSPR = 1,000,000,000 motes.
-                U512-safe via bigint — never parse it as a JS number.
+                U512-safe via bigint — never parse it as a JS number. Replaces the old{' '}
+                <M>priceMotes</M>.
               </>
             ),
           },
           {
-            name: 'paymentTarget',
+            name: 'accepts[].payTo',
             type: 'string',
             required: true,
             desc: (
               <>
                 Recipient account in <M>account-hash-&lt;64 hex&gt;</M> format. The CSPR transfer
-                must go here.
+                must go here. Replaces the old <M>paymentTarget</M>.
               </>
             ),
           },
           {
-            name: 'nonce',
+            name: 'accepts[].resource',
+            type: 'string (URL)',
+            required: true,
+            desc: <>Absolute URL of the protected resource (<M>/svc/:id</M>).</>,
+          },
+          {
+            name: 'accepts[].description',
             type: 'string',
+            required: true,
+            desc: <>The service name from on-chain registration (non-empty).</>,
+          },
+          {
+            name: 'accepts[].maxTimeoutSeconds',
+            type: 'number',
+            required: true,
+            desc: <><M>INVOICE_TTL_MS / 1000</M> — deadline in seconds from issuance.</>,
+          },
+          {
+            name: 'accepts[].extra.nonce',
+            type: 'string (u64 decimal)',
             required: true,
             desc: (
               <>
                 Per-invoice u64 decimal string (1–20 digits, ≤ 18,446,744,073,709,551,615). Used
                 verbatim as the transfer&apos;s <M>transfer_id</M> and echoed back in{' '}
-                <M>X-Payment-Nonce</M>.
+                <M>payload.transferId</M> of the <M>X-PAYMENT</M> header.
               </>
             ),
           },
           {
-            name: 'expiresAt',
+            name: 'accepts[].extra.expiresAtMs',
             type: 'number',
             required: true,
             desc: (
               <>
-                Unix-ms deadline, strictly greater than &quot;now&quot; when issued. The client
-                refuses an already-expired invoice.
+                Unix-ms deadline, strictly greater than &quot;now&quot; when issued. Replaces the
+                old <M>expiresAt</M>.
               </>
             ),
           },
           {
-            name: 'instructions',
-            type: 'string',
+            name: 'accepts[].extra.settlement',
+            type: '"casper-native-transfer"',
             required: true,
             desc: (
               <>
-                Human-readable how-to-pay: the formatted CSPR price, target, deadline ISO string
-                and the exact retry headers.
+                Identifies the settled-transfer-proof variant: the buyer broadcasts the transfer;
+                the gateway verifies the deploy hash.
               </>
             ),
           },
         ]}
       />
-      <H3 id="invoice-rejection-fields">Rejection fields</H3>
+      <H3 id="invoice-rejection-fields">Rejection fields in the 402 body</H3>
       <P>
-        On the HTTP wire the body is an <M>Invoice402Body</M> — the invoice plus, when a previous
-        proof was rejected, an <M>error</M> reason code, and when the transfer is still settling,
-        a <M>retry_after_ms</M> of <M>2000</M>. These appear only on a rejected retry, never on
-        the first fresh challenge.
+        Every <M>402</M> response is a full <M>PaymentRequiredResponse</M>. The <M>error</M> field
+        always carries the reason. For a still-settling transfer the error is{' '}
+        <M>"settlement_pending"</M> and the response also carries a standard{' '}
+        <M>Retry-After: 2</M> response header (seconds) — the same invoice is kept alive. Every
+        other rejection re-issues a fresh <M>accepts[]</M> with a new nonce.
       </P>
 
       <H2 id="payment">Payment and proof headers</H2>
       <P>
         Payment is a <strong className="text-white">native CSPR transfer</strong>, not a token
-        transfer. The client calls <M>chain.transfer</M> with the invoice&apos;s{' '}
-        <M>paymentTarget</M>, <M>priceMotes</M>, and crucially{' '}
-        <M>transferId = nonce</M> — the invoice nonce is reused verbatim as the Casper{' '}
-        <M>transfer_id</M>, which is what binds the on-chain payment to this specific invoice.
-        The transfer returns a deploy hash, and after a settle delay the client retries the
-        request with two proof headers.
+        transfer. The client calls <M>chain.transfer</M> with <M>accepts[].payTo</M>,{' '}
+        <M>accepts[].maxAmountRequired</M>, and crucially{' '}
+        <M>transferId = accepts[].extra.nonce</M> — the invoice nonce is reused verbatim as the
+        Casper <M>transfer_id</M>, which binds the on-chain payment to this specific invoice.
+        The transfer returns a deploy hash. After a settle delay the client base64-encodes a{' '}
+        <M>PaymentPayload</M> and sends it as the <M>X-PAYMENT</M> request header.
       </P>
       <DocTable
         head={['Header', 'Direction', 'Carries']}
         rows={[
           [
-            <M key="h1">X-Payment-Deploy-Hash</M>,
+            <M key="h1">X-PAYMENT</M>,
             'request (retry)',
-            'Deploy hash of the buyer’s native CSPR transfer.',
+            <>
+              base64(JSON): <M>x402Version:1</M>, <M>scheme:"exact"</M>,{' '}
+              <M>network:"casper-test"</M>, <M>payload.transaction</M> (deploy hash),{' '}
+              <M>payload.transferId</M> (nonce), <M>payload.from</M> (payer account-hash).
+            </>,
           ],
           [
-            <M key="h2">X-Payment-Nonce</M>,
-            'request (retry)',
-            'The invoice nonce — u64 decimal string, must match the transfer_id used on-chain.',
-          ],
-          [
-            <M key="h3">X-AgentGate-Price</M>,
-            'response (402)',
-            'Price in motes — mirrors priceMotes.',
-          ],
-          [
-            <M key="h4">X-AgentGate-Nonce</M>,
-            'response (402)',
-            'The issued nonce for this invoice — mirrors nonce.',
+            <M key="h2">X-PAYMENT-RESPONSE</M>,
+            'response (paid 200)',
+            <>
+              base64(JSON): <M>success:true</M>, <M>transaction</M> (deploy hash),{' '}
+              <M>network</M>, <M>payer</M> (account-hash). New in x402 V1.
+            </>,
           ],
         ]}
       />
       <P>
-        Header names are case-insensitive on the wire. The two payment headers are consumed by
-        the gateway and are never forwarded to the upstream API.
+        Header names are case-insensitive on the wire. The <M>X-PAYMENT</M> proof header is
+        consumed by the gateway and is never forwarded to the upstream API.
       </P>
 
       <H2 id="verification">Verification rules</H2>
@@ -361,10 +425,11 @@ export default function Page() {
       />
       <P>
         A transfer that exists but has not finalized yet returns <M>pending</M> rather than a
-        failure: the gateway keeps the same invoice alive and answers <M>402</M> with{' '}
-        <M>retry_after_ms: 2000</M> so the buyer can re-present the identical proof shortly.
-        Every other verification failure re-sends a fresh invoice so a client can re-read the
-        price and re-pay against a new nonce.
+        failure: the gateway keeps the same <M>accepts[]</M> alive (same nonce) and answers{' '}
+        <M>402</M> with <M>error:"settlement_pending"</M> and a standard{' '}
+        <M>Retry-After: 2</M> response header (seconds) so the buyer can re-present the identical
+        proof shortly. Every other verification failure re-sends a fresh{' '}
+        <M>PaymentRequiredResponse</M> (new nonce) so a client can re-pay.
       </P>
 
       <H2 id="single-use">Single-use nonce and idempotency</H2>
@@ -393,8 +458,8 @@ export default function Page() {
           [
             'Transfer still settling',
             <span key="o3">
-              <M>402 pending</M> + <M>retry_after_ms: 2000</M> — same invoice stays alive; retry the
-              same proof.
+              <M>402</M> + <M>error:"settlement_pending"</M> + <M>Retry-After: 2</M> (header,
+              seconds) — same nonce stays alive; retry the same <M>X-PAYMENT</M> proof.
             </span>,
           ],
           [
@@ -404,9 +469,9 @@ export default function Page() {
         ]}
       />
       <Callout tone="info" title="Client-side pending retries">
-        The buyer client (<M>fetchPaid</M>) retries a <M>pending</M> response up to five times,
-        honoring <M>retry_after_ms</M> (capped at 30,000 ms per wait), then returns whatever the
-        gateway last sent.
+        The buyer client (<M>fetchPaid</M>) retries a <M>settlement_pending</M> response up to five
+        times, sleeping the <M>Retry-After</M> value in seconds (capped at 30,000 ms per wait), then
+        returns whatever the gateway last sent.
       </Callout>
 
       <H2 id="attestation">Attestation and trust score</H2>

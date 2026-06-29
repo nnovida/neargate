@@ -46,11 +46,14 @@ export default function Page() {
       <P>
         HTTP reserved the status code <M>402 Payment Required</M> for decades without a standard way
         to use it. AgentGate gives it a concrete meaning. When an agent calls a paid endpoint with no
-        proof, the gateway answers <M>402</M> with an <M>Invoice402</M> — a JSON body carrying the{' '}
-        <M>priceMotes</M>, the <M>paymentTarget</M> account, a single-use <M>nonce</M>, and an{' '}
-        <M>expiresAt</M> timestamp. The agent reads the invoice, sends a{' '}
-        <strong className="text-white">native CSPR transfer</strong> to the payment target with{' '}
-        <M>transfer_id = nonce</M>, then retries the request with the payment proof in HTTP headers.
+        proof, the gateway answers <M>402</M> with a <M>PaymentRequiredResponse</M> (x402 V1) — a
+        JSON body with <M>x402Version:1</M>, a human-readable <M>error</M>, and an{' '}
+        <M>accepts[]</M> array carrying <M>maxAmountRequired</M>, the <M>payTo</M> account, a
+        single-use <M>extra.nonce</M>, and an <M>extra.expiresAtMs</M> timestamp. The agent reads
+        the challenge, sends a{' '}
+        <strong className="text-white">native CSPR transfer</strong> to <M>payTo</M> with{' '}
+        <M>transfer_id = extra.nonce</M>, then retries the request with the{' '}
+        <M>X-PAYMENT</M> proof header (base64-encoded <M>PaymentPayload</M>).
         The gateway verifies that transfer on-chain (target, amount, transfer id, and age), burns the
         nonce so it can never be reused, proxies to the seller&apos;s upstream API, and returns the
         response — then records a success attestation that lifts the service&apos;s trust tier.
@@ -213,7 +216,7 @@ export default function Page() {
           {
             href: '/docs/protocol',
             title: 'How it works',
-            desc: 'The AgentGate-402 protocol end to end: Invoice402 fields, proof headers, the on-chain verification checks, single-use nonce burning, and the attestation that feeds the trust score.',
+            desc: 'The x402 V1 payment protocol end to end: PaymentRequiredResponse fields, X-PAYMENT / X-PAYMENT-RESPONSE headers, on-chain verification, single-use nonce burning, and the attestation that feeds the trust score.',
           },
           {
             href: '/docs/architecture',

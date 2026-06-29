@@ -28,9 +28,9 @@ sequenceDiagram
     Seller->>Gate: map service → upstream URL (admin API)
     Agent->>Chain: discover catalog + trust scores
     Agent->>Gate: GET /svc/:id
-    Gate-->>Agent: 402 Invoice402 (priceMotes, nonce, expiresAt)
+    Gate-->>Agent: 402 PaymentRequiredResponse (x402Version, error, accepts[])
     Agent->>Chain: CSPR transfer (transfer_id = nonce)
-    Agent->>Gate: GET /svc/:id + payment proof headers
+    Agent->>Gate: GET /svc/:id + X-PAYMENT: <base64 proof>
     Gate->>Chain: verify transfer (target, amount, transfer_id, age)
     Gate->>API: proxy (nonce burned first — single use)
     API-->>Gate: data

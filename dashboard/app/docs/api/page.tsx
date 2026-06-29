@@ -159,94 +159,90 @@ export default function Page() {
         rows={[
           [
             'Challenge',
-            <span key="r">No proof headers.</span>,
+            <span key="r">No <M>X-PAYMENT</M> header.</span>,
             <span key="d">
-              <M>402</M> with a fresh <M>Invoice402</M> (price, nonce, expiry, pay-to target).
+              <M>402</M> with a fresh <M>PaymentRequiredResponse</M> (<M>x402Version:1</M>,{' '}
+              <M>error:"X-PAYMENT header is required"</M>, <M>accepts[]</M> with price, nonce,
+              expiry, pay-to target).
             </span>,
           ],
           [
             'Redeem',
             <span key="r">
-              <M>X-Payment-Deploy-Hash</M> + <M>X-Payment-Nonce</M> after paying on-chain.
+              <M>X-PAYMENT: &lt;base64&gt;</M> (encoded <M>PaymentPayload</M>) after paying
+              on-chain.
             </span>,
             <span key="d">
-              <M>200</M> (upstream response proxied) — or <M>402</M> again with an <M>error</M>{' '}
-              code if the proof is rejected, or while the payment is still settling.
+              <M>200</M> (upstream response proxied, with <M>X-PAYMENT-RESPONSE</M> header) — or{' '}
+              <M>402</M> again with an <M>error</M> code if the proof is rejected, or while the
+              payment is still settling.
             </span>,
           ],
         ]}
       />
 
-      <H3 id="proof-headers">Payment proof headers</H3>
+      <H3 id="proof-headers">Payment proof header (x402)</H3>
       <P>
-        Send both headers on the redeem request. Names are case-insensitive on the wire; the values
-        are validated strictly.
+        Send the <M>X-PAYMENT</M> header on the redeem request. Its presence (non-empty) flips the
+        request from challenge to redeem. The value must be a valid base64-encoded{' '}
+        <M>PaymentPayload</M> JSON object; a malformed value is treated as a rejected proof.
       </P>
       <PropList
         items={[
           {
-            name: 'X-Payment-Deploy-Hash',
-            type: 'string',
+            name: 'X-PAYMENT',
+            type: 'base64 string',
             required: true,
             desc: (
               <>
-                The deploy hash of your native CSPR transfer. Its presence (non-empty after
-                trimming) flips the request from challenge to redeem. The gateway looks this transfer
-                up on-chain and verifies target, amount, and transfer id against the invoice.
-              </>
-            ),
-          },
-          {
-            name: 'X-Payment-Nonce',
-            type: 'decimal string (1–20 digits)',
-            required: true,
-            desc: (
-              <>
-                The invoice <M>nonce</M> you received in the 402 challenge. It must equal the
-                transfer&apos;s <M>transfer_id</M> on-chain. A value that fails the{' '}
-                <M>^\d{'{'}1,20{'}'}$</M> shape, or that does not match a live invoice for this
-                service, re-issues a fresh invoice with <M>error: "unknown_nonce"</M>.
+                base64(JSON <M>PaymentPayload</M>): <M>x402Version:1</M>,{' '}
+                <M>scheme:"exact"</M>, <M>network:"casper-test"</M> (or <M>"mock"</M>),{' '}
+                <M>payload.transaction</M> (deploy hash of the native CSPR transfer),{' '}
+                <M>payload.transferId</M> (the <M>extra.nonce</M> from the challenge),{' '}
+                <M>payload.from</M> (payer account-hash, optional). A missing or malformed value
+                re-issues a fresh challenge with <M>error:"invalid_payment_header"</M>.
               </>
             ),
           },
         ]}
       />
 
-      <H3 id="challenge-response">402 challenge response</H3>
+      <H3 id="challenge-response">402 challenge response (PaymentRequiredResponse)</H3>
       <P>
-        Issued when no proof is present. Two response headers mirror the invoice for clients that do
-        not parse the body, and the JSON body is an <M>Invoice402</M>. The invoice TTL defaults to
-        300,000 ms (<M>INVOICE_TTL_MS</M>).
+        Issued when no valid <M>X-PAYMENT</M> is present. The JSON body is a{' '}
+        <M>PaymentRequiredResponse</M> (x402 V1). The invoice TTL defaults to 300,000 ms (
+        <M>INVOICE_TTL_MS</M>); <M>maxTimeoutSeconds</M> is <M>INVOICE_TTL_MS / 1000</M>.
       </P>
       <CodeBlock
-        label="402 Payment Required — headers + body"
+        label="402 Payment Required — body"
         code={
           'HTTP/1.1 402 Payment Required\n' +
-          'X-AgentGate-Price: 500000000\n' +
-          'X-AgentGate-Nonce: 73920184556012\n' +
           'Content-Type: application/json\n' +
           '\n' +
           '{\n' +
-          '  "version": "agentgate-402/1",\n' +
-          '  "network": "mock",\n' +
-          '  "serviceId": 1,\n' +
-          '  "serviceName": "Gold Spot Feed",\n' +
-          '  "priceMotes": "500000000",\n' +
-          '  "paymentTarget": "account-hash-<64hex>",\n' +
-          '  "nonce": "73920184556012",\n' +
-          '  "expiresAt": 1718000300000,\n' +
-          '  "instructions": "Pay 0.5 CSPR as a native CSPR transfer to account-hash-<...> ' +
-          'with transfer_id=73920184556012 before <ISO time>, then retry this request with ' +
-          "headers 'X-Payment-Deploy-Hash: <your deploy hash>' and 'X-Payment-Nonce: 73920184556012'.\"\n" +
+          '  "x402Version": 1,\n' +
+          '  "error": "X-PAYMENT header is required",\n' +
+          '  "accepts": [\n' +
+          '    {\n' +
+          '      "scheme": "exact",\n' +
+          '      "network": "mock",\n' +
+          '      "maxAmountRequired": "500000000",\n' +
+          '      "asset": "CSPR",\n' +
+          '      "payTo": "account-hash-<64hex>",\n' +
+          '      "resource": "http://localhost:4021/svc/1",\n' +
+          '      "description": "Gold Spot Feed",\n' +
+          '      "maxTimeoutSeconds": 300,\n' +
+          '      "extra": {\n' +
+          '        "nonce": "73920184556012",\n' +
+          '        "serviceId": 1,\n' +
+          '        "expiresAtMs": 1718000300000,\n' +
+          '        "settlement": "casper-native-transfer",\n' +
+          '        "transferIdEncoding": "u64-decimal"\n' +
+          '      }\n' +
+          '    }\n' +
+          '  ]\n' +
           '}'
         }
-      />
-      <DocTable
-        head={['Response header', 'Value']}
-        rows={[
-          [<M key="h">X-AgentGate-Price</M>, 'priceMotes (decimal string of motes).'],
-          [<M key="h">X-AgentGate-Nonce</M>, 'The invoice nonce / transfer_id to use.'],
-        ]}
       />
 
       <H3 id="redeem-success">Successful redeem</H3>
@@ -254,15 +250,19 @@ export default function Page() {
         On a valid proof the gateway verifies the transfer on-chain, burns the nonce (single-use —
         the burn happens before proxying, and exactly one concurrent request wins the race), then
         proxies to the upstream. The upstream&apos;s status and <M>Content-Type</M> pass straight
-        through; the upstream URL never appears in any response. After replying, the gateway records
-        an on-chain attestation asynchronously (success := upstream answered 2xx).
+        through; the paid <M>200</M> carries an <M>X-PAYMENT-RESPONSE</M> header (base64-encoded{' '}
+        <M>SettlementResponse</M>: <M>success:true</M>, <M>transaction</M>, <M>network</M>,{' '}
+        <M>payer</M>). The upstream URL never appears in any response. After replying, the gateway
+        records an on-chain attestation asynchronously (success := upstream answered 2xx).
       </P>
       <CommandBlock
         wrap
         text={
+          '# Build the X-PAYMENT payload:\n' +
+          '# base64({"x402Version":1,"scheme":"exact","network":"mock",\n' +
+          '#   "payload":{"transaction":"<deploy-hash>","transferId":"73920184556012","from":"account-hash-<64hex>"}})\n' +
           'curl -sS -X GET http://localhost:4021/svc/1 \\\n' +
-          '  -H "X-Payment-Deploy-Hash: <deploy-hash>" \\\n' +
-          '  -H "X-Payment-Nonce: 73920184556012"'
+          '  -H "X-PAYMENT: <base64-payload>"'
         }
       />
       <Callout tone="info" title="header forwarding">
@@ -275,10 +275,11 @@ export default function Page() {
 
       <H3 id="redeem-rejected">Rejected / pending redeem — 402 error codes</H3>
       <P>
-        When a proof cannot be honored the gateway responds <M>402</M> again. For{' '}
-        <M>pending</M> it keeps the <em>same</em> invoice alive and adds <M>retry_after_ms: 2000</M>{' '}
-        so the buyer can retry the identical proof; every other reason re-issues a{' '}
-        <strong className="text-white">fresh</strong> invoice (new nonce) carrying the{' '}
+        When a proof cannot be honored the gateway responds <M>402</M> again with a fresh{' '}
+        <M>PaymentRequiredResponse</M>. For <M>settlement_pending</M> it keeps the{' '}
+        <em>same</em> nonce alive and adds a standard <M>Retry-After: 2</M> response header
+        (seconds) so the buyer can retry the identical proof; every other reason re-issues a{' '}
+        <strong className="text-white">fresh</strong> <M>accepts[]</M> (new nonce) carrying the{' '}
         <M>error</M> field. The full taxonomy is in{' '}
         <DocLink href="/docs/protocol#invoice-rejection-fields">Protocol → 402 error codes</DocLink>.
       </P>
@@ -293,9 +294,9 @@ export default function Page() {
           [<M key="e">invoice_used</M>, 'invoice store', 'This invoice was already redeemed.'],
           [<M key="e">invoice_expired</M>, 'invoice store', 'The invoice TTL elapsed before redeem.'],
           [
-            <M key="e">pending</M>,
+            <M key="e">settlement_pending</M>,
             'verifyTransfer',
-            'Transfer not yet finalized — retry the same proof after retry_after_ms (2000).',
+            <>Transfer not yet finalized — retry the same proof after <M>Retry-After</M> seconds (2).</>,
           ],
           [<M key="e">not_found</M>, 'verifyTransfer', 'No transfer exists for the deploy hash.'],
           [
@@ -321,32 +322,40 @@ export default function Page() {
         ]}
       />
       <CodeBlock
-        label="402 — rejected proof (fresh invoice)"
+        label="402 — rejected proof (fresh accepts[])"
         code={
           '{\n' +
-          '  "version": "agentgate-402/1",\n' +
-          '  "network": "mock",\n' +
-          '  "serviceId": 1,\n' +
-          '  "serviceName": "Gold Spot Feed",\n' +
-          '  "priceMotes": "500000000",\n' +
-          '  "paymentTarget": "account-hash-<64hex>",\n' +
-          '  "nonce": "44188205571903",\n' +
-          '  "expiresAt": 1718000600000,\n' +
-          '  "instructions": "Pay 0.5 CSPR ...",\n' +
-          '  "error": "amount_too_low"\n' +
+          '  "x402Version": 1,\n' +
+          '  "error": "amount_too_low",\n' +
+          '  "accepts": [\n' +
+          '    {\n' +
+          '      "scheme": "exact",\n' +
+          '      "network": "mock",\n' +
+          '      "maxAmountRequired": "500000000",\n' +
+          '      "payTo": "account-hash-<64hex>",\n' +
+          '      "extra": { "nonce": "44188205571903", "serviceId": 1, "expiresAtMs": 1718000600000, ... }\n' +
+          '    }\n' +
+          '  ]\n' +
           '}'
         }
       />
       <CodeBlock
-        label="402 — still settling (same invoice retained)"
+        label="402 — still settling (same nonce retained, Retry-After header)"
         code={
+          'HTTP/1.1 402 Payment Required\n' +
+          'Retry-After: 2\n' +
+          'Content-Type: application/json\n' +
+          '\n' +
           '{\n' +
-          '  "version": "agentgate-402/1",\n' +
-          '  "serviceId": 1,\n' +
-          '  "nonce": "73920184556012",\n' +
-          '  "error": "pending",\n' +
-          '  "retry_after_ms": 2000\n' +
-          '  // ...remaining invoice fields unchanged\n' +
+          '  "x402Version": 1,\n' +
+          '  "error": "settlement_pending",\n' +
+          '  "accepts": [\n' +
+          '    {\n' +
+          '      "scheme": "exact",\n' +
+          '      "extra": { "nonce": "73920184556012", ... }\n' +
+          '      // ...same entry as the original challenge\n' +
+          '    }\n' +
+          '  ]\n' +
           '}'
         }
       />

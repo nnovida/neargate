@@ -44,14 +44,15 @@ function MetaRow({
 
 function buildCurlSnippet(endpointUrl: string): string {
   return [
-    '# 1 — call without payment → HTTP 402 + invoice JSON',
+    '# 1 — call without payment → HTTP 402 + PaymentRequiredResponse JSON',
     `curl -i ${endpointUrl}`,
     '',
-    '# 2 — pay priceMotes to paymentTarget with transfer_id = invoice.nonce,',
-    '#     then retry with the payment proof headers',
+    '# 2 — pay accepts[0].maxAmountRequired motes to accepts[0].payTo',
+    '#     with transfer_id = accepts[0].extra.nonce, receive <deployHash>.',
+    '#     Encode proof: base64({"x402Version":1,"scheme":"exact","network":"casper-test",',
+    '#       "payload":{"transaction":"<deployHash>","transferId":"<nonce>","from":"<account>"}})',
     `curl -s ${endpointUrl} \\`,
-    '  -H "X-Payment-Deploy-Hash: <deployHash>" \\',
-    '  -H "X-Payment-Nonce: <nonce>"',
+    '  -H "X-PAYMENT: <base64-encoded-payload>"',
   ].join('\n');
 }
 

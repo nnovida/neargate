@@ -125,19 +125,44 @@ export interface ActivityEvent {
   detail: string;            // human-readable one-liner for the dashboard feed
 }
 
-export interface Invoice402 {
-  version: 'agentgate-402/1';
-  network: string;           // 'mock' | 'casper-test'
-  serviceId: number;
-  serviceName: string;
-  priceMotes: Motes;
-  paymentTarget: string;     // account-hash
-  nonce: string;             // u64 decimal string → use as transfer_id
-  expiresAt: number;         // unix ms
-  instructions: string;      // human-readable how-to-pay
+export interface PaymentRequirements {
+  scheme: string;             // 'exact'
+  network: string;            // 'mock' | 'casper-test'
+  maxAmountRequired: string;  // price in motes, decimal string
+  asset: string;              // 'CSPR'
+  payTo: string;              // account-hash-<64hex>
+  resource: string;           // absolute /svc/:id URL
+  description: string;        // service name
+  maxTimeoutSeconds: number;  // invoiceTtlMs / 1000
+  extra: {
+    nonce: string;            // u64 decimal — required transfer_id
+    serviceId: number;
+    expiresAtMs: number;      // unix ms
+    settlement: 'casper-native-transfer';
+    transferIdEncoding: 'u64-decimal';
+  };
 }
 
-export interface PaymentProof { deployHash: string; nonce: string; }
+export interface PaymentRequiredResponse {
+  x402Version: number;               // 1
+  error: string;                     // human-readable reason
+  accepts: PaymentRequirements[];    // >= 1 entry
+}
+
+export interface PaymentPayload {
+  x402Version: number;   // 1
+  scheme: string;        // 'exact'
+  network: string;       // chain network
+  payload: { transaction: string; transferId: string; from?: string };
+}
+
+export interface SettlementResponse {
+  success: boolean;
+  transaction: string;
+  network: string;
+  payer?: string;
+  errorReason?: string;
+}
 
 export interface RegisterServiceInput {
   name: string;
@@ -226,10 +251,11 @@ Mirrors the on-chain rules of the Odra contract (auth, duplicate attestation gua
 
 Flow for `ALL /svc/:id` (GET/POST pass-through):
 1. Look up service by id from `ChainClient` (60s cache). 404 if unknown, 403 `service_inactive` if `!active`.
-2. No `X-Payment-Deploy-Hash` header → **402** with `Invoice402` JSON body + headers `X-AgentGate-Price`, `X-AgentGate-Nonce`. Invoice persisted (nonce → {serviceId, expiresAt, used:false}).
-3. With proof headers (`X-Payment-Deploy-Hash`, `X-Payment-Nonce`):
-   - invoice exists, not expired, not used, matches serviceId — else **402** fresh invoice with `error` field (`invoice_expired`, `invoice_used`, `unknown_nonce`).
-   - `chain.verifyTransfer({deployHash, expectedTarget: service.paymentTarget, minAmountMotes: service.priceMotes, expectedTransferId: nonce, maxAgeMs: INVOICE_TTL_MS})` → on `{ok:false}` **402** with reason. `pending` → **402** with `retry_after_ms: 2000`.
+2. No `X-PAYMENT` header → **402** with `PaymentRequiredResponse` JSON body (`x402Version:1`, `error:"X-PAYMENT header is required"`, `accepts:[requirements(freshNonce)]`). Invoice persisted (nonce → {serviceId, expiresAtMs, used:false}).
+3. With `X-PAYMENT` header (base64-encoded `PaymentPayload`):
+   - Decode and validate `x402Version===1`, `scheme==="exact"`, `network===chain.network`; extract `payload.transaction` + `payload.transferId`. Malformed → **402** + fresh requirements + `error:"invalid_payment_header"`.
+   - Invoice lookup by `transferId`: must exist, match serviceId, be unused, be within `expiresAtMs` — else **402** fresh requirements + reason (`invoice_expired`, `invoice_used`, `unknown_nonce`).
+   - `chain.verifyTransfer({deployHash: transaction, expectedTarget: service.payTo, minAmountMotes: service.priceMotes, expectedTransferId: transferId, maxAgeMs: INVOICE_TTL_MS})` → on `{ok:false}` **402** + fresh requirements + reason. `pending` → **402** + same requirements (nonce kept) + `Retry-After: 2` (seconds) + `error:"settlement_pending"`.
    - Mark nonce used **before** proxying (single-use even if upstream fails).
 4. Proxy to upstream (undici/fetch, timeout `UPSTREAM_TIMEOUT_MS`, max body 1 MiB both ways, strip hop-by-hop headers, forward query string + JSON body, pass through status/content-type).
 5. Respond to buyer, then **async** `chain.recordAttestation({serviceId, paymentDeployHash, success: upstreamOk})` signed by gate signer; never blocks the response; on failure log + retry once after 5s.
@@ -245,13 +271,13 @@ Hardening: helmet, JSON body limit 256 KiB inbound, rate limit 60 req/min/IP on 
 ## 6. Client helper — `@agentgate/client`
 
 ```ts
-export interface PayAndFetchResult { status: number; body: unknown; paid: boolean; invoice?: Invoice402; deployHash?: string; priceMotes?: Motes; }
+export interface PayAndFetchResult { status: number; body: unknown; paid: boolean; requirements?: PaymentRequirements; settlement?: SettlementResponse; deployHash?: string; priceMotes?: Motes; }
 export interface AgentGateClientOpts { chain: ChainClient; signer: AnySigner; maxPriceMotes?: Motes; logger?: Logger; settleDelayMs?: number; }
 export function createAgentGateClient(opts): {
   fetchPaid(url: string, init?: RequestInit): Promise<PayAndFetchResult>;
 }
 ```
-`fetchPaid`: GET → if 402: parse+validate `Invoice402` (refuse if `priceMotes > maxPriceMotes`), `chain.transfer({to: invoice.paymentTarget, amountMotes: invoice.priceMotes, transferId: invoice.nonce}, signer)`, wait `settleDelayMs` (default 0 mock / 3000 live), retry with proof headers, return result incl. spent amount. Retries `retry_after_ms` 402-pending up to 5×. Non-402 first responses pass straight through.
+`fetchPaid`: GET → if 402: `parsePaymentRequired` selects the `accepts[]` entry matching `chain.network` + `scheme:"exact"` (throws `NETWORK_MISMATCH` if none), refuses if `maxAmountRequired > maxPriceMotes` (`PRICE_EXCEEDED`). `chain.transfer({to: req.payTo, amountMotes: req.maxAmountRequired, transferId: req.extra.nonce}, signer)`, wait `settleDelayMs` (default 0 mock / 3000 live), retry with `X-PAYMENT: encodeXPayment(...)`. On a paid 200 decodes `X-PAYMENT-RESPONSE` into `settlement`. Retries `Retry-After` (seconds) 402-pending (`error:"settlement_pending"`) up to 5×. Non-402 first responses pass straight through.
 
 ## 7. Oracle — `@agentgate/oracle`, express, port **4010**
 

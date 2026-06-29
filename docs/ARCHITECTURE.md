@@ -20,9 +20,9 @@ sequenceDiagram
     S->>G: POST /admin/services {serviceId, upstreamUrl}
     B->>R: listServices() — discover catalog + scores
     B->>G: GET /svc/:id (no proof)
-    G-->>B: 402 Invoice402 {priceMotes, paymentTarget, nonce, expiresAt}
-    B->>R: native CSPR transfer(to=paymentTarget, amount=price, transfer_id=nonce)
-    B->>G: GET /svc/:id + X-Payment-Deploy-Hash / X-Payment-Nonce
+    G-->>B: 402 PaymentRequiredResponse {x402Version, error, accepts[]}
+    B->>R: native CSPR transfer(to=payTo, amount=maxAmountRequired, transfer_id=nonce)
+    B->>G: GET /svc/:id + X-PAYMENT: <base64(PaymentPayload)>
     G->>R: verifyTransfer(deployHash, target, minAmount, transferId, maxAge)
     G->>U: proxy request (nonce burned first — single use)
     U-->>G: data
@@ -31,9 +31,11 @@ sequenceDiagram
     Note over R: score = (totalCalls, successCalls) → trust tier
 ```
 
-Payment is **Plan B**: a native CSPR transfer whose `transfer_id` carries the invoice
-nonce, giving HTTP 402 semantics without a token contract. The `ChainClient` seam keeps
-Plan A (x402 Facilitator) pluggable later.
+Payment uses the **x402 V1** wire format (`scheme:"exact"`, `extra.settlement:"casper-native-transfer"`):
+a native CSPR transfer whose `transfer_id` carries the invoice nonce. The buyer broadcasts the
+transfer themselves and presents the settled deploy hash as proof in the `X-PAYMENT` header
+(base64-encoded `PaymentPayload`); the gateway verifies it and responds with `X-PAYMENT-RESPONSE`
+on a paid 200. The `ChainClient` seam keeps the settlement backend swappable.
 
 ## Components
 

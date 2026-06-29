@@ -201,7 +201,7 @@ export default function SecurityPage() {
         (<M>minAmountMotes</M> — an underpayment fails), carry the matching{' '}
         <M>transfer_id</M> (the nonce), and be no older than the invoice TTL (<M>maxAgeMs</M>). A still-settling
         transfer returns <M>pending</M>, which keeps the <em>same</em> invoice alive and tells the buyer
-        to retry the identical proof after <M>retry_after_ms</M> (<M>2000</M> ms) — it does not burn the
+        to retry the identical proof after <M>Retry-After: 2</M> (seconds) — it does not burn the
         nonce or issue a new one.
       </P>
       <H3 id="payment-network">Network binding and buyer budget cap</H3>
@@ -212,10 +212,10 @@ export default function SecurityPage() {
         for. And the agent&apos;s budget cap is bound to the approved price: if{' '}
         <M>maxPriceMotes</M> is set and the invoice price exceeds it, <M>fetchPaid</M> throws{' '}
         <M>PRICE_EXCEEDED</M> (HTTP <M>402</M>) <em>before</em> signing any transfer. The whole invoice
-        is also strictly validated by <M>parseInvoice402</M> (exact version{' '}
-        <M>agentgate-402/1</M>, <M>paymentTarget</M> must match{' '}
-        <M>account-hash-&lt;64 hex&gt;</M>, nonce must be a u64 decimal{' '}
-        <M>&le; 2^64-1</M>, <M>expiresAt</M> must be in the future) — anything off throws{' '}
+        is also strictly validated by <M>parsePaymentRequired</M> (x402 V1:{' '}
+        <M>x402Version:1</M>, finds an <M>accepts[]</M> entry matching the chain network,{' '}
+        <M>payTo</M> must match <M>account-hash-&lt;64 hex&gt;</M>, nonce must be a u64 decimal{' '}
+        <M>&le; 2^64-1</M>, <M>extra.expiresAtMs</M> must be in the future) — anything off throws{' '}
         <M>BAD_INVOICE</M>.
       </P>
 
@@ -363,7 +363,7 @@ export default function SecurityPage() {
           ],
           [
             'Decisions are re-validated in code',
-            'The serviceId and budget the model "chooses" are re-validated programmatically before any payment: the price cap (maxPriceMotes → PRICE_EXCEEDED) and invoice schema (parseInvoice402) are enforced by code, not the model.',
+            'The serviceId and budget the model "chooses" are re-validated programmatically before any payment: the price cap (maxPriceMotes → PRICE_EXCEEDED) and PaymentRequiredResponse schema (parsePaymentRequired) are enforced by code, not the model.',
           ],
           [
             'Spending is bounded regardless',

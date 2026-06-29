@@ -258,20 +258,28 @@ export default function Page() {
 
       <H3 id="paywall-402">402 reasons (PaywallErrorCode)</H3>
       <P>
-        A <M>402</M> response is a JSON <M>Invoice402</M> body. When a previous proof was rejected
-        it also carries <M>{'"error"'}</M> (one of the codes below); when the payment is still
-        settling it carries <M>{'"error": "pending"'}</M> plus <M>retry_after_ms</M> (2000) and{' '}
-        keeps the same invoice alive so the identical proof can be retried.
+        A <M>402</M> response is a JSON <M>PaymentRequiredResponse</M> body with an <M>error</M>{' '}
+        field (one of the codes below). When the payment is still settling the error is{' '}
+        <M>{'"settlement_pending"'}</M> and a standard <M>Retry-After: 2</M> response header
+        (seconds) is set — the same <M>accepts[]</M> entry (same nonce) is kept alive so the
+        identical <M>X-PAYMENT</M> proof can be retried. Every other rejection re-issues a fresh{' '}
+        <M>accepts[]</M> with a new nonce.
       </P>
 
       <DocTable
         head={['Code', 'HTTP', 'Meaning', 'How to fix']}
         rows={[
           [
+            <M key="iph">invalid_payment_header</M>,
+            '402',
+            'The X-PAYMENT header was not valid base64, not JSON, or the decoded PaymentPayload had wrong x402Version, scheme, or network. A fresh accepts[] is issued.',
+            'Re-encode the PaymentPayload correctly (x402Version:1, scheme:"exact", network matching the challenge).',
+          ],
+          [
             <M key="ue">unknown_nonce</M>,
             '402',
-            'The X-Payment-Nonce header was malformed, unknown, or belonged to a different service. A fresh invoice is issued.',
-            'Use the nonce from the most recent 402 invoice for THIS service.',
+            'The transferId in X-PAYMENT payload was malformed, unknown, or belonged to a different service. A fresh accepts[] is issued.',
+            'Use the nonce from the most recent 402 PaymentRequiredResponse for THIS service.',
           ],
           [
             <M key="iu">invoice_used</M>,
@@ -289,24 +297,24 @@ export default function Page() {
             <M key="nf">not_found</M>,
             '402',
             'verifyTransfer found no transfer for the given deploy hash (no such deploy).',
-            'Send the correct X-Payment-Deploy-Hash of your actual transfer.',
+            'Provide the correct deploy hash in payload.transaction of the X-PAYMENT header.',
           ],
           [
             <M key="wt">wrong_target</M>,
             '402',
-            'The transfer did not pay the service’s paymentTarget.',
+            "The transfer did not pay the service's paymentTarget.",
             'Transfer to the paymentTarget quoted in the invoice.',
           ],
           [
             <M key="atl">amount_too_low</M>,
             '402',
-            'The transfer paid less than the invoice’s priceMotes.',
+            "The transfer paid less than the invoice's priceMotes.",
             'Pay at least the full priceMotes.',
           ],
           [
             <M key="wti">wrong_transfer_id</M>,
             '402',
-            'The native transfer’s transfer_id did not equal the invoice nonce.',
+            "The native transfer's transfer_id did not equal the invoice nonce.",
             'Set transfer_id = nonce on the CSPR transfer.',
           ],
           [
@@ -316,10 +324,10 @@ export default function Page() {
             'Pay fresh against a current invoice; do not reuse an old transfer.',
           ],
           [
-            <M key="pe">pending</M>,
+            <M key="pe">settlement_pending</M>,
             '402',
-            'The transfer exists but has not settled yet. Same invoice is kept; retry_after_ms is set.',
-            'Wait retry_after_ms and retry the identical proof (the SDK does this up to 5×).',
+            <>The transfer exists but has not settled yet. Same <M>accepts[]</M> nonce is kept; <M>Retry-After: 2</M> response header is set.</>,
+            <>Wait the <M>Retry-After</M> seconds and retry the identical <M>X-PAYMENT</M> proof (the SDK does this up to 5×).</>,
           ],
         ]}
       />
@@ -379,7 +387,7 @@ export default function Page() {
             <M key="un">unauthorized</M>,
             '401',
             'An /admin/* request had a missing or wrong Authorization: Bearer <admin token> (constant-time compared).',
-            'Send Authorization: Bearer $AGENTGATE_ADMIN_TOKEN matching the gateway’s token.',
+            "Send Authorization: Bearer $AGENTGATE_ADMIN_TOKEN matching the gateway's token.",
           ],
           [
             <M key="ib">invalid_body / invalid_service_id</M>,
@@ -429,26 +437,26 @@ export default function Page() {
           [
             <M key="fh">FORBIDDEN_HOST</M>,
             '400',
-            'SSRF guard: the URL’s host is (or resolves to) a private / loopback / link-local address while rejectPrivateHosts is on (default in live mode).',
+            "SSRF guard: the URL's host is (or resolves to) a private / loopback / link-local address while rejectPrivateHosts is on (default in live mode).",
             'Only fetch public hosts in live mode; the endpointUrl is seller-controlled on-chain data.',
           ],
           [
             <M key="nm">NETWORK_MISMATCH</M>,
             '502',
-            'The 402 invoice’s network differs from the chain client’s network — refusing to pay on the wrong chain.',
-            'Use a client configured for the same network the invoice was issued on.',
+            'No accepts[] entry in the PaymentRequiredResponse matches the chain client\'s network — refusing to pay on the wrong chain.',
+            'Use a client configured for the same network the 402 challenge was issued on.',
           ],
           [
             <M key="px">PRICE_EXCEEDED</M>,
             '402',
-            'The invoice priceMotes exceeds the caller’s maxPriceMotes cap. No payment is sent.',
+            "The invoice priceMotes exceeds the caller's maxPriceMotes cap. No payment is sent.",
             'Raise maxPriceMotes if the price is acceptable, or skip the service. (The buyer agent treats this as a budget refusal.)',
           ],
           [
             <M key="bi">BAD_INVOICE</M>,
             '502',
-            'The 402 body was not JSON or failed strict Invoice402 validation (version, network, serviceId, priceMotes, paymentTarget, nonce, expiresAt, instructions — including an already-expired invoice).',
-            'The gateway returned a malformed/expired invoice — investigate the server; do not pay.',
+            'The 402 body was not JSON or failed PaymentRequiredResponse validation: missing x402Version/error/accepts[], no accepts[] entry matching the client network, or an already-expired nonce (extra.expiresAtMs in the past).',
+            'The gateway returned a malformed/expired challenge — investigate the server; do not pay.',
           ],
           [
             <M key="ut">UPSTREAM_TIMEOUT</M>,
@@ -590,7 +598,7 @@ export default function Page() {
             <M key="ipk">INVALID_PUBLIC_KEY</M>,
             '400',
             '--attestor was not a Casper public key hex ("01"+64 hex or "02"+66 hex).',
-            'Supply a valid public key hex (or omit it to use the signer’s key).',
+            "Supply a valid public key hex (or omit it to use the signer's key).",
           ],
           [
             <M key="sm">SIGNER_MISSING</M>,

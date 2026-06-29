@@ -112,9 +112,11 @@ export default function ArchitecturePage() {
           [
             <M key="c">packages/shared</M>,
             <>
-              Zero-runtime-dependency primitives: types (<M>ChainClient</M>, <M>Invoice402</M>,
-              records), config loading/validation, bigint-safe money helpers, the logger, the trust
-              tiers, and the SSRF/net guard helpers.
+              Zero-runtime-dependency primitives: types (<M>ChainClient</M>,{' '}
+              <M>PaymentRequiredResponse</M>, <M>PaymentRequirements</M>,{' '}
+              <M>PaymentPayload</M>, <M>SettlementResponse</M>, records), config
+              loading/validation, bigint-safe money helpers, x402 encode/decode helpers, the
+              logger, the trust tiers, and the SSRF/net guard helpers.
             </>,
             <>
               imported by every other package; talks to nothing
@@ -262,10 +264,12 @@ export default function ArchitecturePage() {
             title: '402 challenge',
             body: (
               <>
-                The agent calls <M>/svc/:id</M> with no proof. The gateway resolves the service
-                (60s cache), confirms it is active and mapped, and answers <M>402</M> with a fresh{' '}
-                <M>Invoice402</M> — <M>priceMotes</M>, <M>paymentTarget</M>, a single-use{' '}
-                <M>nonce</M>, and <M>expiresAt</M> — persisting the invoice in the store.
+                The agent calls <M>/svc/:id</M> with no <M>X-PAYMENT</M> header. The gateway
+                resolves the service (60s cache), confirms it is active and mapped, and answers{' '}
+                <M>402</M> with a fresh <M>PaymentRequiredResponse</M> — <M>x402Version:1</M>,{' '}
+                <M>error:"X-PAYMENT header is required"</M>, and an <M>accepts[]</M> entry with{' '}
+                <M>maxAmountRequired</M>, <M>payTo</M>, a single-use <M>extra.nonce</M>, and{' '}
+                <M>extra.expiresAtMs</M> — persisting the invoice in the store.
               </>
             ),
           },
@@ -273,9 +277,9 @@ export default function ArchitecturePage() {
             title: 'Pay',
             body: (
               <>
-                The client SDK sends a native CSPR transfer to <M>paymentTarget</M> with{' '}
-                <M>transfer_id = nonce</M> (via <M>chain.transfer</M>) and retries{' '}
-                <M>/svc/:id</M> carrying <M>X-Payment-Deploy-Hash</M> and <M>X-Payment-Nonce</M>.
+                The client SDK sends a native CSPR transfer to <M>accepts[].payTo</M> with{' '}
+                <M>transfer_id = extra.nonce</M> (via <M>chain.transfer</M>) and retries{' '}
+                <M>/svc/:id</M> carrying <M>X-PAYMENT</M> (base64-encoded <M>PaymentPayload</M>).
               </>
             ),
           },
