@@ -35,12 +35,16 @@ import type {
 const MOTES_RE = /^(0|[1-9]\d*)$/;
 const U64_MAX = 18_446_744_073_709_551_615n;
 
-// ⚠️ verify against deployed contract — gas figures pending on-chain measurement
-// (record final numbers in contracts/agentgate-registry/README per SPEC §10).
-const GAS_NATIVE_TRANSFER_MOTES = 100_000_000; // 0.1 CSPR fixed native-transfer cost
-const GAS_REGISTER_SERVICE_MOTES = 5_000_000_000;
-const GAS_RECORD_ATTESTATION_MOTES = 2_500_000_000;
-const GAS_SET_ACTIVE_MOTES = 1_500_000_000;
+// Gas budgets, measured against live Casper 2.0 testnet (2026-06-29). The node REJECTS a
+// contract-call transaction whose payment is below a ~2.5 CSPR minimum with "Invalid
+// transaction" (-32016) at submit — set_active at 1.5 CSPR was rejected, while
+// record_attestation (2.5) and register_service (5) went through. Keep every contract-call
+// budget >= ~2.5 CSPR. (The native-transfer payment below is separate from the >= 2.5 CSPR
+// minimum that applies to the transfer AMOUNT itself.)
+const GAS_NATIVE_TRANSFER_MOTES = 100_000_000; // 0.1 CSPR — native-transfer payment
+const GAS_REGISTER_SERVICE_MOTES = 5_000_000_000; // 5 CSPR
+const GAS_RECORD_ATTESTATION_MOTES = 5_000_000_000; // 5 CSPR — rewrites the capped Vec (most expensive)
+const GAS_SET_ACTIVE_MOTES = 3_000_000_000; // 3 CSPR — above the ~2.5 CSPR contract-call minimum
 
 // Odra 2.x assigns each module field a 1-based storage index in declaration
 // order (odra-macros emits `idx as u8 + 1`). The registry declares, in order,
