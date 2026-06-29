@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AgentGateError, decodeXPaymentResponse, type PaymentRequiredResponse } from '@agentgate/shared';
+import { AgentGateError, decodeXPaymentResponse, encodeXPayment, type PaymentRequiredResponse } from '@agentgate/shared';
 import { createApp } from '../src/index';
 import {
   adminMap,
@@ -60,7 +60,7 @@ describe('paywall flow (mock mode)', () => {
     expect(req.maxAmountRequired).toBe('500000000');
     expect(req.payTo).toMatch(/^account-hash-[0-9a-f]{64}$/);
     expect(req.resource).toContain('/svc/1');
-    expect(req.maxTimeoutSeconds).toBe(gw.config.invoiceTtlMs / 1000);
+    expect(req.maxTimeoutSeconds).toBe(Math.floor(gw.config.invoiceTtlMs / 1000));
     expect(req.extra.nonce).toMatch(/^\d+$/);
     expect(BigInt(req.extra.nonce) < 2n ** 64n).toBe(true);
     expect(req.extra.expiresAtMs).toBeGreaterThanOrEqual(before + gw.config.invoiceTtlMs - 1000);
@@ -167,6 +167,25 @@ describe('paywall flow (mock mode)', () => {
     });
     expect(malformed.status).toBe(402);
     expect(((await malformed.json()) as PaymentRequiredResponse).error).toBe('invalid_payment_header');
+  });
+
+  it('network-mismatched X-PAYMENT → 402 invalid_payment_header', async () => {
+    // First obtain a valid nonce via a fresh challenge so only the network differs.
+    const challenge = await fetch(`${gw.baseUrl}/svc/1`);
+    const challengeBody = (await challenge.json()) as PaymentRequiredResponse;
+    const nonce = challengeBody.accepts[0]!.extra.nonce;
+    // Build a syntactically valid proof but with a different network.
+    const wrongNetworkProof = encodeXPayment({
+      x402Version: 1,
+      scheme: 'exact',
+      network: 'some-other-net',
+      payload: { transaction: 'a'.repeat(64), transferId: nonce },
+    });
+    const res = await fetch(`${gw.baseUrl}/svc/1`, {
+      headers: { 'x-payment': wrongNetworkProof },
+    });
+    expect(res.status).toBe(402);
+    expect(((await res.json()) as PaymentRequiredResponse).error).toBe('invalid_payment_header');
   });
 
   it("an invoice for one service can't be spent on another (unknown_nonce)", async () => {

@@ -36,7 +36,6 @@ import { resolvedHostIsPublic, validateUpstreamUrl } from './ssrf';
 import {
   HEADER_X_PAYMENT,
   HEADER_X_PAYMENT_RESPONSE,
-  type PaywallErrorCode,
 } from './types';
 
 export interface MiddlewareDeps {
@@ -391,7 +390,7 @@ export function createApp(deps: MiddlewareDeps): Express {
         return;
       }
       if (payment.network !== chain.network) {
-        await respond402Fresh(res, service, resource, 'wrong_target');
+        await respond402Fresh(res, service, resource, 'invalid_payment_header');
         return;
       }
       const deployHashHeader = payment.payload.transaction;
