@@ -18,7 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MockChainHttpClient } from '@agentgate/chain';
-import { createDemoAccounts, wrapService } from '@agentgate/cli';
+import { createDemoAccounts, wrapService } from '@neargate/cli';
 import { startServer as startDevnet } from '@agentgate/devnet';
 import { startServer as startMiddleware } from '@agentgate/middleware';
 import { startServer as startOracle } from '@agentgate/oracle';
