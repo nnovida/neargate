@@ -46,4 +46,28 @@ describe('x402 codec', () => {
     const decoded = decodeXPayment(encodeXPayment({ ...goodPayload, payload: { transaction: 'a'.repeat(64), transferId: '7' } }));
     expect(decoded.payload.from).toBeUndefined();
   });
+
+  it('rejects a transferId that exceeds u64 max', () => {
+    expect(() => decodeXPayment(encodeXPayment({
+      ...goodPayload,
+      payload: { transaction: 'a'.repeat(64), transferId: '99999999999999999999' },
+    }))).toThrow(/u64|transferId/);
+  });
+
+  it('decodeXPaymentResponse rejects non-base64 / non-JSON', () => {
+    expect(() => decodeXPaymentResponse('!!!not-valid-base64!!!')).toThrow(AgentGateError);
+    expect(() => decodeXPaymentResponse(Buffer.from('not json', 'utf8').toString('base64'))).toThrow(AgentGateError);
+  });
+
+  it('decodeXPaymentResponse rejects when success is not boolean', () => {
+    const bad = encodeXPaymentResponse({ success: 'yes' as unknown as boolean, transaction: 'a'.repeat(64), network: 'casper-test' });
+    expect(() => decodeXPaymentResponse(bad)).toThrow(AgentGateError);
+  });
+
+  it('decodeXPaymentResponse rejects when transaction or network are missing or empty', () => {
+    const noTx = Buffer.from(JSON.stringify({ success: true, network: 'casper-test' }), 'utf8').toString('base64');
+    expect(() => decodeXPaymentResponse(noTx)).toThrow(AgentGateError);
+    const emptyNet = Buffer.from(JSON.stringify({ success: true, transaction: 'a'.repeat(64), network: '' }), 'utf8').toString('base64');
+    expect(() => decodeXPaymentResponse(emptyNet)).toThrow(AgentGateError);
+  });
 });

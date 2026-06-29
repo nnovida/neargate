@@ -86,6 +86,7 @@ export function decodeXPayment(header: string): PaymentPayload {
   const transferId = payload['transferId'];
   if (typeof transaction !== 'string' || !DEPLOY_HASH_RE.test(transaction)) throw badPayment('payload.transaction must be a 64-hex deploy hash');
   if (typeof transferId !== 'string' || !NONCE_RE.test(transferId)) throw badPayment('payload.transferId must be a u64 decimal string');
+  if (BigInt(transferId) > 18446744073709551615n) throw badPayment('payload.transferId exceeds u64 max');
   const out: PaymentPayload = {
     x402Version: X402_VERSION,
     scheme: X402_SCHEME,
@@ -101,5 +102,22 @@ export function encodeXPaymentResponse(s: SettlementResponse): string {
 }
 
 export function decodeXPaymentResponse(header: string): SettlementResponse {
-  return JSON.parse(Buffer.from(header, 'base64').toString('utf8')) as SettlementResponse;
+  let json: unknown;
+  try {
+    json = JSON.parse(Buffer.from(header, 'base64').toString('utf8'));
+  } catch {
+    throw new AgentGateError('INVALID_PAYMENT', 'X-PAYMENT-RESPONSE is not base64-encoded JSON', 402);
+  }
+  if (!isRecord(json)) throw new AgentGateError('INVALID_PAYMENT', 'X-PAYMENT-RESPONSE is not a JSON object', 402);
+  if (typeof json['success'] !== 'boolean') throw new AgentGateError('INVALID_PAYMENT', 'X-PAYMENT-RESPONSE: success must be a boolean', 402);
+  if (typeof json['transaction'] !== 'string' || json['transaction'] === '') throw new AgentGateError('INVALID_PAYMENT', 'X-PAYMENT-RESPONSE: transaction must be a non-empty string', 402);
+  if (typeof json['network'] !== 'string' || json['network'] === '') throw new AgentGateError('INVALID_PAYMENT', 'X-PAYMENT-RESPONSE: network must be a non-empty string', 402);
+  const out: SettlementResponse = {
+    success: json['success'],
+    transaction: json['transaction'],
+    network: json['network'],
+  };
+  if (typeof json['payer'] === 'string') out.payer = json['payer'];
+  if (typeof json['errorReason'] === 'string') out.errorReason = json['errorReason'];
+  return out;
 }
