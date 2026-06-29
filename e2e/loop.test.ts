@@ -5,7 +5,7 @@
  * no fixed ports), then walks the entire PRD §2 economy:
  *
  *   faucet → wrap (on-chain register + gateway admin mapping)
- *   → unpaid GET = 402 with a valid Invoice402
+ *   → unpaid GET = 402 with a valid PaymentRequiredResponse
  *   → underpay rejected (amount_too_low)
  *   → exact pay = 200 with the oracle JSON
  *   → replayed proof = 402 invoice_used
@@ -19,21 +19,21 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MockChainHttpClient } from '@agentgate/chain';
 import { createDemoAccounts, wrapService } from '@agentgate/cli';
-import { HEADER_DEPLOY_HASH, HEADER_NONCE } from '@agentgate/client';
 import { startServer as startDevnet } from '@agentgate/devnet';
 import { startServer as startMiddleware } from '@agentgate/middleware';
 import { startServer as startOracle } from '@agentgate/oracle';
 import {
+  encodeXPayment,
   loadConfig,
+  X402_SCHEME,
+  X402_VERSION,
   type AnySigner,
-  type Invoice402,
+  type PaymentRequiredResponse,
   type AgentGateConfig,
 } from '@agentgate/shared';
 
 const PRICE_MOTES = '500000000'; // 0.5 CSPR
 const HASH_RE = /^[0-9a-f]{64}$/;
-
-type Invoice402Body = Invoice402 & { error?: string; retry_after_ms?: number };
 
 interface Running {
   port: number;
@@ -74,8 +74,8 @@ describe('full mock-mode loop (e2e)', () => {
   let paymentTarget: string;
 
   // Handed from test to test (the loop is inherently sequential).
-  let challenge: Invoice402Body; // from the unpaid GET
-  let freshAfterUnderpay: Invoice402Body; // fresh invoice issued with the underpay rejection
+  let challenge: PaymentRequiredResponse; // from the unpaid GET
+  let freshAfterUnderpay: PaymentRequiredResponse; // fresh invoice issued with the underpay rejection
   let paidDeployHash: string;
   let paidNonce: string;
 
@@ -141,26 +141,26 @@ describe('full mock-mode loop (e2e)', () => {
     expect(paymentTarget).toMatch(/^account-hash-[0-9a-f]{64}$/);
   });
 
-  it('unpaid GET → 402 with a valid Invoice402 body and challenge headers', async () => {
+  it('unpaid GET → 402 with a valid PaymentRequiredResponse body', async () => {
     const res = await fetch(publicUrl);
     expect(res.status).toBe(402);
 
-    const body = (await res.json()) as Invoice402Body;
-    expect(body.version).toBe('agentgate-402/1');
-    expect(body.network).toBe('mock');
-    expect(body.serviceId).toBe(serviceId);
-    expect(body.serviceName).toBe('RWA FX & Gold Oracle');
-    expect(body.priceMotes).toBe(PRICE_MOTES);
-    expect(body.paymentTarget).toBe(paymentTarget);
-    expect(body.nonce).toMatch(/^\d{1,20}$/);
-    expect(body.expiresAt).toBeGreaterThan(Date.now());
-    expect(typeof body.instructions).toBe('string');
-    expect(body.instructions.length).toBeGreaterThan(0);
-    expect(body.error).toBeUndefined();
+    const body = (await res.json()) as PaymentRequiredResponse;
+    expect(body.x402Version).toBe(X402_VERSION);
+    expect(body.error).toBe('X-PAYMENT header is required');
+    expect(Array.isArray(body.accepts)).toBe(true);
+    expect(body.accepts.length).toBeGreaterThanOrEqual(1);
 
-    // Challenge headers mirror the body (SPEC §5 step 2).
-    expect(res.headers.get('x-agentgate-price')).toBe(PRICE_MOTES);
-    expect(res.headers.get('x-agentgate-nonce')).toBe(body.nonce);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const req = body.accepts[0]!;
+    expect(req.network).toBe('mock');
+    expect(req.extra.serviceId).toBe(serviceId);
+    expect(req.description).toBe('RWA FX & Gold Oracle');
+    expect(req.maxAmountRequired).toBe(PRICE_MOTES);
+    expect(req.payTo).toBe(paymentTarget);
+    expect(req.extra.nonce).toMatch(/^\d{1,20}$/);
+    expect(req.extra.expiresAtMs).toBeGreaterThan(Date.now());
+    expect(req.scheme).toBe(X402_SCHEME);
 
     challenge = body;
   });
@@ -168,32 +168,44 @@ describe('full mock-mode loop (e2e)', () => {
   it('underpaid transfer → 402 amount_too_low with a fresh invoice', async () => {
     // 1 mote short of the price, but with the correct transfer_id.
     const { deployHash } = await chain.transfer(
-      { to: paymentTarget, amountMotes: '499999999', transferId: challenge.nonce },
+      { to: paymentTarget, amountMotes: '499999999', transferId: challenge.accepts[0]!.extra.nonce },
       buyer,
     );
 
+    const xPayment = encodeXPayment({
+      x402Version: X402_VERSION,
+      scheme: X402_SCHEME,
+      network: chain.network,
+      payload: { transaction: deployHash, transferId: challenge.accepts[0]!.extra.nonce },
+    });
     const res = await fetch(publicUrl, {
-      headers: { [HEADER_DEPLOY_HASH]: deployHash, [HEADER_NONCE]: challenge.nonce },
+      headers: { 'X-PAYMENT': xPayment },
     });
     expect(res.status).toBe(402);
 
-    const body = (await res.json()) as Invoice402Body;
+    const body = (await res.json()) as PaymentRequiredResponse;
     expect(body.error).toBe('amount_too_low');
     // Rejections come with a FRESH invoice so the buyer can recover.
-    expect(body.nonce).not.toBe(challenge.nonce);
-    expect(body.priceMotes).toBe(PRICE_MOTES);
+    expect(body.accepts[0]!.extra.nonce).not.toBe(challenge.accepts[0]!.extra.nonce);
+    expect(body.accepts[0]!.maxAmountRequired).toBe(PRICE_MOTES);
 
     freshAfterUnderpay = body;
   });
 
   it('exact payment → 200 with the oracle JSON proxied through the gateway', async () => {
     const { deployHash } = await chain.transfer(
-      { to: paymentTarget, amountMotes: PRICE_MOTES, transferId: freshAfterUnderpay.nonce },
+      { to: paymentTarget, amountMotes: PRICE_MOTES, transferId: freshAfterUnderpay.accepts[0]!.extra.nonce },
       buyer,
     );
 
+    const xPayment = encodeXPayment({
+      x402Version: X402_VERSION,
+      scheme: X402_SCHEME,
+      network: chain.network,
+      payload: { transaction: deployHash, transferId: freshAfterUnderpay.accepts[0]!.extra.nonce },
+    });
     const res = await fetch(publicUrl, {
-      headers: { [HEADER_DEPLOY_HASH]: deployHash, [HEADER_NONCE]: freshAfterUnderpay.nonce },
+      headers: { 'X-PAYMENT': xPayment },
     });
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('application/json');
@@ -208,15 +220,21 @@ describe('full mock-mode loop (e2e)', () => {
     expect(feed.attribution).toBe('static-fixture');
 
     paidDeployHash = deployHash;
-    paidNonce = freshAfterUnderpay.nonce;
+    paidNonce = freshAfterUnderpay.accepts[0]!.extra.nonce;
   });
 
   it('replaying the same proof → 402 invoice_used', async () => {
+    const xPayment = encodeXPayment({
+      x402Version: X402_VERSION,
+      scheme: X402_SCHEME,
+      network: chain.network,
+      payload: { transaction: paidDeployHash, transferId: paidNonce },
+    });
     const res = await fetch(publicUrl, {
-      headers: { [HEADER_DEPLOY_HASH]: paidDeployHash, [HEADER_NONCE]: paidNonce },
+      headers: { 'X-PAYMENT': xPayment },
     });
     expect(res.status).toBe(402);
-    const body = (await res.json()) as Invoice402Body;
+    const body = (await res.json()) as PaymentRequiredResponse;
     expect(body.error).toBe('invoice_used');
   });
 
@@ -283,20 +301,27 @@ describe('full mock-mode loop (e2e)', () => {
 
       const challengeRes = await fetch(`${shortGateway}/svc/${serviceId}`);
       expect(challengeRes.status).toBe(402);
-      const invoice = (await challengeRes.json()) as Invoice402Body;
+      const invoice = (await challengeRes.json()) as PaymentRequiredResponse;
 
       // Pay correctly… but present the proof only after the invoice has expired.
+      const invoiceNonce = invoice.accepts[0]!.extra.nonce;
       const { deployHash } = await chain.transfer(
-        { to: paymentTarget, amountMotes: PRICE_MOTES, transferId: invoice.nonce },
+        { to: paymentTarget, amountMotes: PRICE_MOTES, transferId: invoiceNonce },
         buyer,
       );
       await sleep(250); // > 100ms TTL (the store keeps expired invoices around long enough)
 
+      const xPayment = encodeXPayment({
+        x402Version: X402_VERSION,
+        scheme: X402_SCHEME,
+        network: chain.network,
+        payload: { transaction: deployHash, transferId: invoiceNonce },
+      });
       const res = await fetch(`${shortGateway}/svc/${serviceId}`, {
-        headers: { [HEADER_DEPLOY_HASH]: deployHash, [HEADER_NONCE]: invoice.nonce },
+        headers: { 'X-PAYMENT': xPayment },
       });
       expect(res.status).toBe(402);
-      const body = (await res.json()) as Invoice402Body;
+      const body = (await res.json()) as PaymentRequiredResponse;
       expect(body.error).toBe('invoice_expired');
     } finally {
       await shortTtl.close();

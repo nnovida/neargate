@@ -5,11 +5,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   AttestationRecord,
   ChainClient,
-  Invoice402,
+  PaymentRequiredResponse,
   ServiceRecord,
   ServiceScore,
 } from '@agentgate/shared';
-import { isAgentGateError, trustTier } from '@agentgate/shared';
+import { isAgentGateError, trustTier, X402_SCHEME, X402_VERSION } from '@agentgate/shared';
 import { MockLlm, runBuyerAgent } from '@agentgate/buyer-agent';
 import type { BuyerRunReport, CatalogEntry } from '@agentgate/buyer-agent';
 
@@ -68,17 +68,29 @@ function makeChain(opts: FakeChainOpts = {}): ChainClient {
   };
 }
 
-function invoiceFor(service: ServiceRecord): Invoice402 {
+function invoiceFor(service: ServiceRecord): PaymentRequiredResponse {
   return {
-    version: 'agentgate-402/1',
-    network: 'mock',
-    serviceId: service.id,
-    serviceName: service.name,
-    priceMotes: service.priceMotes,
-    paymentTarget: service.paymentTarget,
-    nonce: '424242',
-    expiresAt: Date.now() + 300_000,
-    instructions: 'pay it',
+    x402Version: X402_VERSION,
+    error: 'X-PAYMENT header is required',
+    accepts: [
+      {
+        scheme: X402_SCHEME,
+        network: 'mock',
+        maxAmountRequired: service.priceMotes,
+        asset: 'CSPR',
+        payTo: service.paymentTarget,
+        resource: service.endpointUrl,
+        description: service.name,
+        maxTimeoutSeconds: 300,
+        extra: {
+          nonce: '424242',
+          serviceId: service.id,
+          expiresAtMs: Date.now() + 300_000,
+          settlement: 'casper-native-transfer',
+          transferIdEncoding: 'u64-decimal',
+        },
+      },
+    ],
   };
 }
 
@@ -89,11 +101,11 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-/** Paywall fake: 402 invoice without proof headers, 200 data with them. */
+/** Paywall fake: 402 invoice without X-PAYMENT proof, 200 data with it. */
 function paywallFetch(service: ServiceRecord, data: unknown) {
   return vi.fn(async (_input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> => {
     const headers = new Headers(init?.headers);
-    if (headers.get('X-Payment-Deploy-Hash') === DEPLOY_HASH) return json(data, 200);
+    if (headers.get('X-PAYMENT') !== null) return json(data, 200);
     return json(invoiceFor(service), 402);
   }) as unknown as typeof fetch;
 }
@@ -300,8 +312,15 @@ describe('runBuyerAgent', () => {
     // On-chain price fits the budget, but the invoice demands more.
     const gold = makeService({ priceMotes: '400000000' });
     const chain = makeChain({ services: [gold] });
+    const base = invoiceFor(gold);
     const fetchImpl = vi.fn(async (): Promise<Response> =>
-      json({ ...invoiceFor(gold), priceMotes: '900000000' }, 402),
+      json(
+        {
+          ...base,
+          accepts: [{ ...base.accepts[0], maxAmountRequired: '900000000' }],
+        },
+        402,
+      ),
     ) as unknown as typeof fetch;
 
     const report = await runBuyerAgent({
