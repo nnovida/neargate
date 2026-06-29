@@ -13,13 +13,19 @@ import { rateLimit } from 'express-rate-limit';
 import {
   AgentGateError,
   createLogger,
-  formatCspr,
+  decodeXPayment,
+  encodeXPaymentResponse,
   randomNonce,
   trustTier,
+  X402_ASSET_CSPR,
+  X402_SCHEME,
+  X402_VERSION,
   type AgentGateConfig,
   type AnySigner,
   type ChainClient,
   type Logger,
+  type PaymentRequiredResponse,
+  type PaymentRequirements,
   type ServiceRecord,
 } from '@agentgate/shared';
 import { MemoryInvoiceStore, type InvoiceStore } from './invoice-store';
@@ -28,11 +34,8 @@ import { ServiceCache } from './service-cache';
 import { isUpstreamSuccess, proxyToUpstream } from './proxy';
 import { resolvedHostIsPublic, validateUpstreamUrl } from './ssrf';
 import {
-  HEADER_AGENTGATE_NONCE,
-  HEADER_AGENTGATE_PRICE,
-  HEADER_PAYMENT_DEPLOY_HASH,
-  HEADER_PAYMENT_NONCE,
-  type Invoice402Body,
+  HEADER_X_PAYMENT,
+  HEADER_X_PAYMENT_RESPONSE,
   type PaywallErrorCode,
 } from './types';
 
@@ -57,11 +60,9 @@ export interface AppInternals {
 }
 
 const DEFAULT_ATTESTATION_RETRY_DELAY_MS = 5_000;
-const PENDING_RETRY_AFTER_MS = 2_000;
 const JSON_BODY_LIMIT = '256kb';
 const SVC_RATE_LIMIT_PER_MINUTE = 60;
 const ADMIN_RATE_LIMIT_PER_MINUTE = 20;
-const NONCE_RE = /^\d{1,20}$/;
 const SERVICE_ID_RE = /^\d{1,15}$/;
 
 /**
@@ -180,56 +181,44 @@ export function createApp(deps: MiddlewareDeps): Express {
     return { kind: 'mock', publicKey: service.attestor };
   }
 
-  function buildInvoiceBody(
-    service: ServiceRecord,
-    nonce: string,
-    expiresAt: number,
-    error?: PaywallErrorCode,
-    retryAfterMs?: number,
-  ): Invoice402Body {
-    const body: Invoice402Body = {
-      version: 'agentgate-402/1',
+  function buildRequirements(
+    service: ServiceRecord, nonce: string, expiresAt: number, resource: string,
+  ): PaymentRequirements {
+    return {
+      scheme: X402_SCHEME,
       network: chain.network,
-      serviceId: service.id,
-      serviceName: service.name,
-      priceMotes: service.priceMotes,
-      paymentTarget: service.paymentTarget,
-      nonce,
-      expiresAt,
-      instructions:
-        `Pay ${formatCspr(service.priceMotes)} as a native CSPR transfer to ${service.paymentTarget} ` +
-        `with transfer_id=${nonce} before ${new Date(expiresAt).toISOString()}, then retry this request ` +
-        `with headers 'X-Payment-Deploy-Hash: <your deploy hash>' and 'X-Payment-Nonce: ${nonce}'.`,
+      maxAmountRequired: service.priceMotes,
+      asset: X402_ASSET_CSPR,
+      payTo: service.paymentTarget,
+      resource,
+      description: service.name,
+      maxTimeoutSeconds: Math.floor(config.invoiceTtlMs / 1000),
+      extra: {
+        nonce,
+        serviceId: service.id,
+        expiresAtMs: expiresAt,
+        settlement: 'casper-native-transfer',
+        transferIdEncoding: 'u64-decimal',
+      },
     };
-    if (error !== undefined) body.error = error;
-    if (retryAfterMs !== undefined) body.retry_after_ms = retryAfterMs;
-    return body;
+  }
+
+  function send402(
+    res: Response, error: string, requirements: PaymentRequirements, retryAfterSeconds?: number,
+  ): void {
+    if (retryAfterSeconds !== undefined) res.set('Retry-After', String(retryAfterSeconds));
+    const body: PaymentRequiredResponse = { x402Version: X402_VERSION, error, accepts: [requirements] };
+    res.status(402).json(body);
   }
 
   /** Issues + persists a fresh invoice, then responds 402. */
   async function respond402Fresh(
-    res: Response,
-    service: ServiceRecord,
-    error?: PaywallErrorCode,
+    res: Response, service: ServiceRecord, resource: string, error: string,
   ): Promise<void> {
     const nonce = randomNonce();
     const expiresAt = Date.now() + config.invoiceTtlMs;
-    await invoices.put({
-      nonce,
-      serviceId: service.id,
-      priceMotes: service.priceMotes,
-      expiresAt,
-      used: false,
-    });
-    send402(res, buildInvoiceBody(service, nonce, expiresAt, error));
-  }
-
-  function send402(res: Response, body: Invoice402Body): void {
-    res
-      .set(HEADER_AGENTGATE_PRICE, body.priceMotes)
-      .set(HEADER_AGENTGATE_NONCE, body.nonce)
-      .status(402)
-      .json(body);
+    await invoices.put({ nonce, serviceId: service.id, priceMotes: service.priceMotes, expiresAt, used: false });
+    send402(res, error, buildRequirements(service, nonce, expiresAt, resource));
   }
 
   /**
@@ -384,32 +373,35 @@ export function createApp(deps: MiddlewareDeps): Express {
         }
       }
 
-      // 2. No payment proof → 402 challenge with a fresh invoice.
-      const deployHashHeader = req.header(HEADER_PAYMENT_DEPLOY_HASH)?.trim() ?? '';
-      if (deployHashHeader === '') {
-        await respond402Fresh(res, service);
+      const resource = `${req.protocol}://${req.get('host') ?? 'localhost'}${req.originalUrl}`;
+
+      // 2. No payment proof → fresh 402 challenge.
+      const xPayment = req.header(HEADER_X_PAYMENT)?.trim() ?? '';
+      if (xPayment === '') {
+        await respond402Fresh(res, service, resource, 'X-PAYMENT header is required');
         return;
       }
 
+      // 2b. Decode the proof (malformed → re-challenge, never 5xx).
+      let payment;
+      try {
+        payment = decodeXPayment(xPayment);
+      } catch {
+        await respond402Fresh(res, service, resource, 'invalid_payment_header');
+        return;
+      }
+      if (payment.network !== chain.network) {
+        await respond402Fresh(res, service, resource, 'wrong_target');
+        return;
+      }
+      const deployHashHeader = payment.payload.transaction;
+      const nonceHeader = payment.payload.transferId;
+
       // 3. Validate the invoice behind the presented nonce.
-      const nonceHeader = req.header(HEADER_PAYMENT_NONCE)?.trim() ?? '';
-      if (!NONCE_RE.test(nonceHeader)) {
-        await respond402Fresh(res, service, 'unknown_nonce');
-        return;
-      }
       const invoice = await invoices.get(nonceHeader);
-      if (!invoice || invoice.serviceId !== id) {
-        await respond402Fresh(res, service, 'unknown_nonce');
-        return;
-      }
-      if (invoice.used) {
-        await respond402Fresh(res, service, 'invoice_used');
-        return;
-      }
-      if (Date.now() > invoice.expiresAt) {
-        await respond402Fresh(res, service, 'invoice_expired');
-        return;
-      }
+      if (!invoice || invoice.serviceId !== id) { await respond402Fresh(res, service, resource, 'unknown_nonce'); return; }
+      if (invoice.used) { await respond402Fresh(res, service, resource, 'invoice_used'); return; }
+      if (Date.now() > invoice.expiresAt) { await respond402Fresh(res, service, resource, 'invoice_expired'); return; }
 
       // 3b. Verify the on-chain transfer.
       const verdict = await chain.verifyTransfer({
@@ -422,14 +414,11 @@ export function createApp(deps: MiddlewareDeps): Express {
       if (!verdict.ok) {
         if (verdict.reason === 'pending') {
           // Still settling: keep the SAME invoice alive so the buyer can
-          // retry the identical proof after retry_after_ms.
-          send402(
-            res,
-            buildInvoiceBody(service, nonceHeader, invoice.expiresAt, 'pending', PENDING_RETRY_AFTER_MS),
-          );
+          // retry the identical proof after Retry-After seconds.
+          send402(res, 'settlement_pending', buildRequirements(service, nonceHeader, invoice.expiresAt, resource), 2);
           return;
         }
-        await respond402Fresh(res, service, verdict.reason);
+        await respond402Fresh(res, service, resource, verdict.reason);
         return;
       }
 
@@ -437,7 +426,7 @@ export function createApp(deps: MiddlewareDeps): Express {
       // fails, and exactly one concurrent request can win the race.
       const consumed = await invoices.markUsed(nonceHeader);
       if (!consumed) {
-        await respond402Fresh(res, service, 'invoice_used');
+        await respond402Fresh(res, service, resource, 'invoice_used');
         return;
       }
 
@@ -452,6 +441,16 @@ export function createApp(deps: MiddlewareDeps): Express {
       const success = isUpstreamSuccess(outcome);
 
       // 5. Respond to the buyer first, then attest asynchronously.
+      // Always set the settlement confirmation header (payment was processed).
+      res.set(
+        HEADER_X_PAYMENT_RESPONSE,
+        encodeXPaymentResponse({
+          success: true,
+          transaction: deployHashHeader,
+          network: chain.network,
+          payer: verdict.from,
+        }),
+      );
       if (outcome.kind === 'response') {
         res.status(outcome.status);
         if (outcome.contentType) res.set('Content-Type', outcome.contentType);

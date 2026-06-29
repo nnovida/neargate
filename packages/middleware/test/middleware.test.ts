@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AgentGateError } from '@agentgate/shared';
-import { createApp, type Invoice402Body } from '../src/index';
+import { AgentGateError, decodeXPaymentResponse, type PaymentRequiredResponse } from '@agentgate/shared';
+import { createApp } from '../src/index';
 import {
   adminMap,
   bootGateway,
@@ -45,25 +45,28 @@ describe('paywall flow (mock mode)', () => {
     expect(await res.json()).toEqual({ ok: true, network: 'mock' });
   });
 
-  it('unpaid request gets a 402 challenge with a valid Invoice402 body and headers', async () => {
+  it('unpaid request gets a 402 challenge with a valid x402 PaymentRequiredResponse', async () => {
     const before = Date.now();
     const res = await fetch(`${gw.baseUrl}/svc/1`);
     expect(res.status).toBe(402);
-    const body = (await res.json()) as Invoice402Body;
-    expect(body.version).toBe('agentgate-402/1');
-    expect(body.network).toBe('mock');
-    expect(body.serviceId).toBe(1);
-    expect(body.serviceName).toBe('Gold Spot Feed');
-    expect(body.priceMotes).toBe('500000000');
-    expect(body.paymentTarget).toMatch(/^account-hash-[0-9a-f]{64}$/);
-    expect(body.nonce).toMatch(/^\d+$/);
-    expect(BigInt(body.nonce) < 2n ** 64n).toBe(true);
-    expect(body.expiresAt).toBeGreaterThanOrEqual(before + gw.config.invoiceTtlMs - 1000);
-    expect(body.expiresAt).toBeLessThanOrEqual(Date.now() + gw.config.invoiceTtlMs);
-    expect(body.instructions).toContain(body.nonce);
-    expect(body.error).toBeUndefined();
-    expect(res.headers.get('x-agentgate-price')).toBe('500000000');
-    expect(res.headers.get('x-agentgate-nonce')).toBe(body.nonce);
+    const body = (await res.json()) as PaymentRequiredResponse;
+    expect(body.x402Version).toBe(1);
+    expect(body.error).toBe('X-PAYMENT header is required');
+    const req = body.accepts[0]!;
+    expect(req.scheme).toBe('exact');
+    expect(req.asset).toBe('CSPR');
+    expect(req.network).toBe(gw.fake.network);
+    expect(req.description).toBe('Gold Spot Feed');
+    expect(req.maxAmountRequired).toBe('500000000');
+    expect(req.payTo).toMatch(/^account-hash-[0-9a-f]{64}$/);
+    expect(req.resource).toContain('/svc/1');
+    expect(req.maxTimeoutSeconds).toBe(gw.config.invoiceTtlMs / 1000);
+    expect(req.extra.nonce).toMatch(/^\d+$/);
+    expect(BigInt(req.extra.nonce) < 2n ** 64n).toBe(true);
+    expect(req.extra.expiresAtMs).toBeGreaterThanOrEqual(before + gw.config.invoiceTtlMs - 1000);
+    expect(req.extra.settlement).toBe('casper-native-transfer');
+    // no X-AgentGate-* headers anymore
+    expect(res.headers.get('x-agentgate-price')).toBeNull();
   });
 
   it('POST is paywalled too', async () => {
@@ -73,7 +76,8 @@ describe('paywall flow (mock mode)', () => {
       body: JSON.stringify({ ping: true }),
     });
     expect(res.status).toBe(402);
-    expect(((await res.json()) as Invoice402Body).serviceId).toBe(3);
+    const body = (await res.json()) as PaymentRequiredResponse;
+    expect(body.accepts[0]!.extra.serviceId).toBe(3);
   });
 
   it('unknown service → 404, non-numeric id → 404, inactive → 403, unmapped → 503', async () => {
@@ -87,13 +91,19 @@ describe('paywall flow (mock mode)', () => {
     expect(await unmapped.json()).toEqual({ error: 'service_unavailable' });
   });
 
-  it('happy paid flow: pay → 200 with upstream JSON + query forwarding → attestation success=true', async () => {
+  it('happy paid flow: pay → 200 with upstream JSON + query forwarding + X-PAYMENT-RESPONSE → attestation success=true', async () => {
     const attestationsBefore = gw.fake.attestations.length;
     const proof = await payInvoice(gw, 1);
     const res = await fetch(`${gw.baseUrl}/svc/1?symbol=XAU&fmt=json`, {
       headers: proofHeaders(proof),
     });
     expect(res.status).toBe(200);
+    const resp = res.headers.get('x-payment-response');
+    expect(resp).not.toBeNull();
+    const settlement = decodeXPaymentResponse(resp!);
+    expect(settlement.success).toBe(true);
+    expect(settlement.transaction).toBe(proof.deployHash);
+    expect(settlement.network).toBe(gw.fake.network);
     expect(res.headers.get('content-type')).toContain('application/json');
     expect(await res.json()).toEqual({ hello: 'world', query: { symbol: 'XAU', fmt: 'json' } });
 
@@ -117,9 +127,9 @@ describe('paywall flow (mock mode)', () => {
     expect(await res.json()).toEqual({ echo: { question: 'price of gold?', n: 7 } });
   });
 
-  it('payment proof headers are never forwarded to the upstream', () => {
+  it('payment proof header is never forwarded to the upstream', () => {
     const forwarded = upstream.seen.filter(
-      (r) => 'x-payment-deploy-hash' in r.headers || 'x-payment-nonce' in r.headers,
+      (r) => 'x-payment' in r.headers,
     );
     expect(forwarded).toEqual([]);
   });
@@ -130,61 +140,71 @@ describe('paywall flow (mock mode)', () => {
     expect(first.status).toBe(200);
     const replay = await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
     expect(replay.status).toBe(402);
-    const body = (await replay.json()) as Invoice402Body;
+    const body = (await replay.json()) as PaymentRequiredResponse;
     expect(body.error).toBe('invoice_used');
-    expect(body.nonce).not.toBe(proof.nonce); // fresh invoice issued
-    expect(body.version).toBe('agentgate-402/1');
+    expect(body.accepts[0]!.extra.nonce).not.toBe(proof.nonce); // fresh invoice issued
+    expect(body.x402Version).toBe(1);
   });
 
-  it('unknown nonce → 402 unknown_nonce; missing nonce header behaves the same', async () => {
+  it('unknown nonce → 402 unknown_nonce; no x-payment header → fresh challenge; malformed x-payment → invalid_payment_header', async () => {
     const proof = await payInvoice(gw, 1);
+
+    // valid x-payment but transferId matches no invoice → unknown_nonce
     const wrongNonce = await fetch(`${gw.baseUrl}/svc/1`, {
-      headers: { 'x-payment-deploy-hash': proof.deployHash, 'x-payment-nonce': '12345' },
+      headers: proofHeaders({ deployHash: proof.deployHash, nonce: '12345', network: proof.network }),
     });
     expect(wrongNonce.status).toBe(402);
-    expect(((await wrongNonce.json()) as Invoice402Body).error).toBe('unknown_nonce');
+    expect(((await wrongNonce.json()) as PaymentRequiredResponse).error).toBe('unknown_nonce');
 
-    const noNonce = await fetch(`${gw.baseUrl}/svc/1`, {
-      headers: { 'x-payment-deploy-hash': proof.deployHash },
+    // no x-payment header → fresh challenge (not unknown_nonce)
+    const noHeader = await fetch(`${gw.baseUrl}/svc/1`);
+    expect(noHeader.status).toBe(402);
+    expect(((await noHeader.json()) as PaymentRequiredResponse).error).toBe('X-PAYMENT header is required');
+
+    // malformed x-payment → never 5xx, always re-challenges
+    const malformed = await fetch(`${gw.baseUrl}/svc/1`, {
+      headers: { 'x-payment': 'not-base64' },
     });
-    expect(noNonce.status).toBe(402);
-    expect(((await noNonce.json()) as Invoice402Body).error).toBe('unknown_nonce');
+    expect(malformed.status).toBe(402);
+    expect(((await malformed.json()) as PaymentRequiredResponse).error).toBe('invalid_payment_header');
   });
 
   it("an invoice for one service can't be spent on another (unknown_nonce)", async () => {
     const proof = await payInvoice(gw, 1);
     const res = await fetch(`${gw.baseUrl}/svc/3`, { headers: proofHeaders(proof) });
     expect(res.status).toBe(402);
-    expect(((await res.json()) as Invoice402Body).error).toBe('unknown_nonce');
+    expect(((await res.json()) as PaymentRequiredResponse).error).toBe('unknown_nonce');
   });
 
   it('underpayment → 402 with verifyTransfer reason amount_too_low', async () => {
     const proof = await payInvoice(gw, 1, { amountMotes: '499999999' });
     const res = await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
     expect(res.status).toBe(402);
-    const body = (await res.json()) as Invoice402Body;
+    const body = (await res.json()) as PaymentRequiredResponse;
     expect(body.error).toBe('amount_too_low');
-    expect(body.nonce).not.toBe(proof.nonce);
+    expect(body.accepts[0]!.extra.nonce).not.toBe(proof.nonce);
   });
 
   it('unknown deploy hash → 402 not_found', async () => {
     const challenge = await fetch(`${gw.baseUrl}/svc/1`);
-    const invoice = (await challenge.json()) as Invoice402Body;
+    const body = (await challenge.json()) as PaymentRequiredResponse;
+    const nonce = body.accepts[0]!.extra.nonce;
+    const network = body.accepts[0]!.network;
     const res = await fetch(`${gw.baseUrl}/svc/1`, {
-      headers: { 'x-payment-deploy-hash': 'f'.repeat(64), 'x-payment-nonce': invoice.nonce },
+      headers: proofHeaders({ deployHash: 'f'.repeat(64), nonce, network }),
     });
     expect(res.status).toBe(402);
-    expect(((await res.json()) as Invoice402Body).error).toBe('not_found');
+    expect(((await res.json()) as PaymentRequiredResponse).error).toBe('not_found');
   });
 
-  it('pending payment → 402 retry_after_ms 2000 with the SAME nonce, then succeeds', async () => {
+  it('pending payment → 402 Retry-After:2 with the SAME nonce, then succeeds', async () => {
     const proof = await payInvoice(gw, 1, { pendingReads: 1 });
-    const pendingRes = await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
-    expect(pendingRes.status).toBe(402);
-    const pendingBody = (await pendingRes.json()) as Invoice402Body;
-    expect(pendingBody.error).toBe('pending');
-    expect(pendingBody.retry_after_ms).toBe(2000);
-    expect(pendingBody.nonce).toBe(proof.nonce); // invoice stays alive
+    const pending = await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
+    expect(pending.status).toBe(402);
+    expect(pending.headers.get('retry-after')).toBe('2'); // seconds, standard header
+    const pendingBody = (await pending.json()) as PaymentRequiredResponse;
+    expect(pendingBody.error).toBe('settlement_pending');
+    expect(pendingBody.accepts[0]!.extra.nonce).toBe(proof.nonce); // invoice stays alive
 
     const retry = await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
     expect(retry.status).toBe(200);
@@ -250,9 +270,9 @@ describe('expired invoices', () => {
       await sleep(120);
       const res = await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
       expect(res.status).toBe(402);
-      const body = (await res.json()) as Invoice402Body;
+      const body = (await res.json()) as PaymentRequiredResponse;
       expect(body.error).toBe('invoice_expired');
-      expect(body.nonce).not.toBe(proof.nonce);
+      expect(body.accepts[0]!.extra.nonce).not.toBe(proof.nonce);
     } finally {
       await gw.close();
       await upstream.close();

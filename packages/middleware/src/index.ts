@@ -24,10 +24,5 @@ export {
   isUpstreamSuccess,
 } from './proxy';
 export type { ProxyOutcome, ProxyFailureCode, ProxyOptions } from './proxy';
-export {
-  HEADER_AGENTGATE_NONCE,
-  HEADER_AGENTGATE_PRICE,
-  HEADER_PAYMENT_DEPLOY_HASH,
-  HEADER_PAYMENT_NONCE,
-} from './types';
-export type { Invoice402Body, PaywallErrorCode } from './types';
+export { HEADER_X_PAYMENT, HEADER_X_PAYMENT_RESPONSE } from './types';
+export type { PaywallErrorCode } from './types';

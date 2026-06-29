@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
-import type { AgentGateConfig, Logger } from '@agentgate/shared';
+import { encodeXPayment, type AgentGateConfig, type Logger, type PaymentRequiredResponse } from '@agentgate/shared';
 import { startServer, type MiddlewareStartOpts, type RunningServer } from '../src/index';
 import { FakeChainClient } from './fake-chain';
 
@@ -176,29 +176,31 @@ export async function adminMap(
   });
 }
 
-/** GET the service and complete a full pay cycle, returning the proof headers. */
+/** GET the service and complete a full pay cycle, returning the x402 proof payload. */
 export async function payInvoice(
   gw: TestGateway,
   serviceId: number,
   opts: { amountMotes?: string; pendingReads?: number } = {},
-): Promise<{ deployHash: string; nonce: string }> {
+): Promise<{ deployHash: string; nonce: string; network: string }> {
   const challenge = await fetch(`${gw.baseUrl}/svc/${serviceId}`);
   if (challenge.status !== 402) throw new Error(`expected 402 challenge, got ${challenge.status}`);
-  const invoice = (await challenge.json()) as { nonce: string; priceMotes: string; paymentTarget: string };
+  const body = (await challenge.json()) as PaymentRequiredResponse;
+  const req = body.accepts[0]!;
   const { deployHash } = await gw.fake.transfer(
-    {
-      to: invoice.paymentTarget,
-      amountMotes: opts.amountMotes ?? invoice.priceMotes,
-      transferId: invoice.nonce,
-    },
+    { to: req.payTo, amountMotes: opts.amountMotes ?? req.maxAmountRequired, transferId: req.extra.nonce },
     { kind: 'mock', publicKey: '01buyer' },
   );
   if (opts.pendingReads !== undefined) gw.fake.setPending(deployHash, opts.pendingReads);
-  return { deployHash, nonce: invoice.nonce };
+  return { deployHash, nonce: req.extra.nonce, network: req.network };
 }
 
-export function proofHeaders(proof: { deployHash: string; nonce: string }): Record<string, string> {
-  return { 'x-payment-deploy-hash': proof.deployHash, 'x-payment-nonce': proof.nonce };
+export function proofHeaders(proof: { deployHash: string; nonce: string; network: string }): Record<string, string> {
+  return {
+    'x-payment': encodeXPayment({
+      x402Version: 1, scheme: 'exact', network: proof.network,
+      payload: { transaction: proof.deployHash, transferId: proof.nonce },
+    }),
+  };
 }
 
 export function sleep(ms: number): Promise<void> {
