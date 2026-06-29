@@ -23,7 +23,9 @@ function loadDotenv(path = '.env'): void {
   }
   for (const line of raw.split('\n')) {
     const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
-    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2];
+    if (!m) continue;
+    const key = m[1];
+    if (key !== undefined && process.env[key] === undefined) process.env[key] = m[2] ?? '';
   }
 }
 
