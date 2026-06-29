@@ -1,5 +1,10 @@
-import type { AnySigner, ChainClient, Invoice402, Logger, Motes } from '@agentgate/shared';
+import type { AnySigner, ChainClient, Logger, Motes } from '@agentgate/shared';
 import { AgentGateError, compareMotes, parseMotes } from '@agentgate/shared';
+import {
+  encodeXPayment, decodeXPaymentResponse,
+  X402_VERSION, X402_SCHEME,
+  type PaymentRequirements, type PaymentRequiredResponse, type SettlementResponse,
+} from '@agentgate/shared';
 import { resolvedHostIsPublic, validateHttpUrl } from '@agentgate/shared/net-guard';
 
 /** Result of a fetchPaid call (SPEC §6). */
@@ -7,7 +12,8 @@ export interface PayAndFetchResult {
   status: number;
   body: unknown;
   paid: boolean;
-  invoice?: Invoice402;
+  requirements?: PaymentRequirements;
+  settlement?: SettlementResponse;
   deployHash?: string;
   priceMotes?: Motes;
 }
@@ -34,24 +40,21 @@ export interface AgentGateClientOpts {
 
 export interface AgentGateClient {
   /**
-   * GET the URL; on 402 parse+validate the Invoice402 (refuse if priceMotes > maxPriceMotes),
-   * pay via chain.transfer with transferId = nonce, then retry with proof headers
-   * (X-Payment-Deploy-Hash + X-Payment-Nonce).
-   * Retries `retry_after_ms` 402-pending up to 5×. Non-402 first responses pass through.
+   * GET the URL; on 402 parse+validate the PaymentRequiredResponse (refuse if
+   * maxAmountRequired > maxPriceMotes), pay via chain.transfer with transferId =
+   * extra.nonce, then retry with the X-PAYMENT header (base64-encoded proof).
+   * Retries on 402 + Retry-After (seconds) up to 5×. Non-402 first responses
+   * pass through. Exposes `requirements` (parsed entry) and `settlement` (decoded
+   * X-PAYMENT-RESPONSE) on success.
    */
   fetchPaid(url: string, init?: RequestInit): Promise<PayAndFetchResult>;
 }
 
-/** Proof header names (must match middleware SPEC §5). */
-export const HEADER_DEPLOY_HASH = 'X-Payment-Deploy-Hash';
-export const HEADER_NONCE = 'X-Payment-Nonce';
-
-/** Maximum number of extra retries when the middleware answers 402 + retry_after_ms (pending). */
+/** Maximum number of extra retries when the middleware answers 402 + Retry-After (pending). */
 const MAX_PENDING_RETRIES = 5;
 /** Never sleep longer than this per pending retry, regardless of what the server asks for. */
 const MAX_RETRY_AFTER_MS = 30_000;
 
-const INVOICE_VERSION = 'agentgate-402/1';
 const ACCOUNT_HASH_RE = /^account-hash-[0-9a-fA-F]{64}$/;
 const NONCE_RE = /^\d{1,20}$/;
 const U64_MAX = 18_446_744_073_709_551_615n; // 2^64 - 1
@@ -65,101 +68,84 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /**
- * Strict runtime validation of an Invoice402 body. Every field is checked:
- * version (exact match), network, serviceId, serviceName, priceMotes (bigint-parseable),
- * paymentTarget (account-hash-<64hex>), nonce (u64 decimal), expiresAt (future unix ms),
- * instructions. Throws AgentGateError('BAD_INVOICE') on any violation.
+ * Strict runtime validation of a PaymentRequiredResponse body. Finds the first
+ * accepts[] entry matching scheme==="exact" and network===chainNetwork, then
+ * validates maxAmountRequired (motes), payTo (account-hash-<64hex>),
+ * extra.nonce (u64 decimal) and extra.expiresAtMs (future unix ms).
+ * Throws AgentGateError('BAD_INVOICE') on any violation.
  */
-export function parseInvoice402(raw: unknown, now: number = Date.now()): Invoice402 {
+export function parsePaymentRequired(
+  raw: unknown, chainNetwork: string, now: number = Date.now(),
+): PaymentRequirements {
   if (!isRecord(raw)) throw badInvoice('body is not a JSON object');
-
-  const version = raw['version'];
-  if (version !== INVOICE_VERSION) {
-    throw badInvoice(
-      `unsupported version ${JSON.stringify(version)} (expected "${INVOICE_VERSION}")`,
-    );
-  }
-
-  const network = raw['network'];
-  if (typeof network !== 'string' || network.trim() === '') {
-    throw badInvoice('network must be a non-empty string');
-  }
-
-  const serviceId = raw['serviceId'];
-  if (typeof serviceId !== 'number' || !Number.isSafeInteger(serviceId) || serviceId < 0) {
-    throw badInvoice('serviceId must be a non-negative integer');
-  }
-
-  const serviceName = raw['serviceName'];
-  if (typeof serviceName !== 'string' || serviceName.trim() === '') {
-    throw badInvoice('serviceName must be a non-empty string');
-  }
-
-  const priceMotes = raw['priceMotes'];
-  if (typeof priceMotes !== 'string') throw badInvoice('priceMotes must be a string');
+  if (raw['x402Version'] !== X402_VERSION) throw badInvoice(`unsupported x402Version (expected ${X402_VERSION})`);
+  const accepts = raw['accepts'];
+  if (!Array.isArray(accepts) || accepts.length === 0) throw badInvoice('accepts must be a non-empty array');
+  const req = accepts.find(
+    (a): a is PaymentRequirements => isRecord(a) && a['scheme'] === X402_SCHEME && a['network'] === chainNetwork,
+  );
+  if (!req) throw badInvoice(`no accepts entry for scheme "${X402_SCHEME}" on network "${chainNetwork}"`);
+  if (typeof req.maxAmountRequired !== 'string') throw badInvoice('maxAmountRequired must be a string');
   try {
-    parseMotes(priceMotes);
+    parseMotes(req.maxAmountRequired);
   } catch {
-    throw badInvoice(`priceMotes ${JSON.stringify(priceMotes)} is not a motes decimal string`);
+    throw badInvoice(`maxAmountRequired ${JSON.stringify(req.maxAmountRequired)} is not a motes decimal string`);
   }
-
-  const paymentTarget = raw['paymentTarget'];
-  if (typeof paymentTarget !== 'string' || !ACCOUNT_HASH_RE.test(paymentTarget)) {
-    throw badInvoice('paymentTarget must be "account-hash-<64 hex>"');
+  if (typeof req.payTo !== 'string' || !ACCOUNT_HASH_RE.test(req.payTo)) {
+    throw badInvoice('payTo must be "account-hash-<64 hex>"');
   }
-
-  const nonce = raw['nonce'];
+  const nonce = req.extra?.nonce;
   if (typeof nonce !== 'string' || !NONCE_RE.test(nonce) || BigInt(nonce) > U64_MAX) {
-    throw badInvoice('nonce must be a u64 decimal string');
+    throw badInvoice('extra.nonce must be a u64 decimal string');
   }
-
-  const expiresAt = raw['expiresAt'];
-  if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt) || expiresAt <= 0) {
-    throw badInvoice('expiresAt must be a positive unix-ms timestamp');
+  if (typeof req.extra?.expiresAtMs !== 'number' || req.extra.expiresAtMs <= now) {
+    throw badInvoice('invoice is expired — refusing to pay');
   }
-  if (expiresAt <= now) {
-    throw badInvoice('invoice is already expired — refusing to pay');
-  }
-
-  const instructions = raw['instructions'];
-  if (typeof instructions !== 'string') {
-    throw badInvoice('instructions must be a string');
-  }
-
-  return {
-    version: INVOICE_VERSION,
-    network,
-    serviceId,
-    serviceName,
-    priceMotes,
-    paymentTarget,
-    nonce,
-    expiresAt,
-    instructions,
-  };
+  return req;
 }
 
 interface FetchedBody {
   status: number;
   body: unknown;
   isJson: boolean;
+  retryAfterMs?: number;
+  settlement?: SettlementResponse;
 }
 
 async function readBody(res: Response): Promise<FetchedBody> {
   const text = await res.text();
   const contentType = res.headers.get('content-type') ?? '';
+
+  // Body parsing — try JSON first regardless of content-type
+  let body: unknown = text === '' ? null : text;
+  let isJson = false;
   if (text.length > 0) {
-    // Try JSON regardless of content-type (some upstreams mislabel); prefer it when it parses.
     try {
-      return { status: res.status, body: JSON.parse(text) as unknown, isJson: true };
+      body = JSON.parse(text) as unknown;
+      isJson = true;
     } catch {
       if (contentType.includes('json')) {
-        // Declared JSON but unparseable — surface the raw text, flagged as non-JSON.
-        return { status: res.status, body: text, isJson: false };
+        // Declared JSON but unparseable — surface raw text, flagged as non-JSON
+        body = text;
+        isJson = false;
       }
     }
   }
-  return { status: res.status, body: text === '' ? null : text, isJson: false };
+
+  // Retry-After response header (seconds → ms, capped at MAX_RETRY_AFTER_MS)
+  const ra = res.headers.get('retry-after');
+  const retryAfterMs = ra !== null && /^\d+$/.test(ra)
+    ? Math.min(Number(ra) * 1000, MAX_RETRY_AFTER_MS)
+    : undefined;
+
+  // X-PAYMENT-RESPONSE header → settlement proof
+  let settlement: SettlementResponse | undefined;
+  const sp = res.headers.get('x-payment-response');
+  if (sp !== null) {
+    try { settlement = decodeXPaymentResponse(sp); } catch { settlement = undefined; }
+  }
+
+  return { status: res.status, body, isJson, retryAfterMs, settlement };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -167,16 +153,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function retryAfterMs(body: unknown): number | undefined {
-  if (!isRecord(body)) return undefined;
-  const v = body['retry_after_ms'];
-  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return undefined;
-  return Math.min(v, MAX_RETRY_AFTER_MS);
-}
-
 /**
- * Agent-side pay helper (SPEC §6): parse 402 → validate invoice → pay (native transfer
- * with transfer_id = nonce) → retry with proof headers.
+ * Agent-side pay helper (SPEC §6): parse 402 → validate PaymentRequirements →
+ * pay (native transfer with transfer_id = extra.nonce) → retry with X-PAYMENT header.
  */
 export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClient {
   if (!opts || typeof opts !== 'object') {
@@ -253,44 +232,43 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
     }
 
     if (!first.isJson) throw badInvoice('402 response body is not JSON');
-    const invoice = parseInvoice402(first.body);
-    // Never pay on a different chain than the one we transfer on.
-    if (invoice.network !== chain.network) {
-      throw new AgentGateError(
-        'NETWORK_MISMATCH',
-        `invoice network ${invoice.network} != chain network ${chain.network} — refusing to pay`,
-        502,
-      );
-    }
-    logger?.info('fetchPaid: received 402 invoice', {
+
+    // Parse and validate the PaymentRequiredResponse; network match is inside parsePaymentRequired.
+    const req = parsePaymentRequired(first.body, chain.network);
+
+    logger?.info('fetchPaid: received 402 requirements', {
       url,
-      serviceId: invoice.serviceId,
-      priceMotes: invoice.priceMotes,
-      nonce: invoice.nonce,
+      serviceId: req.extra.serviceId,
+      maxAmountRequired: req.maxAmountRequired,
+      nonce: req.extra.nonce,
     });
 
     // Price guard — never pay above the caller's cap.
-    if (maxPriceMotes !== undefined && compareMotes(invoice.priceMotes, maxPriceMotes) > 0) {
+    if (maxPriceMotes !== undefined && compareMotes(req.maxAmountRequired, maxPriceMotes) > 0) {
       throw new AgentGateError(
         'PRICE_EXCEEDED',
-        `invoice price ${invoice.priceMotes} motes exceeds maxPriceMotes ${maxPriceMotes}`,
+        `invoice price ${req.maxAmountRequired} motes exceeds maxPriceMotes ${maxPriceMotes}`,
         402,
       );
     }
 
-    // Pay: native transfer carrying the invoice nonce as transfer_id.
+    // Pay: native transfer carrying extra.nonce as transfer_id.
     const { deployHash } = await chain.transfer(
-      { to: invoice.paymentTarget, amountMotes: invoice.priceMotes, transferId: invoice.nonce },
+      { to: req.payTo, amountMotes: req.maxAmountRequired, transferId: req.extra.nonce },
       signer,
     );
-    logger?.info('fetchPaid: payment sent', { deployHash, amountMotes: invoice.priceMotes });
+    logger?.info('fetchPaid: payment sent', { deployHash, amountMotes: req.maxAmountRequired });
 
     await sleep(settleDelayMs);
 
-    // Retry with proof headers; on 402+retry_after_ms (verification pending) retry up to 5×.
+    // Retry with x402 proof header; on 402 + Retry-After (verification pending) retry up to 5×.
     const headers = new Headers(init?.headers);
-    headers.set(HEADER_DEPLOY_HASH, deployHash);
-    headers.set(HEADER_NONCE, invoice.nonce);
+    headers.set('X-PAYMENT', encodeXPayment({
+      x402Version: X402_VERSION,
+      scheme: X402_SCHEME,
+      network: chain.network,
+      payload: { transaction: deployHash, transferId: req.extra.nonce },
+    }));
     const proofInit: RequestInit = { ...init, headers };
 
     let pendingRetries = 0;
@@ -302,32 +280,26 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
           status: res.status,
           body: res.body,
           paid: true,
-          invoice,
+          requirements: req,
+          settlement: res.settlement,
           deployHash,
-          priceMotes: invoice.priceMotes,
+          priceMotes: req.maxAmountRequired,
         };
       }
-      const wait = retryAfterMs(res.body);
+      const wait = res.retryAfterMs;
       if (wait === undefined || pendingRetries >= MAX_PENDING_RETRIES) {
-        logger?.warn('fetchPaid: proof rejected', {
-          url,
-          status: res.status,
-          pendingRetries,
-        });
+        logger?.warn('fetchPaid: proof rejected', { url, status: res.status, pendingRetries });
         return {
           status: res.status,
           body: res.body,
           paid: true,
-          invoice,
+          requirements: req,
           deployHash,
-          priceMotes: invoice.priceMotes,
+          priceMotes: req.maxAmountRequired,
         };
       }
       pendingRetries += 1;
-      logger?.debug('fetchPaid: verification pending, retrying', {
-        wait,
-        attempt: pendingRetries,
-      });
+      logger?.debug('fetchPaid: verification pending, retrying', { wait, attempt: pendingRetries });
       await sleep(wait);
     }
   }

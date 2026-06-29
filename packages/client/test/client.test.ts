@@ -1,28 +1,37 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChainClient, Invoice402 } from '@agentgate/shared';
-import { isAgentGateError } from '@agentgate/shared';
+import type { ChainClient } from '@agentgate/shared';
 import {
-  HEADER_DEPLOY_HASH,
-  HEADER_NONCE,
+  isAgentGateError,
+  encodeXPayment,
+  encodeXPaymentResponse,
+  decodeXPayment,
+  type PaymentRequiredResponse,
+} from '@agentgate/shared';
+import {
   createAgentGateClient,
-  parseInvoice402,
+  parsePaymentRequired,
 } from '@agentgate/client';
 
 const DEPLOY_HASH = 'd'.repeat(64);
 const TARGET = `account-hash-${'a'.repeat(64)}`;
 
-function makeInvoice(overrides: Partial<Invoice402> = {}): Invoice402 {
+function requirements(nonce: string, network: string): PaymentRequiredResponse {
   return {
-    version: 'agentgate-402/1',
-    network: 'mock',
-    serviceId: 1,
-    serviceName: 'RWA Oracle Feed',
-    priceMotes: '500000000',
-    paymentTarget: TARGET,
-    nonce: '123456789',
-    expiresAt: Date.now() + 300_000,
-    instructions: 'transfer priceMotes to paymentTarget with transfer_id = nonce',
-    ...overrides,
+    x402Version: 1,
+    error: 'X-PAYMENT header is required',
+    accepts: [{
+      scheme: 'exact', network, maxAmountRequired: '500000000', asset: 'CSPR',
+      payTo: TARGET,
+      resource: 'http://svc.test/svc/1',
+      description: 'Test', maxTimeoutSeconds: 300,
+      extra: {
+        nonce,
+        serviceId: 1,
+        expiresAtMs: Date.now() + 300_000,
+        settlement: 'casper-native-transfer',
+        transferIdEncoding: 'u64-decimal',
+      },
+    }],
   };
 }
 
@@ -51,6 +60,14 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+/** A 402 response with a Retry-After header (seconds), used to simulate a pending settlement. */
+function pending402(nonce: string, retryAfterSec = 0): Response {
+  return new Response(JSON.stringify(requirements(nonce, 'mock')), {
+    status: 402,
+    headers: { 'content-type': 'application/json', 'retry-after': String(retryAfterSec) },
+  });
+}
+
 /** fetchImpl returning queued responses in order; records every (url, init) call. */
 function queuedFetch(responses: Response[]) {
   const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
@@ -66,53 +83,94 @@ function queuedFetch(responses: Response[]) {
 const SIGNER = { kind: 'mock', publicKey: '01ab' } as const;
 
 describe('createAgentGateClient · fetchPaid', () => {
-  it('402 → pay → retry happy path returns paid result with proof headers', async () => {
-    const invoice = makeInvoice();
-    const { impl, calls } = queuedFetch([json(invoice, 402), json({ gold: 3310.25 }, 200)]);
+  it('402 → pay → retry happy path returns paid result with X-PAYMENT and settlement', async () => {
+    const req = requirements('42', 'mock');
+    const settlementHeader = encodeXPaymentResponse({ success: true, transaction: DEPLOY_HASH, network: 'mock' });
+    const { impl, calls } = queuedFetch([
+      json(req, 402),
+      new Response(JSON.stringify({ gold: 3310.25 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json', 'x-payment-response': settlementHeader },
+      }),
+    ]);
     const chain = makeChain();
     const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
 
-    const result = await client.fetchPaid('http://gateway/svc/1');
+    const r = await client.fetchPaid('http://svc.test/svc/1');
 
-    expect(result.status).toBe(200);
-    expect(result.paid).toBe(true);
-    expect(result.body).toEqual({ gold: 3310.25 });
-    expect(result.deployHash).toBe(DEPLOY_HASH);
-    expect(result.priceMotes).toBe('500000000');
-    expect(result.invoice?.serviceId).toBe(1);
-    expect(result.invoice?.nonce).toBe('123456789');
+    expect(r.paid).toBe(true);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ gold: 3310.25 });
+    expect(r.requirements?.maxAmountRequired).toBe('500000000');
+    expect(r.settlement?.success).toBe(true);
+    expect(r.deployHash).toBe(DEPLOY_HASH);
+    expect(r.priceMotes).toBe('500000000');
 
-    // exactly one on-chain transfer, with transferId = invoice nonce
+    // exactly one on-chain transfer, with transferId = nonce
     expect(chain.transfer).toHaveBeenCalledTimes(1);
     expect(chain.transfer).toHaveBeenCalledWith(
-      { to: TARGET, amountMotes: '500000000', transferId: '123456789' },
+      { to: TARGET, amountMotes: '500000000', transferId: '42' },
       SIGNER,
     );
 
-    // retry carried both proof headers
+    // exactly 2 fetches: initial + proof
     expect(calls).toHaveLength(2);
+
+    // proof request carried X-PAYMENT header
     const retryHeaders = new Headers(calls[1]?.init?.headers);
-    expect(retryHeaders.get(HEADER_DEPLOY_HASH)).toBe(DEPLOY_HASH);
-    expect(retryHeaders.get(HEADER_NONCE)).toBe('123456789');
-    // first request had no proof headers
+    const xPayment = retryHeaders.get('X-PAYMENT');
+    expect(xPayment).not.toBeNull();
+    const decoded = decodeXPayment(xPayment!);
+    expect(decoded.payload.transferId).toBe('42');
+    expect(decoded.payload.transaction).toBe(DEPLOY_HASH);
+
+    // first request had no X-PAYMENT
     const firstHeaders = new Headers(calls[0]?.init?.headers);
-    expect(firstHeaders.get(HEADER_DEPLOY_HASH)).toBeNull();
+    expect(firstHeaders.get('X-PAYMENT')).toBeNull();
   });
 
   it('preserves caller-provided headers on the proof retry', async () => {
-    const { impl, calls } = queuedFetch([json(makeInvoice(), 402), json({ ok: true }, 200)]);
+    const req = requirements('42', 'mock');
+    const { impl, calls } = queuedFetch([json(req, 402), json({ ok: true }, 200)]);
     const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
 
-    await client.fetchPaid('http://gateway/svc/1', { headers: { 'X-Custom': 'yes' } });
+    await client.fetchPaid('http://svc.test/svc/1', { headers: { 'X-Custom': 'yes' } });
 
     const retryHeaders = new Headers(calls[1]?.init?.headers);
     expect(retryHeaders.get('X-Custom')).toBe('yes');
-    expect(retryHeaders.get(HEADER_DEPLOY_HASH)).toBe(DEPLOY_HASH);
+    expect(retryHeaders.get('X-PAYMENT')).not.toBeNull();
+  });
+
+  it('settlement is undefined when x-payment-response header is absent', async () => {
+    const req = requirements('42', 'mock');
+    const { impl } = queuedFetch([json(req, 402), json({ ok: true }, 200)]);
+    const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
+
+    const r = await client.fetchPaid('http://svc.test/svc/1');
+    expect(r.paid).toBe(true);
+    expect(r.settlement).toBeUndefined();
+  });
+
+  it('settlement is undefined when x-payment-response header is malformed (no throw)', async () => {
+    const req = requirements('42', 'mock');
+    const { impl } = queuedFetch([
+      json(req, 402),
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json', 'x-payment-response': 'not-valid-base64-json!!!' },
+      }),
+    ]);
+    const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
+
+    const r = await client.fetchPaid('http://svc.test/svc/1');
+    expect(r.paid).toBe(true);
+    expect(r.status).toBe(200);
+    expect(r.settlement).toBeUndefined(); // decode failure → silently undefined
   });
 
   it('refuses to pay when invoice price exceeds maxPriceMotes (PRICE_EXCEEDED)', async () => {
-    const invoice = makeInvoice({ priceMotes: '500000000' });
-    const { impl, calls } = queuedFetch([json(invoice, 402)]);
+    const req = requirements('42', 'mock'); // maxAmountRequired = '500000000'
+    const { impl, calls } = queuedFetch([json(req, 402)]);
     const chain = makeChain();
     const client = createAgentGateClient({
       chain,
@@ -121,7 +179,7 @@ describe('createAgentGateClient · fetchPaid', () => {
       fetchImpl: impl,
     });
 
-    const err = await client.fetchPaid('http://gateway/svc/1').catch((e: unknown) => e);
+    const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
     expect(isAgentGateError(err)).toBe(true);
     if (isAgentGateError(err)) {
       expect(err.code).toBe('PRICE_EXCEEDED');
@@ -132,7 +190,8 @@ describe('createAgentGateClient · fetchPaid', () => {
   });
 
   it('pays when invoice price equals maxPriceMotes exactly', async () => {
-    const { impl } = queuedFetch([json(makeInvoice(), 402), json({ ok: 1 }, 200)]);
+    const req = requirements('42', 'mock'); // maxAmountRequired = '500000000'
+    const { impl } = queuedFetch([json(req, 402), json({ ok: 1 }, 200)]);
     const chain = makeChain();
     const client = createAgentGateClient({
       chain,
@@ -140,29 +199,31 @@ describe('createAgentGateClient · fetchPaid', () => {
       maxPriceMotes: '500000000',
       fetchImpl: impl,
     });
-    const result = await client.fetchPaid('http://gateway/svc/1');
+    const result = await client.fetchPaid('http://svc.test/svc/1');
     expect(result.paid).toBe(true);
     expect(chain.transfer).toHaveBeenCalledTimes(1);
   });
 
+  // helpers for bad-fixture tests (captured at describe-parse time; 300s window is plenty)
+  const validReq = requirements('42', 'mock');
+  const validAccept = validReq.accepts[0]!;
+  const validExtra = validAccept.extra;
+
   it.each([
-    ['wrong version', makeInvoice({ version: 'agentgate-402/2' as Invoice402['version'] })],
-    ['missing nonce', { ...makeInvoice(), nonce: undefined }],
-    ['non-numeric nonce', makeInvoice({ nonce: 'abc' })],
-    ['nonce above u64', makeInvoice({ nonce: '99999999999999999999' })],
-    ['negative serviceId', makeInvoice({ serviceId: -1 })],
-    ['float serviceId', makeInvoice({ serviceId: 1.5 })],
-    ['empty serviceName', makeInvoice({ serviceName: '   ' })],
-    ['bad priceMotes', makeInvoice({ priceMotes: '0.5' })],
-    ['bad paymentTarget', makeInvoice({ paymentTarget: 'account-hash-xyz' })],
-    ['expired invoice', makeInvoice({ expiresAt: Date.now() - 1000 })],
-    ['missing instructions', { ...makeInvoice(), instructions: 42 }],
-  ])('rejects invalid invoice (%s) with BAD_INVOICE and never pays', async (_name, bad) => {
+    ['wrong x402Version',     { ...validReq, x402Version: 2 }],
+    ['empty accepts',         { ...validReq, accepts: [] }],
+    ['missing nonce',         { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, nonce: undefined } }] }],
+    ['non-numeric nonce',     { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, nonce: 'abc' } }] }],
+    ['nonce above u64',       { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, nonce: '99999999999999999999' } }] }],
+    ['bad maxAmountRequired', { ...validReq, accepts: [{ ...validAccept, maxAmountRequired: '0.5' }] }],
+    ['bad payTo',             { ...validReq, accepts: [{ ...validAccept, payTo: 'account-hash-xyz' }] }],
+    ['expired expiresAtMs',   { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, expiresAtMs: Date.now() - 1000 } }] }],
+  ] as [string, unknown][])('rejects invalid invoice (%s) with BAD_INVOICE and never pays', async (_name, bad) => {
     const { impl } = queuedFetch([json(bad, 402)]);
     const chain = makeChain();
     const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
 
-    const err = await client.fetchPaid('http://gateway/svc/1').catch((e: unknown) => e);
+    const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
     expect(isAgentGateError(err)).toBe(true);
     if (isAgentGateError(err)) expect(err.code).toBe('BAD_INVOICE');
     expect(chain.transfer).not.toHaveBeenCalled();
@@ -171,41 +232,38 @@ describe('createAgentGateClient · fetchPaid', () => {
   it('rejects a 402 with a non-JSON body with BAD_INVOICE', async () => {
     const { impl } = queuedFetch([new Response('Payment Required', { status: 402 })]);
     const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
-    const err = await client.fetchPaid('http://gateway/svc/1').catch((e: unknown) => e);
+    const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
     expect(isAgentGateError(err)).toBe(true);
     if (isAgentGateError(err)) expect(err.code).toBe('BAD_INVOICE');
   });
 
-  it('retries 402-with-retry_after_ms (pending) and then succeeds', async () => {
-    const invoice = makeInvoice();
-    const pending = { ...invoice, error: 'pending', retry_after_ms: 5 };
+  it('retries on 402 Retry-After (pending) and then succeeds', async () => {
+    const req = requirements('42', 'mock');
     const { impl, calls } = queuedFetch([
-      json(invoice, 402),
-      json(pending, 402),
-      json(pending, 402),
+      json(req, 402),          // initial → pay
+      pending402('42', 0),     // proof attempt 1 → pending (retry-after: 0s)
+      pending402('42', 0),     // proof attempt 2 → pending (retry-after: 0s)
       json({ usd_idr: 16250.5 }, 200),
     ]);
     const chain = makeChain();
     const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
 
-    const result = await client.fetchPaid('http://gateway/svc/1');
+    const result = await client.fetchPaid('http://svc.test/svc/1');
     expect(result.status).toBe(200);
     expect(result.paid).toBe(true);
     expect(result.body).toEqual({ usd_idr: 16250.5 });
     expect(chain.transfer).toHaveBeenCalledTimes(1); // paid once, never twice
-    expect(calls).toHaveLength(4); // 402 + proof + 2 pending retries... (1 initial, 3 with proof)
+    expect(calls).toHaveLength(4); // 1 initial + 3 with X-PAYMENT (1 first + 2 retries)
   });
 
   it('gives up after 5 pending retries and returns the final 402 (still marked paid)', async () => {
-    const invoice = makeInvoice();
-    const pending = { ...invoice, error: 'pending', retry_after_ms: 1 };
     const { impl, calls } = queuedFetch([
-      json(invoice, 402),
-      ...Array.from({ length: 6 }, () => json(pending, 402)),
+      json(requirements('42', 'mock'), 402),
+      ...Array.from({ length: 6 }, () => pending402('42', 0)),
     ]);
     const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
 
-    const result = await client.fetchPaid('http://gateway/svc/1');
+    const result = await client.fetchPaid('http://svc.test/svc/1');
     expect(result.status).toBe(402);
     expect(result.paid).toBe(true);
     expect(result.deployHash).toBe(DEPLOY_HASH);
@@ -213,13 +271,13 @@ describe('createAgentGateClient · fetchPaid', () => {
     expect(calls).toHaveLength(7);
   });
 
-  it('returns a non-pending 402 proof rejection without retrying', async () => {
-    const invoice = makeInvoice();
-    const rejected = { ...invoice, error: 'invoice_used' };
-    const { impl, calls } = queuedFetch([json(invoice, 402), json(rejected, 402)]);
+  it('returns a non-pending 402 proof rejection without retrying (no Retry-After header)', async () => {
+    const req = requirements('42', 'mock');
+    // 2nd 402 has no retry-after header → stop immediately
+    const { impl, calls } = queuedFetch([json(req, 402), json(req, 402)]);
     const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
 
-    const result = await client.fetchPaid('http://gateway/svc/1');
+    const result = await client.fetchPaid('http://svc.test/svc/1');
     expect(result.status).toBe(402);
     expect(result.paid).toBe(true);
     expect(calls).toHaveLength(2);
@@ -230,7 +288,7 @@ describe('createAgentGateClient · fetchPaid', () => {
     const chain = makeChain();
     const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
 
-    const result = await client.fetchPaid('http://gateway/svc/1');
+    const result = await client.fetchPaid('http://svc.test/svc/1');
     expect(result).toEqual({ status: 200, body: { free: true }, paid: false });
     expect(chain.transfer).not.toHaveBeenCalled();
     expect(calls).toHaveLength(1);
@@ -241,7 +299,7 @@ describe('createAgentGateClient · fetchPaid', () => {
     const chain = makeChain();
     const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
 
-    const result = await client.fetchPaid('http://gateway/svc/1');
+    const result = await client.fetchPaid('http://svc.test/svc/1');
     expect(result.status).toBe(500);
     expect(result.paid).toBe(false);
     expect(chain.transfer).not.toHaveBeenCalled();
@@ -279,27 +337,43 @@ describe('createAgentGateClient · fetchPaid', () => {
     expect(chain.transfer).not.toHaveBeenCalled();
   });
 
-  it('refuses to pay when the invoice network != chain network', async () => {
-    const invoice = makeInvoice({ network: 'casper-test' });
-    const { impl } = queuedFetch([json(invoice, 402)]);
+  it('refuses to pay when no accepts entry matches chain network (BAD_INVOICE)', async () => {
+    // accepts[0].network = 'casper-test' but chain.network = 'mock' → no match
+    const req = requirements('42', 'casper-test');
+    const { impl } = queuedFetch([json(req, 402)]);
     const chain = makeChain({ network: 'mock' });
     const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
-    const err = await client.fetchPaid('http://gateway/svc/1').catch((e: unknown) => e);
+    const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
     expect(isAgentGateError(err)).toBe(true);
-    if (isAgentGateError(err)) expect(err.code).toBe('NETWORK_MISMATCH');
+    if (isAgentGateError(err)) expect(err.code).toBe('BAD_INVOICE');
     expect(chain.transfer).not.toHaveBeenCalled();
   });
 });
 
-describe('parseInvoice402', () => {
-  it('round-trips a valid invoice', () => {
-    const invoice = makeInvoice();
-    expect(parseInvoice402(invoice)).toEqual(invoice);
+describe('parsePaymentRequired', () => {
+  it('returns the matching PaymentRequirements entry', () => {
+    const r = requirements('42', 'mock');
+    const result = parsePaymentRequired(r, 'mock');
+    expect(result).toEqual(r.accepts[0]);
+    expect(result.maxAmountRequired).toBe('500000000');
+    expect(result.extra.nonce).toBe('42');
   });
 
   it('rejects non-object bodies', () => {
     for (const bad of [null, 'str', 42, [1, 2]]) {
-      expect(() => parseInvoice402(bad)).toThrowError(/invalid 402 invoice/);
+      expect(() => parsePaymentRequired(bad, 'mock')).toThrowError(/invalid 402 invoice/);
     }
+  });
+
+  it('rejects wrong x402Version', () => {
+    expect(() =>
+      parsePaymentRequired({ ...requirements('42', 'mock'), x402Version: 2 }, 'mock'),
+    ).toThrowError(/invalid 402 invoice/);
+  });
+
+  it('rejects when no accepts entry matches chain network', () => {
+    expect(() =>
+      parsePaymentRequired(requirements('42', 'casper-test'), 'mock'),
+    ).toThrowError(/invalid 402 invoice/);
   });
 });
