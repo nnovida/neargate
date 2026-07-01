@@ -848,20 +848,28 @@ export class LiveCasperClient implements ChainClient {
     }
 
     const expectedTarget = normalizeAccountHashHex(q.expectedTarget);
-    const match = transfers.find(
+    const expectedId = BigInt(q.expectedTransferId);
+    // New endpoint exposes the transfer id as `id`; the legacy one used `transfer_id`.
+    const transferIdOf = (t: CloudTransfer): string => {
+      const raw = t.id ?? t.transfer_id;
+      return raw === null || raw === undefined ? '' : String(raw);
+    };
+    // Match on target AND transfer id together (F5): a single deploy can carry
+    // several transfers to the same payment target, so pick the one that
+    // actually carries our nonce rather than the first-by-target. The amount and
+    // age checks below then bind to that specific transfer.
+    const toTarget = transfers.filter(
       (t) => normalizeAccountHashHex(t.to_account_hash ?? '') === expectedTarget,
     );
-    if (!match) return { ok: false, reason: 'wrong_target' };
+    if (toTarget.length === 0) return { ok: false, reason: 'wrong_target' };
+    const match = toTarget.find((t) => {
+      const tid = transferIdOf(t);
+      return /^\d+$/.test(tid) && BigInt(tid) === expectedId;
+    });
+    if (!match) return { ok: false, reason: 'wrong_transfer_id' };
 
     const amount = parseCloudAmount(match.amount);
     if (amount < BigInt(q.minAmountMotes)) return { ok: false, reason: 'amount_too_low' };
-
-    // New endpoint exposes the transfer id as `id`; the legacy one used `transfer_id`.
-    const rawId = match.id ?? match.transfer_id;
-    const transferId = rawId === null || rawId === undefined ? '' : String(rawId);
-    if (transferId === '' || BigInt(transferId) !== BigInt(q.expectedTransferId)) {
-      return { ok: false, reason: 'wrong_transfer_id' };
-    }
 
     const timestamp = parseCloudTimestamp(match.timestamp);
     if (Date.now() - timestamp > q.maxAgeMs) return { ok: false, reason: 'expired' };

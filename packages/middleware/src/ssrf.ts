@@ -7,10 +7,11 @@ import {
   isPrivateIPv4,
   isPrivateIPv6,
   resolvedHostIsPublic,
+  resolvePinnedIp,
   validateHttpUrl,
 } from '@agentgate/shared/net-guard';
 
-export { isPrivateHost, isPrivateIPv4, isPrivateIPv6, resolvedHostIsPublic };
+export { isPrivateHost, isPrivateIPv4, isPrivateIPv6, resolvedHostIsPublic, resolvePinnedIp };
 
 export type UpstreamUrlValidation =
   | { ok: true; url: URL }

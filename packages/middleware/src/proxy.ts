@@ -1,4 +1,6 @@
+import { Agent } from 'undici';
 import type { Request } from 'express';
+import { resolvePinnedIp } from './ssrf';
 
 /** Hard cap on proxied bodies in BOTH directions: 1 MiB. */
 export const MAX_PROXY_BODY_BYTES = 1024 * 1024;
@@ -47,6 +49,12 @@ export interface ProxyOptions {
    * network; the 3xx status passes through WITHOUT the Location header.
    */
   followRedirects: boolean;
+  /**
+   * Pin the connection to a vetted public IP (live mode), closing the
+   * DNS-rebinding TOCTOU between the app-level SSRF re-check and this fetch (F6).
+   * Off in mock so localhost demo upstreams work.
+   */
+  pinToPublicIp: boolean;
 }
 
 /** True when the upstream answered with a 2xx — the attestation success flag. */
@@ -119,40 +127,67 @@ export async function proxyToUpstream(opts: ProxyOptions): Promise<ProxyOutcome>
     headers.set('content-type', 'application/json');
   }
 
-  let upstreamRes: globalThis.Response;
-  try {
-    upstreamRes = await fetch(url, {
-      method,
-      headers,
-      body,
-      redirect: opts.followRedirects ? 'follow' : 'manual',
-      signal: AbortSignal.timeout(opts.timeoutMs),
-    });
-  } catch (err) {
-    const name = err instanceof Error ? err.name : '';
-    if (name === 'TimeoutError' || name === 'AbortError') {
-      return { kind: 'failure', status: 504, error: 'upstream_timeout' };
+  // Live mode: pin the connection to a vetted public IP so a DNS rebind between
+  // the app-level SSRF re-check and this fetch cannot land on a private address
+  // (F6). resolvePinnedIp refuses (null) private/unresolvable hosts. undici's
+  // connector `lookup` callback uses the all-form: cb(null, [{ address, family }]).
+  let dispatcher: Agent | undefined;
+  if (opts.pinToPublicIp) {
+    const pinned = await resolvePinnedIp(url.hostname);
+    if (!pinned) return { kind: 'failure', status: 502, error: 'upstream_unreachable' };
+    try {
+      dispatcher = new Agent({
+        connect: {
+          lookup: (_hostname, _options, cb) => cb(null, [{ address: pinned.address, family: pinned.family }]),
+        },
+      });
+    } catch {
+      // undici unavailable — fall back to the app-level re-resolution guard.
+      dispatcher = undefined;
     }
-    return { kind: 'failure', status: 502, error: 'upstream_unreachable' };
   }
 
-  let bodyBuffer: Buffer | null;
-  try {
-    bodyBuffer = await readBodyCapped(upstreamRes, MAX_PROXY_BODY_BYTES);
-  } catch (err) {
-    const name = err instanceof Error ? err.name : '';
-    return name === 'TimeoutError' || name === 'AbortError'
-      ? { kind: 'failure', status: 504, error: 'upstream_timeout' }
-      : { kind: 'failure', status: 502, error: 'upstream_unreachable' };
-  }
-  if (bodyBuffer === null) {
-    return { kind: 'failure', status: 502, error: 'upstream_response_too_large' };
-  }
-
-  return {
-    kind: 'response',
-    status: upstreamRes.status,
-    contentType: upstreamRes.headers.get('content-type'),
-    body: bodyBuffer,
+  const init: RequestInit & { dispatcher?: unknown } = {
+    method,
+    headers,
+    body,
+    redirect: opts.followRedirects ? 'follow' : 'manual',
+    signal: AbortSignal.timeout(opts.timeoutMs),
   };
+  if (dispatcher) init.dispatcher = dispatcher;
+
+  try {
+    let upstreamRes: globalThis.Response;
+    try {
+      upstreamRes = await fetch(url, init);
+    } catch (err) {
+      const name = err instanceof Error ? err.name : '';
+      if (name === 'TimeoutError' || name === 'AbortError') {
+        return { kind: 'failure', status: 504, error: 'upstream_timeout' };
+      }
+      return { kind: 'failure', status: 502, error: 'upstream_unreachable' };
+    }
+
+    let bodyBuffer: Buffer | null;
+    try {
+      bodyBuffer = await readBodyCapped(upstreamRes, MAX_PROXY_BODY_BYTES);
+    } catch (err) {
+      const name = err instanceof Error ? err.name : '';
+      return name === 'TimeoutError' || name === 'AbortError'
+        ? { kind: 'failure', status: 504, error: 'upstream_timeout' }
+        : { kind: 'failure', status: 502, error: 'upstream_unreachable' };
+    }
+    if (bodyBuffer === null) {
+      return { kind: 'failure', status: 502, error: 'upstream_response_too_large' };
+    }
+
+    return {
+      kind: 'response',
+      status: upstreamRes.status,
+      contentType: upstreamRes.headers.get('content-type'),
+      body: bodyBuffer,
+    };
+  } finally {
+    if (dispatcher) await dispatcher.close().catch(() => undefined);
+  }
 }

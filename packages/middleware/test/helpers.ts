@@ -65,6 +65,7 @@ export async function bootGateway(
     fake?: FakeChainClient;
     upstreamsFile?: string;
     attestationRetryDelayMs?: number;
+    attestationMaxAttempts?: number;
   } = {},
 ): Promise<TestGateway> {
   const config = opts.config ?? testConfig();
@@ -81,6 +82,9 @@ export async function bootGateway(
   };
   if (opts.attestationRetryDelayMs !== undefined) {
     startOpts.attestationRetryDelayMs = opts.attestationRetryDelayMs;
+  }
+  if (opts.attestationMaxAttempts !== undefined) {
+    startOpts.attestationMaxAttempts = opts.attestationMaxAttempts;
   }
   const server: RunningServer = await startServer(startOpts);
   return {

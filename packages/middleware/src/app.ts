@@ -32,6 +32,7 @@ import {
 } from '@agentgate/shared';
 import { verifyOwnerSignature } from '@agentgate/chain';
 import { MemoryInvoiceStore, type InvoiceStore } from './invoice-store';
+import { FileInvoiceStore } from './invoice-store-file';
 import { UpstreamStore } from './upstream-store';
 import { ServiceCache } from './service-cache';
 import { isUpstreamSuccess, proxyToUpstream } from './proxy';
@@ -52,8 +53,15 @@ export interface MiddlewareDeps {
   upstreamsFile?: string;
   /** Custom invoice store (default: in-memory + TTL sweep). Injected stores are not closed on dispose. */
   invoiceStore?: InvoiceStore;
-  /** Delay before the single attestation retry. Default 5000 ms. */
+  /**
+   * When set (and no `invoiceStore` is injected), persist invoices to this JSON
+   * file so they survive a restart (finding F2). The gateway owns and closes it.
+   */
+  invoiceStorePath?: string;
+  /** Base delay before the first attestation retry (exponential backoff). Default 5000 ms. */
   attestationRetryDelayMs?: number;
+  /** Total attestation attempts before giving up (1 = no retry). Default 4. */
+  attestationMaxAttempts?: number;
 }
 
 /** Internal handles startServer() uses for graceful shutdown. */
@@ -62,6 +70,7 @@ export interface AppInternals {
 }
 
 const DEFAULT_ATTESTATION_RETRY_DELAY_MS = 5_000;
+const DEFAULT_ATTESTATION_MAX_ATTEMPTS = 4;
 const JSON_BODY_LIMIT = '256kb';
 const SVC_RATE_LIMIT_PER_MINUTE = 60;
 const ADMIN_RATE_LIMIT_PER_MINUTE = 20;
@@ -103,6 +112,19 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ha, hb);
 }
 
+/**
+ * True when the payer is the service's own owner or its payout account — a
+ * self-paid call that must NOT feed the trust score (wash-trade guard, F1).
+ * Identities compare case-insensitively with any `account-hash-` prefix
+ * stripped, so live account-hashes and mock identities both compare cleanly.
+ */
+export function isSelfPayment(payerFrom: string, service: ServiceRecord): boolean {
+  const norm = (s: string): string => s.trim().toLowerCase().replace(/^account-hash-/, '');
+  const from = norm(payerFrom);
+  if (from === '') return false;
+  return from === norm(service.paymentTarget) || from === norm(service.owner);
+}
+
 /** Express 4 does not catch async handler rejections — wrap them. */
 function wrap(fn: (req: Request, res: Response) => Promise<void>): RequestHandler {
   return (req, res, next) => {
@@ -129,7 +151,13 @@ export function createApp(deps: MiddlewareDeps): Express {
     );
   }
   const logger = deps.logger ?? createLogger('middleware');
-  const invoices = deps.invoiceStore ?? new MemoryInvoiceStore();
+  // Persistent when a path is configured (F2), else in-memory. Either way, a
+  // store the gateway constructs itself is closed on dispose; an injected one is not.
+  const invoices =
+    deps.invoiceStore ??
+    (deps.invoiceStorePath !== undefined && deps.invoiceStorePath.trim() !== ''
+      ? new FileInvoiceStore(deps.invoiceStorePath)
+      : new MemoryInvoiceStore());
   const ownsInvoiceStore = deps.invoiceStore === undefined;
   const upstreams = new UpstreamStore(
     deps.upstreamsFile !== undefined
@@ -144,6 +172,7 @@ export function createApp(deps: MiddlewareDeps): Express {
   );
   const services = new ServiceCache(chain);
   const attestationRetryDelayMs = deps.attestationRetryDelayMs ?? DEFAULT_ATTESTATION_RETRY_DELAY_MS;
+  const attestationMaxAttempts = deps.attestationMaxAttempts ?? DEFAULT_ATTESTATION_MAX_ATTEMPTS;
 
   const app = express();
   app.disable('x-powered-by');
@@ -225,9 +254,11 @@ export function createApp(deps: MiddlewareDeps): Express {
   }
 
   /**
-   * Fire-and-forget on-chain attestation (success := upstream 2xx).
-   * Never blocks the buyer's response; on failure logs and retries exactly
-   * once after `attestationRetryDelayMs` (timer unref'd).
+   * Fire-and-forget on-chain attestation (success := upstream 2xx). Never blocks
+   * the buyer's response; on failure retries with exponential backoff up to
+   * `attestationMaxAttempts` total tries (timers unref'd so they never keep the
+   * process alive). A call whose attempts all fail is under-counted, never
+   * over-counted (F7).
    */
   function scheduleAttestation(
     service: ServiceRecord,
@@ -236,28 +267,33 @@ export function createApp(deps: MiddlewareDeps): Express {
   ): void {
     const input = { serviceId: service.id, paymentDeployHash, success };
     const signer = gateSignerFor(service);
-    const fields = { serviceId: service.id, paymentDeployHash, success };
-    chain.recordAttestation(input, signer).then(
-      (r) => logger.info('attestation_recorded', { ...fields, txHash: r.txHash }),
-      (err: unknown) => {
-        logger.warn('attestation_failed_retrying', {
-          ...fields,
-          retryInMs: attestationRetryDelayMs,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        const timer = setTimeout(() => {
-          chain.recordAttestation(input, signer).then(
-            (r) => logger.info('attestation_recorded_on_retry', { ...fields, txHash: r.txHash }),
-            (err2: unknown) =>
-              logger.error('attestation_failed_final', {
-                ...fields,
-                error: err2 instanceof Error ? err2.message : String(err2),
-              }),
-          );
-        }, attestationRetryDelayMs);
-        timer.unref();
-      },
-    );
+    const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+    const attempt = (n: number): void => {
+      chain.recordAttestation(input, signer).then(
+        (r) =>
+          logger.info(n === 1 ? 'attestation_recorded' : 'attestation_recorded_on_retry', {
+            ...input,
+            attempt: n,
+            txHash: r.txHash,
+          }),
+        (err: unknown) => {
+          if (n >= attestationMaxAttempts) {
+            logger.error('attestation_failed_final', { ...input, attempts: n, error: msg(err) });
+            return;
+          }
+          const retryInMs = attestationRetryDelayMs * 2 ** (n - 1);
+          logger.warn('attestation_failed_retrying', {
+            ...input,
+            attempt: n,
+            retryInMs,
+            error: msg(err),
+          });
+          const timer = setTimeout(() => attempt(n + 1), retryInMs);
+          timer.unref();
+        },
+      );
+    };
+    attempt(1);
   }
 
   // ------------------------------------------------------------- rate limit
@@ -453,6 +489,7 @@ export function createApp(deps: MiddlewareDeps): Express {
         req,
         timeoutMs: config.upstreamTimeoutMs,
         followRedirects: config.mode !== 'live',
+        pinToPublicIp: config.mode === 'live',
       });
       const success = isUpstreamSuccess(outcome);
 
@@ -475,7 +512,21 @@ export function createApp(deps: MiddlewareDeps): Express {
         logger.warn('proxy_failed', { serviceId: id, error: outcome.error });
         res.status(outcome.status).json({ error: outcome.error });
       }
-      scheduleAttestation(service, deployHashHeader, success);
+
+      // Attest only when the upstream actually returned a response (F4): a
+      // gateway-level failure (upstream_unreachable/upstream_timeout/too_large)
+      // is the seller's backend being unreachable, not a service outcome, so it
+      // is not scored either way. And never let a self-paid call earn trust
+      // (F1): a payer that is the owner or the payout account is wash-trading.
+      const selfPaid = isSelfPayment(verdict.from, service);
+      if (outcome.kind === 'response' && !selfPaid) {
+        scheduleAttestation(service, deployHashHeader, success);
+      } else {
+        logger.info('attestation_skipped', {
+          serviceId: id,
+          reason: selfPaid ? 'self_payment' : outcome.kind === 'failure' ? outcome.error : 'skipped',
+        });
+      }
     }),
   );
 

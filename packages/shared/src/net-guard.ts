@@ -119,6 +119,42 @@ export async function resolvedHostIsPublic(hostname: string): Promise<boolean> {
 }
 
 /**
+ * Resolves a hostname to a single public IP to PIN the outbound connection to,
+ * closing the DNS-rebinding TOCTOU that {@link resolvedHostIsPublic} documents:
+ * the caller connects to this vetted IP instead of letting `fetch` re-resolve.
+ *
+ * Returns null — meaning "do not proceed" — when the host is empty/localhost,
+ * unresolvable, or when ANY resolved (or literal) address is private, applying
+ * the same all-must-be-public policy as the guard. A public IP literal returns
+ * itself (there is no DNS step to rebind).
+ */
+export async function resolvePinnedIp(
+  hostname: string,
+): Promise<{ address: string; family: number } | null> {
+  let host = hostname.trim().toLowerCase();
+  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
+  if (host.endsWith('.')) host = host.slice(0, -1);
+  if (host === '' || host === 'localhost' || host.endsWith('.localhost')) return null;
+  const literal = isIP(host);
+  if (literal !== 0) {
+    const isPrivate = literal === 6 ? isPrivateIPv6(host) : isPrivateIPv4(host);
+    return isPrivate ? null : { address: host, family: literal };
+  }
+  let addresses: { address: string; family: number }[];
+  try {
+    addresses = await lookup(host, { all: true });
+  } catch {
+    return null; // unresolvable → refuse
+  }
+  if (addresses.length === 0) return null;
+  for (const { address, family } of addresses) {
+    if (family === 6 ? isPrivateIPv6(address) : isPrivateIPv4(address)) return null;
+  }
+  const first = addresses[0]!;
+  return { address: first.address, family: first.family };
+}
+
+/**
  * Validates an arbitrary http(s) URL string:
  * - parses as a URL with protocol http:/https: and no embedded credentials,
  * - when `rejectPrivateHosts`, the literal hostname must not be private/loopback.
