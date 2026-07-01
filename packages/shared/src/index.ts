@@ -2,6 +2,7 @@ export * from './types';
 export * from './money';
 export * from './nonce';
 export * from './config';
+export * from './self-map';
 export * from './logger';
 export * from './trust';
 export * from './errors';

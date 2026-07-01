@@ -10,6 +10,13 @@ export const DEFAULT_ADMIN_TOKEN = 'dev-admin-token';
 export const DEFAULT_REGISTRY_PACKAGE_HASH =
   'hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9';
 
+/**
+ * Default hosted gateway the CLI targets in live mode when `--gateway` is unset.
+ * The owner-signature self-map endpoint lives here; override with `--gateway`
+ * for a local/self-hosted gateway.
+ */
+export const DEFAULT_GATEWAY_URL = 'https://gateway.example.org';
+
 export interface AgentGateConfig {
   mode: AgentGateMode;
   // ports
