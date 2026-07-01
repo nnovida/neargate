@@ -40,7 +40,7 @@ function sellerSigner(config: AgentGateConfig): AnySigner {
   if (config.sellerSignerPemPath === '') {
     throw new AgentGateError(
       'SIGNER_MISSING',
-      'live mode needs SELLER_SIGNER_PEM_PATH pointing at the seller key PEM',
+      'live mode needs a seller key — pass --pem <path> or set SELLER_SIGNER_PEM_PATH',
       400,
     );
   }
