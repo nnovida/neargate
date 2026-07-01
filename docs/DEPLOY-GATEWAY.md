@@ -76,18 +76,20 @@ for the native-transfer settlement rail.
 The repo already runs live via `scripts/live.ts` and this box already tunnels the
 dashboard through cloudflared. Mirror that for the gateway.
 
-**1. Run the gateway durably** (the dev process is session-scoped):
+**1. Run the gateway durably** (the dev process is session-scoped). This box
+uses **PM2** (its daemon already runs), so the gateway + dashboard are defined in
+`deploy/agentgate.ecosystem.config.cjs` and started with:
 
 ```bash
-# quick: nohup npm run dev:live > gateway.log 2>&1 &
-# durable (recommended): systemd --user unit shipped at deploy/agentgate-gateway.service
-mkdir -p ~/.config/systemd/user
-cp deploy/agentgate-gateway.service ~/.config/systemd/user/
-loginctl enable-linger "$USER"
-systemctl --user daemon-reload
-systemctl --user enable --now agentgate-gateway
-curl -s http://127.0.0.1:4021/healthz    # {"ok":true,"network":"casper-test"}
+pm2 start deploy/agentgate.ecosystem.config.cjs   # agentgate-gateway (:4021) + agentgate-dashboard (:3000)
+pm2 save                                           # persist across reboot (pm2 startup is configured)
+pm2 status ; pm2 logs agentgate-gateway
+curl -s http://127.0.0.1:4021/healthz              # {"ok":true,"network":"casper-test"}
 ```
+
+Alternative (no PM2): a systemd `--user` unit is shipped at
+`deploy/agentgate-gateway.service` — `cp` it to `~/.config/systemd/user/`,
+`loginctl enable-linger "$USER"`, then `systemctl --user enable --now agentgate-gateway`.
 
 **2. Set `TRUST_PROXY=1` in `.env`** (behind exactly one Cloudflare hop) so the
 rate limiter keys off the real client IP, then restart the unit.
