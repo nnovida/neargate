@@ -96,14 +96,15 @@ export default function Page() {
 
       <H2 id="wrap-your-api">Wrap your API</H2>
       <P>
-        Run wrap from the repo root. The only positional argument is your upstream URL; everything
-        else is a flag.
+        Run wrap with <M>npx</M> (or <M>npm run agentgate --</M> from a cloned repo). The only
+        positional argument is your upstream URL; everything else is a flag. The only thing you must
+        supply besides the service metadata is your funded wallet key via <M>--pem</M>.
       </P>
       <CommandBlock
         wrap
         text={
-          'npm run agentgate -- wrap https://api.example.com/gold ' +
-          '--price 0.5 --name "Gold Spot Feed" ' +
+          'npx @neargate/cli wrap https://api.example.com/gold ' +
+          '--price 0.5 --name "Gold Spot Feed" --pem ./key.pem ' +
           '--description "Live gold spot price, refreshed every 10s"'
         }
       />
@@ -143,6 +144,21 @@ export default function Page() {
               <>
                 Human-readable service name shown in the catalog. Non-empty, no control
                 characters, at most 128 characters (<M>MAX_NAME_LENGTH</M>).
+              </>
+            ),
+          },
+          {
+            name: '--pem <path>',
+            type: 'string (path)',
+            required: false,
+            default: 'SELLER_SIGNER_PEM_PATH',
+            desc: (
+              <>
+                Path to your funded seller wallet key PEM (secp256k1 or ed25519).{' '}
+                <strong className="text-white">Required in live mode</strong> — it signs the
+                on-chain registration and the owner-signed gateway mapping. Or set{' '}
+                <M>SELLER_SIGNER_PEM_PATH</M>; empty &rarr; <M>SIGNER_MISSING</M>. (Mock mode uses{' '}
+                <M>MOCK_SELLER_ACCOUNT</M> instead — no key file.)
               </>
             ),
           },
@@ -289,10 +305,10 @@ export default function Page() {
           ],
         ]}
       />
-      <CommandBlock text="npm run agentgate -- list" />
-      <CommandBlock text="npm run agentgate -- status 7" />
-      <CommandBlock text="npm run agentgate -- pause 7" />
-      <CommandBlock text="npm run agentgate -- resume 7" />
+      <CommandBlock text="npx @neargate/cli list" />
+      <CommandBlock text="npx @neargate/cli status 7" />
+      <CommandBlock text="npx @neargate/cli pause 7 --pem ./key.pem" />
+      <CommandBlock text="npx @neargate/cli resume 7 --pem ./key.pem" />
       <P>
         <M>pause</M> and <M>resume</M> re-fetch the record and print the service, its new active
         state and the <M>set_active</M> tx hash. Full reference in{' '}
