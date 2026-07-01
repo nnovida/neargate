@@ -1,5 +1,10 @@
 # AgentGate
 
+[![npm version](https://img.shields.io/npm/v/@neargate/cli.svg)](https://www.npmjs.com/package/@neargate/cli)
+[![license](https://img.shields.io/npm/l/@neargate/cli.svg)](LICENSE)
+
+**Live now:** CLI on npm → `npx @neargate/cli` · dashboard [agentgate.example.org](https://agentgate.example.org) · gateway [gateway.example.org](https://gateway.example.org) · registry deployed on Casper Testnet.
+
 **Stripe for AI agents on Casper.** Read the live on-chain service catalog with zero setup —
 no config, no keys:
 
@@ -36,7 +41,7 @@ sequenceDiagram
     participant API as Upstream API
 
     Seller->>Chain: register service (price, payment target, attestor)
-    Seller->>Gate: map service → upstream URL (admin API)
+    Seller->>Gate: map upstream (owner-signed challenge → /services/:id/map)
     Agent->>Chain: discover catalog + trust scores
     Agent->>Gate: GET /svc/:id
     Gate-->>Agent: 402 PaymentRequiredResponse (x402Version, error, accepts[])
@@ -109,9 +114,11 @@ Set `ANTHROPIC_API_KEY` to let the buyer agent use Claude instead of the MockLlm
 All env vars are documented in [.env.example](.env.example). The **gateway and background
 services** in live mode require `CSPR_CLOUD_API_KEY` and a non-default `AGENTGATE_ADMIN_TOKEN`
 (enforced by config). The **CLI is looser**: `list`/`status` read the public node with no keys
-at all; only `status` attestation history needs `CSPR_CLOUD_API_KEY`, and `wrap`'s gateway
-mapping needs the gateway's admin token. Every value can also be passed as a flag
-(`--mode`, `--node-url`, `--registry`, `--pem`, `--api-key`, `--admin-token`; flag > env > default).
+at all; only `status` attestation history needs `CSPR_CLOUD_API_KEY`. Live `wrap` needs **no**
+admin token — it maps the upstream by signing an ownership challenge with your `--pem` key
+(verified against the on-chain `owner`); the admin token is only the legacy/self-hosted path.
+Every value can also be passed as a flag (`--mode`, `--node-url`, `--registry`, `--pem`,
+`--api-key`, `--admin-token`; flag > env > default).
 
 ## Repo layout
 
@@ -120,12 +127,12 @@ packages/
   shared/        types · config · bigint money · trust tiers (zero runtime deps)
   devnet/        in-memory mock chain HTTP server          :4030
   chain/         ChainClient: MockChainHttpClient + LiveCasperClient
-  middleware/    the product core — 402 paywall reverse proxy + admin API   :4021
+  middleware/    the product core — 402 paywall proxy + owner-signed self-map   :4021
   client/        agent-side fetchPaid (parse 402 → pay → retry)
   oracle/        demo RWA feed: USD/IDR + gold spot + confidence            :4010
   buyer-agent/   LLM decision loop (AnthropicLlm / MockLlm)
   cli/           agentgate wrap | list | status | pause | resume | demo-accounts
-dashboard/       Next.js 14 landing + catalog + live activity              :3000
+dashboard/       Next.js 16 landing + catalog + live activity + docs        :3000
 contracts/       AgentGateRegistry (Rust/Odra) — registry, scores, attestations
 e2e/             full-loop test, in-process servers on port 0
 scripts/         dev.ts (stack) · demo.ts (one-shot scripted demo)
@@ -141,7 +148,7 @@ scripts/         dev.ts (stack) · demo.ts (one-shot scripted demo)
 | `npm run agentgate -- …` | the `agentgate` CLI |
 | `npm run agent -- --task "…"` | run the buyer agent once |
 | `npm run typecheck` | `tsc --noEmit` in every package + dashboard + root scripts/e2e |
-| `npm test` | vitest: all package units + the e2e loop (288 tests) |
+| `npm test` | vitest: all package units + the e2e loop (323 tests) |
 | `npm run build` | dashboard `next build` |
 
 Contract tests: `cd contracts/agentgate-registry && cargo odra test` (20 OdraVM tests).
@@ -171,6 +178,11 @@ entry-point calls revert with *"Sections out of order"*) and the verify-against-
 Hosting the services is documented in [docs/HOSTING.md](docs/HOSTING.md): dashboard →
 Vercel (root `vercel.json`), middleware + oracle → Railway (per-package Dockerfiles +
 `railway.json`), plus a self-contained `docker-compose.hosting.yml` demo stack.
+
+**Currently hosted:** the live-mode gateway runs at **https://gateway.example.org** and the
+dashboard at **https://agentgate.example.org** (cloudflared tunnels → local PM2 services;
+runbook + `deploy/agentgate.ecosystem.config.cjs` in [docs/DEPLOY-GATEWAY.md](docs/DEPLOY-GATEWAY.md)).
+The CLI is published to npm as [`@neargate/cli`](https://www.npmjs.com/package/@neargate/cli).
 
 ## Roadmap
 
