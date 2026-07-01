@@ -12,10 +12,12 @@ import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import {
   AgentGateError,
+  buildSelfMapMessage,
   createLogger,
   decodeXPayment,
   encodeXPaymentResponse,
   randomNonce,
+  SELF_MAP_WINDOW_MS,
   trustTier,
   X402_ASSET_CSPR,
   X402_SCHEME,
@@ -28,6 +30,7 @@ import {
   type PaymentRequirements,
   type ServiceRecord,
 } from '@agentgate/shared';
+import { verifyOwnerSignature } from '@agentgate/chain';
 import { MemoryInvoiceStore, type InvoiceStore } from './invoice-store';
 import { UpstreamStore } from './upstream-store';
 import { ServiceCache } from './service-cache';
@@ -62,6 +65,7 @@ const DEFAULT_ATTESTATION_RETRY_DELAY_MS = 5_000;
 const JSON_BODY_LIMIT = '256kb';
 const SVC_RATE_LIMIT_PER_MINUTE = 60;
 const ADMIN_RATE_LIMIT_PER_MINUTE = 20;
+const SELF_MAP_RATE_LIMIT_PER_MINUTE = 20;
 const SERVICE_ID_RE = /^\d{1,15}$/;
 
 /**
@@ -275,6 +279,19 @@ export function createApp(deps: MiddlewareDeps): Express {
     rateLimit({
       windowMs: 60_000,
       limit: ADMIN_RATE_LIMIT_PER_MINUTE,
+      standardHeaders: 'draft-7',
+      legacyHeaders: false,
+      message: { error: 'rate_limited' },
+    }),
+  );
+
+  // Self-service mapping is unauthenticated-by-token (auth is the owner
+  // signature) — rate-limit it to blunt signature-spam / mapping churn.
+  app.use(
+    '/services',
+    rateLimit({
+      windowMs: 60_000,
+      limit: SELF_MAP_RATE_LIMIT_PER_MINUTE,
       standardHeaders: 'draft-7',
       legacyHeaders: false,
       message: { error: 'rate_limited' },
@@ -515,6 +532,99 @@ export function createApp(deps: MiddlewareDeps): Express {
       }
       await upstreams.delete(id);
       logger.info('upstream_unmapped', { serviceId: id });
+      res.status(204).end();
+    }),
+  );
+
+  // -------------------------------------------- self-service mapping (no token)
+  //
+  // A service OWNER maps their upstream by signing a canonical challenge with
+  // the key whose account-hash equals the on-chain `owner` — no shared admin
+  // token needed. This is what lets `agentgate wrap --pem …` run against a
+  // hosted gateway in one line. Ordering is DoS-conscious: cheap rejects first,
+  // the signature/owner check only after the service is known to exist, and the
+  // SSRF check only for a verified owner.
+  const lastSelfMapTs = new Map<number, number>();
+
+  app.post(
+    '/services/:id/map',
+    wrap(async (req, res) => {
+      const id = parseServiceId(req.params.id);
+      if (id === null) {
+        res.status(400).json({ error: 'invalid_service_id' });
+        return;
+      }
+      const body: unknown = req.body;
+      if (body === null || typeof body !== 'object') {
+        res.status(400).json({ error: 'invalid_body' });
+        return;
+      }
+      const { upstreamUrl, publicKeyHex, timestamp, signatureHex } = body as {
+        upstreamUrl?: unknown;
+        publicKeyHex?: unknown;
+        timestamp?: unknown;
+        signatureHex?: unknown;
+      };
+      if (
+        typeof upstreamUrl !== 'string' ||
+        typeof publicKeyHex !== 'string' ||
+        typeof signatureHex !== 'string' ||
+        typeof timestamp !== 'number' ||
+        !Number.isSafeInteger(timestamp)
+      ) {
+        res.status(400).json({ error: 'invalid_body' });
+        return;
+      }
+
+      // Freshness — bounds replay independently of the per-service guard below.
+      if (Math.abs(Date.now() - timestamp) > SELF_MAP_WINDOW_MS) {
+        res.status(401).json({ error: 'stale_request' });
+        return;
+      }
+
+      const service = await services.get(id);
+      if (!service) {
+        res.status(404).json({ error: 'service_not_found' });
+        return;
+      }
+
+      // Verify the signature over the RAW transmitted upstreamUrl (byte-identical
+      // to what the owner signed) and bind the signing key to the on-chain owner.
+      const message = buildSelfMapMessage({
+        network: chain.network,
+        serviceId: id,
+        upstreamUrl,
+        timestamp,
+      });
+      const { accountHash, valid } = verifyOwnerSignature(publicKeyHex, message, signatureHex);
+      if (!valid) {
+        res.status(401).json({ error: 'invalid_signature' });
+        return;
+      }
+      if (accountHash.toLowerCase() !== service.owner.toLowerCase()) {
+        res.status(403).json({ error: 'not_service_owner' });
+        return;
+      }
+
+      // Per-service monotonic timestamp — reject stale/replayed authorized requests.
+      const last = lastSelfMapTs.get(id);
+      if (last !== undefined && timestamp <= last) {
+        res.status(409).json({ error: 'replayed' });
+        return;
+      }
+
+      // SSRF guard — same as the admin path; only reached for a verified owner.
+      const verdict = validateUpstreamUrl(upstreamUrl, {
+        rejectPrivateHosts: config.mode === 'live',
+      });
+      if (!verdict.ok) {
+        res.status(400).json({ error: verdict.error });
+        return;
+      }
+
+      lastSelfMapTs.set(id, timestamp);
+      await upstreams.set(id, verdict.url.toString());
+      logger.info('self_mapped', { serviceId: id });
       res.status(204).end();
     }),
   );
