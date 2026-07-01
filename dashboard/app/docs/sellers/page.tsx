@@ -20,7 +20,7 @@ export default function Page() {
   return (
     <>
       <DocHeader
-        kicker="GUIDE"
+        kicker="SELLER GUIDE"
         title="Wrap an API"
         lede="Turn any HTTP API into a pay-per-call service: register it on-chain and map it to your private upstream on the gateway with a single agentgate wrap command."
       />

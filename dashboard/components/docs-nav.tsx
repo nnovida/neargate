@@ -10,10 +10,16 @@ interface DocLink {
 }
 interface DocGroup {
   label: string;
+  /** One-line descriptor shown under the group label to orient the reader. */
+  hint?: string;
   links: DocLink[];
 }
 
-/** Industry-standard grouped IA: Get started → Guides → Concepts → Reference. */
+/**
+ * Role-oriented IA: Get started → For sellers → For buyers → Run a gateway →
+ * Concepts → Reference. Each role section gathers that role's guide + its primary
+ * tool (sellers: CLI, buyers: SDK) so a reader sees their parts in one place.
+ */
 export const DOC_GROUPS: DocGroup[] = [
   {
     label: 'Get started',
@@ -24,12 +30,25 @@ export const DOC_GROUPS: DocGroup[] = [
     ],
   },
   {
-    label: 'Guides',
+    label: 'For sellers',
+    hint: 'Wrap your HTTP API into a paid, on-chain service.',
     links: [
       { href: '/docs/sellers', label: 'Wrap an API' },
-      { href: '/docs/buyers', label: 'Build an agent' },
-      { href: '/docs/deployment', label: 'Deploy to production' },
+      { href: '/docs/cli', label: 'CLI' },
     ],
+  },
+  {
+    label: 'For buyers',
+    hint: 'Build an agent that discovers, pays and rates services.',
+    links: [
+      { href: '/docs/buyers', label: 'Build an agent' },
+      { href: '/docs/sdk', label: 'Client SDK' },
+    ],
+  },
+  {
+    label: 'Run a gateway',
+    hint: 'Self-host the 402 middleware, or use the hosted one.',
+    links: [{ href: '/docs/deployment', label: 'Deploy to production' }],
   },
   {
     label: 'Concepts',
@@ -42,9 +61,7 @@ export const DOC_GROUPS: DocGroup[] = [
   {
     label: 'Reference',
     links: [
-      { href: '/docs/cli', label: 'CLI' },
       { href: '/docs/api', label: 'HTTP API' },
-      { href: '/docs/sdk', label: 'Client SDK' },
       { href: '/docs/configuration', label: 'Configuration' },
       { href: '/docs/contract', label: 'Smart contracts' },
       { href: '/docs/errors', label: 'Error codes' },
@@ -67,7 +84,10 @@ export function DocsSidebar() {
     <nav aria-label="Documentation sections" className="space-y-7">
       {DOC_GROUPS.map((group) => (
         <div key={group.label}>
-          <p className="microlabel mb-3">{group.label}</p>
+          <p className={`microlabel ${group.hint ? 'mb-1' : 'mb-3'}`}>{group.label}</p>
+          {group.hint ? (
+            <p className="mb-3 pr-2 text-[11px] leading-4 text-mut">{group.hint}</p>
+          ) : null}
           <ul className="space-y-0.5">
             {group.links.map(({ href, label }) => {
               const active = isActive(pathname, href);

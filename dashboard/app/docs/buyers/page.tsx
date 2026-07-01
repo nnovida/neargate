@@ -75,7 +75,7 @@ export default function Page() {
   return (
     <>
       <DocHeader
-        kicker="GUIDE"
+        kicker="BUYER GUIDE"
         title="Build an agent"
         lede="A buyer agent discovers paid services on-chain, decides what to buy under a hard budget, pays per call in native CSPR, consumes the data, and collects an on-chain attestation receipt — all without an API key."
       />
