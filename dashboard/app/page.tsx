@@ -91,13 +91,13 @@ export default function Home() {
           className="mt-9 animate-fade-up"
           style={{ animationDelay: '270ms' }}
         >
-          <CommandBlock text={LIST_CMD} wrap typewriter />
+          <CommandBlock text={WRAP_CMD} wrap typewriter />
           <p className="mt-3 font-mono text-[11px] text-mut">
-            read the live on-chain catalog — zero setup, no keys. Then{' '}
-            <Link href="#get-started" className="text-accent underline underline-offset-4">
-              wrap your own API
-            </Link>
-            .
+            one line, only your funded wallet key. Or read the live{' '}
+            <Link href="/catalog" className="text-accent underline underline-offset-4">
+              on-chain catalog
+            </Link>{' '}
+            with zero setup: <span className="text-white">{LIST_CMD}</span>
           </p>
         </div>
         <div
