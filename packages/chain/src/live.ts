@@ -139,6 +139,21 @@ function stripHashPrefix(value: string): string {
   return value.toLowerCase().replace(/^(contract-package-wasm|contract-package-|hash-)/, '');
 }
 
+/**
+ * Picks the highest-numbered ENABLED contract version. `disabledVersions` is the
+ * SDK's `number[][]` where each entry's first element is the disabled
+ * `contractVersion`. Returns null when nothing is enabled.
+ */
+export function pickLatestVersion<T extends { contractVersion: number }>(
+  versions: T[],
+  disabledVersions: number[][],
+): T | null {
+  const disabled = new Set(disabledVersions.map((d) => d[0]));
+  const enabled = versions.filter((v) => !disabled.has(v.contractVersion));
+  if (enabled.length === 0) return null;
+  return enabled.reduce((best, v) => (v.contractVersion > best.contractVersion ? v : best));
+}
+
 function u64LeBytes(value: number | bigint): Uint8Array {
   const buf = new ArrayBuffer(8);
   new DataView(buf).setBigUint64(0, BigInt(value), true);
@@ -293,14 +308,6 @@ interface CloudDeploy {
   entry_point?: { name?: string } | null;
   entry_point_name?: string | null;
   args?: Record<string, { parsed?: unknown } | undefined> | null;
-}
-
-interface CloudContractPackage {
-  latest_version_contract_hash?: string;
-}
-
-interface CloudContract {
-  contract_hash?: string;
 }
 
 interface CloudAccount {
@@ -534,32 +541,36 @@ export class LiveCasperClient implements ChainClient {
 
   // ---- contract state reads ---------------------------------------------------
 
-  /** Resolves the active contract hash behind the registry package via CSPR.cloud. */
+  /**
+   * Resolves the active contract hash behind the registry package via node RPC
+   * (`query_global_state` on the package key) — no CSPR.cloud key required.
+   */
   private async resolveContractHash(): Promise<string> {
     const packageHash = this.requireContract();
     if (this.contractHashCache) return this.contractHashCache;
 
-    // ⚠️ verify against deployed contract — CSPR.cloud contract-package payload.
-    const pkg = await this.cloudGet<CloudItemEnvelope<CloudContractPackage>>(
-      `/contract-packages/${packageHash}`,
-      true,
+    const res = await withRpcTimeout(
+      'node RPC queryLatestGlobalState (package)',
+      this.cfg.upstreamTimeoutMs,
+      () => this.rpc.queryLatestGlobalState(`hash-${packageHash}`, []),
     );
-    let contractHash = pkg?.data?.latest_version_contract_hash ?? '';
-    if (contractHash === '') {
-      const contracts = await this.cloudGet<CloudListEnvelope<CloudContract>>(
-        `/contracts?contract_package_hash=${packageHash}&page_size=1`,
-        true,
-      );
-      contractHash = contracts?.data?.[0]?.contract_hash ?? '';
-    }
-    if (contractHash === '') {
+    const pkg = res.storedValue?.contractPackage;
+    if (!pkg) {
       throw new AgentGateError(
         'CONTRACT_RESOLVE_FAILED',
-        `cannot resolve a contract hash for package ${packageHash} via CSPR.cloud`,
+        `package hash-${packageHash} has no contractPackage stored value (node RPC)`,
         502,
       );
     }
-    this.contractHashCache = stripHashPrefix(contractHash);
+    const latest = pickLatestVersion(pkg.versions, pkg.disabledVersions);
+    if (!latest) {
+      throw new AgentGateError(
+        'CONTRACT_RESOLVE_FAILED',
+        `package hash-${packageHash} has no enabled contract versions`,
+        502,
+      );
+    }
+    this.contractHashCache = latest.contractHash.hash.toHex();
     return this.contractHashCache;
   }
 
