@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { createChainClient } from '@agentgate/chain';
 import {
   AgentGateError,
+  DEFAULT_GATEWAY_URL,
   formatCspr,
   isAgentGateError,
   loadConfig,
@@ -112,7 +113,9 @@ withConfigFlags(
     const config = cliConfig(opts);
     const chain = createChainClient(config);
     const signer = sellerSigner(config);
-    const gateway = opts.gateway ?? `http://localhost:${config.middlewarePort}`;
+    const gateway =
+      opts.gateway ??
+      (config.mode === 'live' ? DEFAULT_GATEWAY_URL : `http://localhost:${config.middlewarePort}`);
     const result = await wrapService({
       upstreamUrl,
       priceCspr: opts.price,
@@ -126,6 +129,7 @@ withConfigFlags(
       signer,
       adminToken: config.adminToken,
       mode: config.mode,
+      network: config.casperNetwork,
       timeoutMs: config.upstreamTimeoutMs,
     });
     console.log(`service id:      ${result.serviceId}`);

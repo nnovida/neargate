@@ -5,8 +5,8 @@ import type {
   Motes,
   RegisterServiceInput,
 } from '@agentgate/shared';
-import { AgentGateError, csprToMotes, parseMotes } from '@agentgate/shared';
-import { signerAccountHash, signerPublicKeyHex } from './identity';
+import { AgentGateError, buildSelfMapMessage, csprToMotes, parseMotes } from '@agentgate/shared';
+import { signerAccountHash, signerPublicKeyHex, signMessage } from './identity';
 import type { FetchLike } from './types';
 import {
   MAX_DESCRIPTION_LENGTH,
@@ -47,6 +47,8 @@ export interface WrapServiceOpts {
   adminToken: string;
   /** Runtime mode; in 'live' a non-localhost gateway must use https:// (token safety). */
   mode?: AgentGateMode;
+  /** Casper network name (live self-map signature). Defaults to '' (mock ignores it). */
+  network?: string;
   /** Timeout (ms) for the admin-mapping POST. Defaults to DEFAULT_WRAP_FETCH_TIMEOUT_MS. */
   timeoutMs?: number;
   fetchImpl?: FetchLike;
@@ -147,19 +149,42 @@ export async function wrapService(opts: WrapServiceOpts): Promise<WrapServiceRes
   const adminUrl = `${gatewayBase}/admin/services`;
 
   // -- step 2: gateway upstream mapping ---------------------------------------
+  // pem signer → owner-signature self-map (no admin token): sign a canonical
+  //   challenge with the seller key and POST it to <gateway>/services/<id>/map.
+  // mock signer → shared admin token POST to <gateway>/admin/services.
+  // (In production pem ⟺ live and mock ⟺ mock; keying off the signer keeps a
+  //  mock signer out of the self-map path even when mode is forced to 'live'.)
+  const useSelfMap = opts.signer.kind === 'pem';
+  const mapUrl = useSelfMap ? `${gatewayBase}/services/${serviceId}/map` : adminUrl;
   const fetchImpl: FetchLike = opts.fetchImpl ?? ((u, i) => fetch(u, i));
   const timeoutMs = opts.timeoutMs ?? DEFAULT_WRAP_FETCH_TIMEOUT_MS;
   let adminFailure: string | undefined;
   try {
-    const res = await fetchImpl(adminUrl, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${adminToken}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ serviceId, upstreamUrl }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    let init: Parameters<FetchLike>[1];
+    if (useSelfMap) {
+      const timestamp = Date.now();
+      const message = buildSelfMapMessage({
+        network: opts.network ?? '',
+        serviceId,
+        upstreamUrl,
+        timestamp,
+      });
+      const { publicKeyHex, signatureHex } = await signMessage(opts.signer, message);
+      init = {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ upstreamUrl, publicKeyHex, timestamp, signatureHex }),
+        signal: AbortSignal.timeout(timeoutMs),
+      };
+    } else {
+      init = {
+        method: 'POST',
+        headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ serviceId, upstreamUrl }),
+        signal: AbortSignal.timeout(timeoutMs),
+      };
+    }
+    const res = await fetchImpl(mapUrl, init);
     if (!res.ok) {
       const body = (await res.text().catch(() => '')).slice(0, 200);
       adminFailure = `gateway answered HTTP ${res.status}${body ? ` — ${body}` : ''}`;
@@ -176,11 +201,13 @@ export async function wrapService(opts: WrapServiceOpts): Promise<WrapServiceRes
     return { serviceId, txHash, publicUrl, dashboardUrl, adminOk: true };
   }
 
+  const retryHint = useSelfMap
+    ? 'The service is already registered — re-run the mapping once the gateway is reachable (do NOT re-run `wrap`, that registers a duplicate).'
+    : `Retry the mapping with (expects AGENTGATE_ADMIN_TOKEN in your environment):\n  ${adminRetryCurl(adminUrl, serviceId, upstreamUrl)}`;
   const adminWarning = [
-    `admin upstream mapping for service ${serviceId} failed: ${adminFailure}.`,
+    `gateway upstream mapping for service ${serviceId} failed: ${adminFailure}.`,
     `The on-chain registration (tx ${txHash}) was NOT rolled back — ${publicUrl} will 404 until the mapping exists.`,
-    'Retry the mapping with (expects AGENTGATE_ADMIN_TOKEN in your environment):',
-    `  ${adminRetryCurl(adminUrl, serviceId, upstreamUrl)}`,
+    retryHint,
   ].join('\n');
   console.error(`warning: ${adminWarning}`);
   return { serviceId, txHash, publicUrl, dashboardUrl, adminOk: false, adminWarning };

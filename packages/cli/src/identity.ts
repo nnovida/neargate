@@ -8,16 +8,29 @@ interface PemIdentity {
   accountHash: string; // "account-hash-<64 hex>"
 }
 
+/** Minimal structural view of a casper-js-sdk PrivateKey (avoids importing SDK types). */
+interface PrivateKeyLike {
+  publicKey: {
+    toHex(): string;
+    accountHash(): { toPrefixedString(): string };
+  };
+  signAndAddAlgorithmBytes(message: Uint8Array): Uint8Array;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 /**
- * Loads a Casper key PEM (live mode) and derives the public key hex + account hash.
+ * Reads a Casper key PEM (live mode) and returns the parsed private key.
  * casper-js-sdk is imported lazily so mock-mode commands never load the SDK.
  */
-async function pemIdentity(pemPath: string): Promise<PemIdentity> {
+async function loadPemPrivateKey(pemPath: string): Promise<PrivateKeyLike> {
   const path = pemPath.trim();
   if (path === '') {
     throw new AgentGateError(
       'SIGNER_MISSING',
-      'pem signer has an empty pemPath — set SELLER_SIGNER_PEM_PATH (or pass --payment-target / --attestor explicitly)',
+      'pem signer has an empty pemPath — pass --pem <path> or set SELLER_SIGNER_PEM_PATH',
       400,
     );
   }
@@ -59,24 +72,25 @@ async function pemIdentity(pemPath: string): Promise<PemIdentity> {
   const ns = await import('casper-js-sdk');
   const sdk = (ns as unknown as { default?: typeof ns }).default ?? ns;
   const { KeyAlgorithm, PrivateKey } = sdk;
-  const priv = (() => {
-    try {
-      return PrivateKey.fromPem(pem, KeyAlgorithm.ED25519);
-    } catch {
-      // fall through to secp256k1
-    }
-    try {
-      return PrivateKey.fromPem(pem, KeyAlgorithm.SECP256K1);
-    } catch {
-      throw new AgentGateError(
-        'SIGNER_PEM_INVALID',
-        `cannot parse ${path} as an ed25519 or secp256k1 Casper private key PEM`,
-        400,
-      );
-    }
-  })();
+  try {
+    return PrivateKey.fromPem(pem, KeyAlgorithm.ED25519) as unknown as PrivateKeyLike;
+  } catch {
+    // fall through to secp256k1
+  }
+  try {
+    return PrivateKey.fromPem(pem, KeyAlgorithm.SECP256K1) as unknown as PrivateKeyLike;
+  } catch {
+    throw new AgentGateError(
+      'SIGNER_PEM_INVALID',
+      `cannot parse ${path} as an ed25519 or secp256k1 Casper private key PEM`,
+      400,
+    );
+  }
+}
 
-  const pub = priv.publicKey;
+/** Public key hex + account hash derived from a PEM key. */
+async function pemIdentity(pemPath: string): Promise<PemIdentity> {
+  const pub = (await loadPemPrivateKey(pemPath)).publicKey;
   return { publicKeyHex: pub.toHex(), accountHash: pub.accountHash().toPrefixedString() };
 }
 
@@ -98,4 +112,28 @@ export async function signerAccountHash(signer: AnySigner): Promise<string> {
     return mockAccountHash(requirePublicKeyHex(signer.publicKey, 'signer.publicKey'));
   }
   return (await pemIdentity(signer.pemPath)).accountHash;
+}
+
+/**
+ * Signs `message` with a PEM signer for the gateway's owner-signature self-map
+ * auth. Returns the public key hex + the algorithm-tagged signature hex (from
+ * `signAndAddAlgorithmBytes`, which is what casper-js-sdk `verifySignature`
+ * expects). Only pem signers can sign — mock mode uses the admin-token path.
+ */
+export async function signMessage(
+  signer: AnySigner,
+  message: Uint8Array,
+): Promise<{ publicKeyHex: string; signatureHex: string }> {
+  if (signer.kind !== 'pem') {
+    throw new AgentGateError(
+      'SIGNER_UNSUPPORTED',
+      'self-service gateway mapping needs a pem signer (live mode) — pass --pem <path>',
+      400,
+    );
+  }
+  const priv = await loadPemPrivateKey(signer.pemPath);
+  return {
+    publicKeyHex: priv.publicKey.toHex(),
+    signatureHex: bytesToHex(priv.signAndAddAlgorithmBytes(message)),
+  };
 }

@@ -25,4 +25,4 @@ export {
   type DemoAccount,
   type DemoAccountsResult,
 } from './demo-accounts';
-export { signerAccountHash, signerPublicKeyHex } from './identity';
+export { signerAccountHash, signerPublicKeyHex, signMessage } from './identity';
