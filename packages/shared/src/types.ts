@@ -8,7 +8,7 @@ export interface ServiceRecord {
   endpointUrl: string;       // PUBLIC gateway URL (middleware /svc/:id) — never the upstream
   priceMotes: Motes;
   paymentTarget: string;     // "account-hash-<64hex>"
-  owner: string;             // public key hex ("01..."/"02...")
+  owner: string;             // live: "account-hash-<64hex>" (from the contract); mock: public key hex
   attestor: string;          // public key hex allowed to record attestations
   active: boolean;
   createdAt: number;         // unix ms
