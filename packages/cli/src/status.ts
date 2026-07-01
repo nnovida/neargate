@@ -21,8 +21,11 @@ export interface ServiceStatusResult {
 export async function serviceStatus(opts: {
   chain: ChainClient;
   id: number;
+  /** When false, skip the CSPR.cloud attestation fetch and return []. Default true. */
+  includeAttestations?: boolean;
 }): Promise<ServiceStatusResult> {
   const { chain, id } = opts;
+  const includeAttestations = opts.includeAttestations ?? true;
   if (!Number.isSafeInteger(id) || id < 1) {
     throw new AgentGateError(
       'INVALID_SERVICE_ID',
@@ -36,7 +39,9 @@ export async function serviceStatus(opts: {
   }
   const [score, attestations] = await Promise.all([
     chain.getScore(id),
-    chain.listAttestations(id, STATUS_ATTESTATION_LIMIT),
+    includeAttestations
+      ? chain.listAttestations(id, STATUS_ATTESTATION_LIMIT)
+      : Promise.resolve([] as AttestationRecord[]),
   ]);
   return { service, score, tier: trustTier(score), attestations };
 }

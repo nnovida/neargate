@@ -458,6 +458,21 @@ describe('serviceStatus', () => {
     expect(status.attestations).toEqual([attestation]);
   });
 
+  it('skips the attestation fetch when includeAttestations is false', async () => {
+    const chain = makeFakeChain();
+    chain.getService = async (id) => (id === 1 ? makeService(1) : null);
+    chain.getScore = async () => ({ totalCalls: 10, successCalls: 10 });
+    let listed = false;
+    chain.listAttestations = async () => {
+      listed = true;
+      return [];
+    };
+
+    const res = await serviceStatus({ chain, id: 1, includeAttestations: false });
+    expect(res.attestations).toEqual([]);
+    expect(listed).toBe(false);
+  });
+
   it('rejects unknown services with SERVICE_NOT_FOUND', async () => {
     const chain = makeFakeChain();
     await expect(serviceStatus({ chain, id: 99 })).rejects.toMatchObject({
