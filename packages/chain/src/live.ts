@@ -296,6 +296,8 @@ interface CloudTransfer {
   from_account_hash?: string | null;
   initiator_account_hash?: string | null;
   amount?: string | number;
+  /** `GET /deploys/<hash>/transfers` calls it `id`; the legacy `/transfers` used `transfer_id`. */
+  id?: string | number | null;
   transfer_id?: string | number | null;
   timestamp?: string;
 }
@@ -811,10 +813,10 @@ export class LiveCasperClient implements ChainClient {
     return parseCloudAmount(res.data.balance).toString();
   }
 
-  /** SPEC §4: CSPR.cloud `GET /transfers?deploy_hash=` → target/amount/id/age checks. */
+  /** CSPR.cloud `GET /deploys/<hash>/transfers` → target/amount/id/age checks. */
   async verifyTransfer(q: VerifyTransferQuery): Promise<VerifyResult> {
     const res = await this.cloudGet<CloudListEnvelope<CloudTransfer>>(
-      `/transfers?deploy_hash=${encodeURIComponent(q.deployHash)}`,
+      `/deploys/${encodeURIComponent(q.deployHash)}/transfers`,
       true,
     );
     const transfers = res?.data ?? [];
@@ -840,9 +842,9 @@ export class LiveCasperClient implements ChainClient {
     const amount = parseCloudAmount(match.amount);
     if (amount < BigInt(q.minAmountMotes)) return { ok: false, reason: 'amount_too_low' };
 
-    const transferId = match.transfer_id === null || match.transfer_id === undefined
-      ? ''
-      : String(match.transfer_id);
+    // New endpoint exposes the transfer id as `id`; the legacy one used `transfer_id`.
+    const rawId = match.id ?? match.transfer_id;
+    const transferId = rawId === null || rawId === undefined ? '' : String(rawId);
     if (transferId === '' || BigInt(transferId) !== BigInt(q.expectedTransferId)) {
       return { ok: false, reason: 'wrong_transfer_id' };
     }

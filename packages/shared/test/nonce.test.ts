@@ -1,23 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { randomNonce } from '../src/index';
 
-const U63_MAX = (1n << 63n) - 1n; // 9223372036854775807
-const U64_MAX = (1n << 64n) - 1n;
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER); // 2^53 - 1
 
 describe('randomNonce', () => {
   it('returns a plain decimal string', () => {
     const n = randomNonce();
     expect(n).toMatch(/^\d+$/);
-    // No leading zeros unless the value itself is 0.
-    if (n !== '0') expect(n.startsWith('0')).toBe(false);
+    expect(n.startsWith('0')).toBe(false);
   });
 
-  it('stays within the 63-bit range (always a valid u64 transfer_id)', () => {
-    for (let i = 0; i < 1000; i++) {
-      const v = BigInt(randomNonce());
-      expect(v >= 0n).toBe(true);
-      expect(v <= U63_MAX).toBe(true);
-      expect(v <= U64_MAX).toBe(true);
+  it('is a positive safe integer that survives a JSON float64 round-trip exactly', () => {
+    // Regression: CSPR.cloud returns a transfer's `id` as a JS number, so a
+    // nonce above Number.MAX_SAFE_INTEGER loses its low digits and can never be
+    // matched on verification. Every nonce must round-trip through float64.
+    for (let i = 0; i < 2000; i++) {
+      const n = randomNonce();
+      const v = BigInt(n);
+      expect(v >= 1n).toBe(true);
+      expect(v <= MAX_SAFE).toBe(true);
+      expect(String(Number(n))).toBe(n);
     }
   });
 
