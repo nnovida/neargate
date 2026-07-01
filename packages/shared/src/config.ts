@@ -6,6 +6,10 @@ export type AgentGateMode = 'mock' | 'live';
 /** The shipped default admin token. loadConfig() refuses it in live mode. */
 export const DEFAULT_ADMIN_TOKEN = 'dev-admin-token';
 
+/** The deployed AgentGateRegistry package hash on Casper Testnet (SPEC deploy). */
+export const DEFAULT_REGISTRY_PACKAGE_HASH =
+  'hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9';
+
 export interface AgentGateConfig {
   mode: AgentGateMode;
   // ports
@@ -106,7 +110,11 @@ function readBool01(env: Env, key: string, fallback: boolean): boolean {
  * - live mode without CSPR_CLOUD_API_KEY
  * - live mode with the default admin token
  */
-export function loadConfig(env: Env = process.env): AgentGateConfig {
+export function loadConfig(
+  env: Env = process.env,
+  opts: { requireCloudKey?: boolean } = {},
+): AgentGateConfig {
+  const requireCloudKey = opts.requireCloudKey ?? true;
   const modeRaw = readStr(env, 'AGENTGATE_MODE', 'mock');
   if (modeRaw !== 'mock' && modeRaw !== 'live') {
     throw configError(`AGENTGATE_MODE must be "mock" or "live", got ${JSON.stringify(modeRaw)}`);
@@ -166,7 +174,7 @@ export function loadConfig(env: Env = process.env): AgentGateConfig {
   const mockSellerAccount = readStr(env, 'MOCK_SELLER_ACCOUNT', '');
 
   if (mode === 'live') {
-    if (csprCloudApiKey === '') {
+    if (requireCloudKey && csprCloudApiKey === '') {
       throw configError('live mode requires CSPR_CLOUD_API_KEY (get one at console.cspr.cloud)');
     }
     if (adminToken === DEFAULT_ADMIN_TOKEN) {

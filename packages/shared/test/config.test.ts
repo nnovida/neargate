@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { AgentGateError, DEFAULT_ADMIN_TOKEN, loadConfig } from '../src/index';
+import {
+  AgentGateError,
+  DEFAULT_ADMIN_TOKEN,
+  DEFAULT_REGISTRY_PACKAGE_HASH,
+  loadConfig,
+} from '../src/index';
 
 describe('loadConfig — mock mode defaults', () => {
   it('loads all defaults from an empty env', () => {
@@ -116,5 +121,34 @@ describe('loadConfig — live mode combos', () => {
       expect((err as AgentGateError).code).toBe('CONFIG_INVALID');
       expect((err as AgentGateError).httpStatus).toBe(500);
     }
+  });
+});
+
+describe('loadConfig — requireCloudKey opt-out (CLI reads)', () => {
+  it('still throws in live mode without a key by default', () => {
+    expect(() =>
+      loadConfig({ AGENTGATE_MODE: 'live', AGENTGATE_ADMIN_TOKEN: 'a-strong-unique-token' }),
+    ).toThrow(/CSPR_CLOUD_API_KEY/);
+  });
+
+  it('allows live mode without a key when requireCloudKey is false', () => {
+    const cfg = loadConfig(
+      { AGENTGATE_MODE: 'live', AGENTGATE_ADMIN_TOKEN: 'a-strong-unique-token' },
+      { requireCloudKey: false },
+    );
+    expect(cfg.mode).toBe('live');
+    expect(cfg.csprCloudApiKey).toBe('');
+  });
+
+  it('still enforces the non-default admin token in live mode even when requireCloudKey is false', () => {
+    expect(() => loadConfig({ AGENTGATE_MODE: 'live' }, { requireCloudKey: false })).toThrow(
+      /ADMIN_TOKEN/,
+    );
+  });
+
+  it('exposes the deployed registry package hash constant', () => {
+    expect(DEFAULT_REGISTRY_PACKAGE_HASH).toBe(
+      'hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9',
+    );
   });
 });
