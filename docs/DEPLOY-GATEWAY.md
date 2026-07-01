@@ -70,3 +70,61 @@ for the native-transfer settlement rail.
   group/other-readable.
 - Until this gateway is live, sellers can point `--gateway http://localhost:4021`
   at a locally-run middleware.
+
+## This box's setup (cloudflared, matches the dashboard)
+
+The repo already runs live via `scripts/live.ts` and this box already tunnels the
+dashboard through cloudflared. Mirror that for the gateway.
+
+**1. Run the gateway durably** (the dev process is session-scoped):
+
+```bash
+# quick: nohup npm run dev:live > gateway.log 2>&1 &
+# durable (recommended): systemd --user unit shipped at deploy/agentgate-gateway.service
+mkdir -p ~/.config/systemd/user
+cp deploy/agentgate-gateway.service ~/.config/systemd/user/
+loginctl enable-linger "$USER"
+systemctl --user daemon-reload
+systemctl --user enable --now agentgate-gateway
+curl -s http://127.0.0.1:4021/healthz    # {"ok":true,"network":"casper-test"}
+```
+
+**2. Set `TRUST_PROXY=1` in `.env`** (behind exactly one Cloudflare hop) so the
+rate limiter keys off the real client IP, then restart the unit.
+
+**3. Expose `gateway.example.org` → `http://localhost:4021`** — pick one:
+
+- **A — add a public hostname to the existing (dashboard) tunnel** (fastest, no
+  second process): Cloudflare **Zero Trust → Networks → Tunnels →** the dashboard
+  tunnel **→ Public Hostnames → Add** → subdomain `gateway`, domain
+  `example.org`, service `HTTP → localhost:4021`. Done — no CLI, no code change
+  (`DEFAULT_GATEWAY_URL` already points here).
+
+- **B — a dedicated locally-managed tunnel** (all CLI; uses the existing
+  `~/.cloudflared/cert.pem`):
+
+  ```bash
+  cloudflared tunnel create agentgate-gateway
+  cloudflared tunnel route dns agentgate-gateway gateway.example.org
+  # ~/.cloudflared/agentgate-gateway.yml:
+  #   tunnel: <UUID printed by create>
+  #   credentials-file: ~/.cloudflared/<UUID>.json
+  #   ingress:
+  #     - hostname: gateway.example.org
+  #       service: http://localhost:4021
+  #     - service: http_status:404
+  cloudflared tunnel --config ~/.cloudflared/agentgate-gateway.yml run agentgate-gateway
+  ```
+
+**4. Verify publicly:**
+
+```bash
+curl -s https://gateway.example.org/healthz     # {"ok":true,"network":"casper-test"}
+# from any box with a funded wallet key:
+npx @neargate/cli wrap https://open.er-api.com/v6/latest/USD --price 2.5 --name "USD FX" --pem ./key.pem
+curl -i https://gateway.example.org/svc/<id>     # 402 challenge
+```
+
+Note: a public gateway spends the gate key's CSPR on an on-chain attestation per
+**successful paid** call (buyers pay first, so it is self-limiting, not an open
+drain). Keep the gate key funded.

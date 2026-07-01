@@ -1,0 +1,27 @@
+# systemd --user unit: keeps the AgentGate live gateway (402 paywall middleware)
+# running + auto-restarting on :4021. Install:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/agentgate-gateway.service ~/.config/systemd/user/
+#   loginctl enable-linger "$USER"          # survive logout / start on boot
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now agentgate-gateway
+#   systemctl --user status agentgate-gateway
+#   journalctl --user -u agentgate-gateway -f
+#
+# Reads config from the repo's root .env via scripts/live.ts.
+[Unit]
+Description=AgentGate live 402 gateway (middleware)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=~/projects/Dorahacks/casper
+# Login shell so PATH picks up node/npm/tsx from the user's profile.
+ExecStart=/bin/bash -lc 'exec npm run dev:live'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
