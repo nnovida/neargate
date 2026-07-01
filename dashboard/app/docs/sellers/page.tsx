@@ -14,7 +14,12 @@ import {
   StepFlow,
 } from '@/components/docs';
 
-export const metadata = { title: 'Wrap an API' };
+export const metadata = {
+  title: 'Wrap an API',
+  description:
+    'Put an HTTP 402 paywall in front of your upstream API in one command: set a per-call price in CSPR, register the service on-chain, and collect native CSPR payments straight to your account.',
+  alternates: { canonical: '/docs/sellers' },
+};
 
 export default function Page() {
   return (

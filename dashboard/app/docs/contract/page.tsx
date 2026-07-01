@@ -15,6 +15,7 @@ import {
 } from '@/components/docs';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/docs/contract' },
   title: 'Smart contracts',
   description:
     'Reference for the AgentGate Odra/Rust contracts: AgentGateRegistry (service registry + attestation reputation) and SpendGuard (x402 spend-firewall escrow) — storage, entrypoints, events, error codes, and build/deploy.',

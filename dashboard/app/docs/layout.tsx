@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { DocsSidebar, DocsTopNav, OnThisPage } from '@/components/docs-nav';
+import { DocsSearch } from '@/components/docs-search';
 
 /* Server shell for the docs section: a sticky grouped sidebar on desktop, a
    compact horizontal nav on mobile, a comfortable prose column, and an
@@ -16,6 +17,9 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
         </div>
       </aside>
       <div className="min-w-0 flex-1">
+        <div className="mx-auto mb-6 max-w-3xl">
+          <DocsSearch />
+        </div>
         <div className="mb-8 lg:hidden">
           <DocsTopNav />
         </div>

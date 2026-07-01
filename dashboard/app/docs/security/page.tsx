@@ -14,6 +14,7 @@ import {
 import { CommandBlock } from '@/components/copy';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/docs/security' },
   title: 'Security model',
   description:
     'How AgentGate defends a money-moving gateway: SSRF guards against seller-controlled URLs, fail-closed live configuration, single-use payment nonces, secret redaction, rate limiting, request limits, and prompt-injection containment.',

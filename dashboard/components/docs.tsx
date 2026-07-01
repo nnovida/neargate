@@ -1,8 +1,11 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { CopyButton } from './copy';
+import { DOCS_VERSION, REGISTRY_HASH_SHORT } from '@/lib/version';
 
-/* Server-side building blocks for the /docs section. No client code here —
-   interactive pieces (copy buttons, active nav) live in copy.tsx / docs-nav.tsx. */
+/* Server-side building blocks for the /docs section. The only interactive piece
+   is the client CopyButton (from copy.tsx) embedded in CodeBlock and StepFlow;
+   active-nav and scroll-spy live in docs-nav.tsx. */
 
 /** Page header — same microlabel + h1 + lede pattern as app/catalog/page.tsx. */
 export function DocHeader({
@@ -21,6 +24,12 @@ export function DocHeader({
         {title}
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-6 text-mut">{lede}</p>
+      <div className="mt-4 flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-400">
+        <span className="border border-line px-2 py-0.5">CLI v{DOCS_VERSION.cli}</span>
+        <span className="border border-line px-2 py-0.5">SDK v{DOCS_VERSION.sdk}</span>
+        <span className="border border-line px-2 py-0.5">registry {REGISTRY_HASH_SHORT}</span>
+        <span className="border border-line px-2 py-0.5">{DOCS_VERSION.network}</span>
+      </div>
     </header>
   );
 }
@@ -115,7 +124,10 @@ export function DocTable({ head, rows }: { head: ReactNode[]; rows: ReactNode[][
 export function CodeBlock({ code, label }: { code: string; label?: string }) {
   return (
     <div className="panel mt-5 bg-[#070A0F]">
-      {label ? <p className="microlabel border-b border-line px-4 py-2">{label}</p> : null}
+      <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-2">
+        {label ? <p className="microlabel">{label}</p> : <span aria-hidden />}
+        <CopyButton text={code} />
+      </div>
       <pre className="overflow-x-auto px-4 py-3 font-mono text-[12.5px] leading-6 text-zinc-300">
         {code}
       </pre>
@@ -164,9 +176,12 @@ export function StepFlow({
             <h3 className="font-display text-base font-semibold text-white">{step.title}</h3>
             <div className="mt-1.5 text-sm leading-6 text-mut">{step.body}</div>
             {step.code ? (
-              <code className="mt-3 block overflow-x-auto whitespace-pre border border-line bg-[#070A0F] px-3 py-2 font-mono text-[11px] text-zinc-300">
-                {step.code}
-              </code>
+              <div className="mt-3 flex items-start gap-3 border border-line bg-[#070A0F] px-3 py-2">
+                <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre font-mono text-[11px] leading-6 text-zinc-300">
+                  {step.code}
+                </code>
+                <CopyButton text={step.code} className="mt-0.5" />
+              </div>
             ) : null}
           </div>
         </li>
@@ -243,18 +258,18 @@ export function PropList({
         <div key={it.name} className="py-3.5">
           <dt className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <code className="font-mono text-[13px] text-white">{it.name}</code>
-            {it.type ? <span className="font-mono text-[11px] text-zinc-500">{it.type}</span> : null}
+            {it.type ? <span className="font-mono text-[11px] text-zinc-400">{it.type}</span> : null}
             {it.required ? (
               <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-accent">
                 required
               </span>
             ) : (
-              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-600">
+              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-400">
                 optional
               </span>
             )}
             {it.default ? (
-              <span className="font-mono text-[11px] text-zinc-500">default {it.default}</span>
+              <span className="font-mono text-[11px] text-zinc-400">default {it.default}</span>
             ) : null}
           </dt>
           <dd className="mt-1.5 text-[13px] leading-6 text-mut">{it.desc}</dd>

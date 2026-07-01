@@ -14,6 +14,7 @@ import {
 } from '@/components/docs';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/docs/installation' },
   title: 'Installation',
   description:
     'Requirements, clone-and-install, the workspace layout, mock vs live mode, the environment file, and how to verify your install passes tests, typecheck and the one-shot demo.',
@@ -188,9 +189,10 @@ export default function InstallationPage() {
 
       <H2 id="modes">Modes — mock vs live</H2>
       <P>
-        The <M>AGENTGATE_MODE</M> environment variable (default <M>mock</M>) selects the chain
-        backend behind the <M>ChainClient</M> seam. Everything above that seam — the gateway, CLI,
-        buyer agent and dashboard — is byte-for-byte identical in both modes.
+        The <M>AGENTGATE_MODE</M> environment variable selects the chain backend behind the{' '}
+        <M>ChainClient</M> seam. The stack (gateway, buyer agent, dashboard) defaults to <M>mock</M> via{' '}
+        <M>loadConfig()</M>; the published <M>npx</M> CLI defaults to <M>live</M>. Everything above that
+        seam — the gateway, CLI, buyer agent and dashboard — is byte-for-byte identical in both modes.
       </P>
       <DocTable
         head={['Aspect', 'mock', 'live (Casper Testnet)']}

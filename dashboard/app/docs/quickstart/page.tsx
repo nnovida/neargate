@@ -15,6 +15,7 @@ import {
 } from '@/components/docs';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/docs/quickstart' },
   title: 'Quickstart',
   description:
     'From a clean clone to a verified register → 402 → pay → serve → attest → score loop in about a minute. Run the offline demo, view it live in the dashboard, then drive your first manual wrap by hand. Mock mode — no testnet keys or network required.',
@@ -65,9 +66,11 @@ export default function Page() {
       />
       <Callout tone="info" title="Two modes, one code path">
         <M>AGENTGATE_MODE</M> selects the chain backend behind the <M>ChainClient</M> seam:{' '}
-        <M>mock</M> (default — the in-process devnet used throughout this page, fully offline) or{' '}
-        <M>live</M> (Casper Testnet, which needs PEM keys and a CSPR.cloud API key). Everything
-        above the seam is identical. See <DocLink href="/docs/configuration">Configuration</DocLink>.
+        <M>mock</M> (the in-process devnet used throughout this page, fully offline) or{' '}
+        <M>live</M> (Casper Testnet, which needs PEM keys and a CSPR.cloud API key). The stack
+        defaults to <M>mock</M> via <M>loadConfig()</M>, but the <M>agentgate</M> CLI defaults to{' '}
+        <M>live</M> — so the manual CLI commands below pass <M>--mode mock</M>. Everything above the
+        seam is identical. See <DocLink href="/docs/configuration">Configuration</DocLink>.
       </Callout>
 
       <H2 id="offline-demo">60-second offline demo</H2>
@@ -187,13 +190,13 @@ export default function Page() {
       />
       <Callout tone="info" title="Where the accounts come from">
         <M>npm run dev</M> seeds the devnet faucet and prints the exports for you. You can also
-        mint a fresh pair any time with <M>npm run agentgate -- demo-accounts</M>. Both the buyer
+        mint a fresh pair any time with <M>npm run agentgate -- demo-accounts --mode mock</M>. Both the buyer
         agent and <M>agentgate wrap</M> read these env vars to find their mock signer.
       </Callout>
       <H3 id="manual-wrap-cmd">Wrap an API (seller side)</H3>
       <CommandBlock
         wrap
-        text={'npm run agentgate -- wrap http://localhost:4010/feed --price 0.5 --name "RWA FX & Gold Oracle"'}
+        text={'npm run agentgate -- wrap http://localhost:4010/feed --price 0.5 --name "RWA FX & Gold Oracle" --mode mock'}
       />
       <P>
         This registers the service on-chain (name, gateway URL, price in motes, payment target,

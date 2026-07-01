@@ -13,6 +13,7 @@ import {
 } from '@/components/docs';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/docs/architecture' },
   title: 'Architecture',
   description:
     'How AgentGate fits together: the monorepo packages and their roles, the ChainClient seam that swaps mock and live backends, the 402 reverse-proxy data flow, where state lives, and the tech stack.',
@@ -159,8 +160,9 @@ export default function ArchitecturePage() {
       <P>
         There are exactly two implementations of that interface, both in{' '}
         <M>packages/chain</M>. Which one is constructed is selected at startup by{' '}
-        <M>AGENTGATE_MODE</M> (default <M>mock</M>); the gateway, CLI, buyer agent, and dashboard all
-        receive an injected <M>ChainClient</M> and are identical regardless of backend.
+        <M>AGENTGATE_MODE</M>; the gateway, buyer agent, and dashboard default to <M>mock</M> via{' '}
+        <M>loadConfig()</M>, while the published CLI defaults to <M>live</M>. All of them receive an
+        injected <M>ChainClient</M> and are identical regardless of backend.
       </P>
       <DocTable
         head={['Aspect', 'MockChainHttpClient', 'LiveCasperClient']}

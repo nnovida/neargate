@@ -13,6 +13,7 @@ import {
 } from '@/components/docs';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/docs' },
   title: 'Overview',
   description:
     'What AgentGate is, the HTTP 402 + Casper mental model, the seller / buyer / operator roles, mock vs live modes, and a map of the full documentation.',
@@ -128,9 +129,10 @@ export default function Page() {
 
       <H2 id="modes">Mock vs live modes</H2>
       <P>
-        A single environment variable — <M>AGENTGATE_MODE</M> (default <M>mock</M>) — selects the
-        chain backend behind the <M>ChainClient</M> seam. Everything above that seam is identical, so
-        you build and test offline and flip one flag to go on-chain.
+        A single environment variable — <M>AGENTGATE_MODE</M> — selects the chain backend behind the{' '}
+        <M>ChainClient</M> seam. The stack (gateway, buyer agent, dashboard) defaults to <M>mock</M> via{' '}
+        <M>loadConfig()</M>, while the published <M>npx</M> CLI defaults to <M>live</M>. Everything above
+        the seam is identical, so you build and test offline and flip one flag to go on-chain.
       </P>
       <DocTable
         head={['Concern', 'mock (default)', 'live (Casper Testnet)']}
@@ -178,7 +180,7 @@ export default function Page() {
         reads Casper Testnet with no keys.
       </Callout>
 
-      <H2 id="get-started">Browse the docs — Get started</H2>
+      <H2 id="get-started">Get started</H2>
       <CardGrid
         cards={[
           {
@@ -194,7 +196,7 @@ export default function Page() {
         ]}
       />
 
-      <H2 id="guides">Guides</H2>
+      <H2 id="for-sellers">For sellers</H2>
       <CardGrid
         cards={[
           {
@@ -203,10 +205,32 @@ export default function Page() {
             desc: 'Put a 402 paywall in front of your upstream in one command, set a per-call price in CSPR, register on-chain, and collect payments straight to your account.',
           },
           {
+            href: '/docs/cli',
+            title: 'CLI',
+            desc: 'agentgate wrap, list, status, pause, resume, and demo-accounts — flags, environment, output, and exit codes.',
+          },
+        ]}
+      />
+
+      <H2 id="for-buyers">For buyers</H2>
+      <CardGrid
+        cards={[
+          {
             href: '/docs/buyers',
             title: 'Build an agent',
             desc: 'Discover services on-chain, parse the 402, pay with a native CSPR transfer, and retry with proof — via the buyer agent, the client SDK, or plain curl.',
           },
+          {
+            href: '/docs/sdk',
+            title: 'Client SDK',
+            desc: 'The agent-side fetchPaid helper that parses a 402, pays, and retries — signatures, options, and return shapes.',
+          },
+        ]}
+      />
+
+      <H2 id="run-a-gateway">Run a gateway</H2>
+      <CardGrid
+        cards={[
           {
             href: '/docs/deployment',
             title: 'Deploy to production',
@@ -240,19 +264,9 @@ export default function Page() {
       <CardGrid
         cards={[
           {
-            href: '/docs/cli',
-            title: 'CLI',
-            desc: 'agentgate wrap, list, status, pause, resume, and demo-accounts — flags, environment, output, and exit codes.',
-          },
-          {
             href: '/docs/api',
             title: 'HTTP API',
             desc: 'Every surface: the middleware paywall and admin API, the oracle feed, the mock devnet routes, and the dashboard /api endpoints.',
-          },
-          {
-            href: '/docs/sdk',
-            title: 'Client SDK',
-            desc: 'The agent-side fetchPaid helper that parses a 402, pays, and retries — signatures, options, and return shapes.',
           },
           {
             href: '/docs/configuration',
@@ -268,6 +282,11 @@ export default function Page() {
             href: '/docs/errors',
             title: 'Error codes',
             desc: 'The full table of 402 and gateway error codes, what each one means, and how a buying agent should respond.',
+          },
+          {
+            href: '/docs/changelog',
+            title: 'Changelog',
+            desc: 'Notable changes to the CLI, gateway, smart contracts and docs — newest first.',
           },
         ]}
       />

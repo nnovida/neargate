@@ -3,74 +3,10 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { DOC_GROUPS, DOC_LINKS } from '@/lib/doc-links';
 
-interface DocLink {
-  href: string;
-  label: string;
-}
-interface DocGroup {
-  label: string;
-  /** One-line descriptor shown under the group label to orient the reader. */
-  hint?: string;
-  links: DocLink[];
-}
-
-/**
- * Role-oriented IA: Get started → For sellers → For buyers → Run a gateway →
- * Concepts → Reference. Each role section gathers that role's guide + its primary
- * tool (sellers: CLI, buyers: SDK) so a reader sees their parts in one place.
- */
-export const DOC_GROUPS: DocGroup[] = [
-  {
-    label: 'Get started',
-    links: [
-      { href: '/docs', label: 'Overview' },
-      { href: '/docs/quickstart', label: 'Quickstart' },
-      { href: '/docs/installation', label: 'Installation' },
-    ],
-  },
-  {
-    label: 'For sellers',
-    hint: 'Wrap your HTTP API into a paid, on-chain service.',
-    links: [
-      { href: '/docs/sellers', label: 'Wrap an API' },
-      { href: '/docs/cli', label: 'CLI' },
-    ],
-  },
-  {
-    label: 'For buyers',
-    hint: 'Build an agent that discovers, pays and rates services.',
-    links: [
-      { href: '/docs/buyers', label: 'Build an agent' },
-      { href: '/docs/sdk', label: 'Client SDK' },
-    ],
-  },
-  {
-    label: 'Run a gateway',
-    hint: 'Self-host the 402 middleware, or use the hosted one.',
-    links: [{ href: '/docs/deployment', label: 'Deploy to production' }],
-  },
-  {
-    label: 'Concepts',
-    links: [
-      { href: '/docs/protocol', label: 'How it works' },
-      { href: '/docs/architecture', label: 'Architecture' },
-      { href: '/docs/security', label: 'Security model' },
-    ],
-  },
-  {
-    label: 'Reference',
-    links: [
-      { href: '/docs/api', label: 'HTTP API' },
-      { href: '/docs/configuration', label: 'Configuration' },
-      { href: '/docs/contract', label: 'Smart contracts' },
-      { href: '/docs/errors', label: 'Error codes' },
-    ],
-  },
-];
-
-/** Flat, ordered list (derived) — used for prev/next and any flat consumer. */
-export const DOC_LINKS = DOC_GROUPS.flatMap((g) => g.links);
+// Re-exported so existing importers of these from '@/components/docs-nav' keep working.
+export { DOC_GROUPS, DOC_LINKS };
 
 function isActive(pathname: string, href: string): boolean {
   if (href === '/docs') return pathname === '/docs';

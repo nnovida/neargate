@@ -15,6 +15,7 @@ import {
 } from '@/components/docs';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/docs/cli' },
   title: 'CLI',
   description:
     'Reference for the agentgate CLI: wrap, list, status, pause, resume and demo-accounts. Every flag, argument, default and example output, verified against packages/cli/src/bin.ts.',
@@ -158,6 +159,49 @@ export default function Page() {
         ]}
       />
 
+      <H3 id="config-flags">Config flags</H3>
+      <P>
+        Each of these overrides the matching environment variable (<M>flag &gt; env &gt; default</M>).{' '}
+        <M>--mode</M>, <M>--node-url</M> and <M>--registry</M> are accepted by all six commands; the
+        signer and key flags are read only by the commands that need them.
+      </P>
+      <DocTable
+        head={['Flag', 'Overrides', 'Default', 'Used by']}
+        rows={[
+          [<M key="f1">--mode {'<mock|live>'}</M>, <M key="e1">AGENTGATE_MODE</M>, <M key="d1">live</M>, 'all commands'],
+          [<M key="f2">--node-url {'<url>'}</M>, <M key="e2">CASPER_NODE_URL</M>, 'Casper Testnet', 'all commands'],
+          [
+            <M key="f3">--registry {'<hash>'}</M>,
+            <M key="e3">REGISTRY_CONTRACT_PACKAGE_HASH</M>,
+            'the deployed package hash',
+            'all commands',
+          ],
+          [
+            <M key="f4">--pem {'<path>'}</M>,
+            <M key="e4">SELLER_SIGNER_PEM_PATH</M>,
+            <M key="d4">(none)</M>,
+            'wrap, pause, resume (live writes)',
+          ],
+          [
+            <M key="f5">--admin-token {'<token>'}</M>,
+            <M key="e5">AGENTGATE_ADMIN_TOKEN</M>,
+            <M key="d5">dev-admin-token</M>,
+            'wrap (mock / self-hosted admin)',
+          ],
+          [
+            <M key="f6">--api-key {'<key>'}</M>,
+            <M key="e6">CSPR_CLOUD_API_KEY</M>,
+            <M key="d6">(none)</M>,
+            'status (attestation history)',
+          ],
+        ]}
+      />
+      <Callout tone="warn" title="Secrets on the command line">
+        <M>--pem</M> is a path (safe), but <M>--admin-token</M> and <M>--api-key</M> put the secret
+        itself into shell history and <M>ps</M> output. Prefer the environment variable for those two
+        in any shared or CI environment.
+      </Callout>
+
       {/* ───────────────────────────── wrap ───────────────────────────── */}
       <H2 id="wrap">wrap</H2>
       <P>
@@ -222,6 +266,11 @@ export default function Page() {
           ],
         ]}
       />
+      <P>
+        <M>wrap</M> also reads the <DocLink href="#config-flags">config flags</DocLink> — most
+        importantly <M>--pem</M> (required for live writes) and <M>--admin-token</M> (mock or
+        self-hosted admin mapping).
+      </P>
       <H3 id="wrap-example">Example</H3>
       <CommandBlock
         wrap
@@ -297,19 +346,24 @@ export default function Page() {
         Show one service in depth: the full record, its score, trust tier and recent
         attestations.
       </P>
-      <CommandBlock text="npx @neargate/cli status <id>" />
+      <CommandBlock text="npx @neargate/cli status <id> [--api-key <key>]" />
       <DocTable
-        head={['Argument', 'Required', 'Rule']}
+        head={['Argument / flag', 'Required', 'Rule']}
         rows={[
           [
             <M key="i">{'<id>'}</M>,
             'yes',
             'Positive integer (1-based). A non-numeric or < 1 value throws INVALID_SERVICE_ID; an id with no on-chain record throws SERVICE_NOT_FOUND.',
           ],
+          [
+            <M key="k">--api-key {'<key>'}</M>,
+            'no',
+            'CSPR.cloud key used only to fetch attestation history (overrides CSPR_CLOUD_API_KEY). Without it, the record, score and tier still print but attestation history is skipped.',
+          ],
         ]}
       />
       <CodeBlock
-        label="output"
+        label="output — default (no key)"
         code={[
           'service:        #1 Gold Spot Feed',
           'description:    USD spot gold with confidence',
@@ -319,6 +373,19 @@ export default function Page() {
           'owner:          01<publicKeyHex>',
           'attestor:       01<publicKeyHex>',
           'trust:          reliable (9/10 calls ok)',
+          'attestations:   (set CSPR_CLOUD_API_KEY or pass --api-key to view history)',
+        ].join('\n')}
+      />
+      <P>
+        The record, score and trust tier always print with no keys. Attestation history is the one
+        part that needs a <DocLink href="#config-flags">CSPR.cloud key</DocLink>: without{' '}
+        <M>--api-key</M> (or <M>CSPR_CLOUD_API_KEY</M>) the last line is the hint above and the
+        command stops. Pass the key to fetch the newest attestations:
+      </P>
+      <CodeBlock
+        label="output — with --api-key"
+        code={[
+          'trust:          reliable (9/10 calls ok)',
           'attestations (latest 10):',
           '  [ok  ] 2026-06-12T10:30:05.123Z  payment a1b2c3d4e5f6  tx b2c3d4e5f6a1',
           '  [FAIL] 2026-06-12T09:14:44.001Z  payment 9f8e7d6c5b4a  tx 8e7d6c5b4a39',
@@ -326,10 +393,9 @@ export default function Page() {
       />
       <P>
         At most 10 attestations are shown (<M>STATUS_ATTESTATION_LIMIT</M>), newest first, each
-        prefixed <M>[ok  ]</M> or <M>[FAIL]</M>. With none, it prints{' '}
-        <M>attestations:   none yet</M> and stops. An inactive service is tagged{' '}
-        <M>[INACTIVE]</M> after its name, and the <M>description:</M> line is omitted when the
-        description is empty.
+        prefixed <M>[ok  ]</M> or <M>[FAIL]</M>; with a key but no attestations yet it prints{' '}
+        <M>attestations:   none yet</M>. An inactive service is tagged <M>[INACTIVE]</M> after its
+        name, and the <M>description:</M> line is omitted when the description is empty.
       </P>
 
       {/* ───────────────────────────── pause ───────────────────────────── */}
@@ -361,7 +427,7 @@ export default function Page() {
       />
       <P>
         Like <M>wrap</M>, <M>pause</M> resolves the owner signer from{' '}
-        <M>MOCK_SELLER_ACCOUNT</M> (mock) or <M>SELLER_SIGNER_PEM_PATH</M> (live). If the
+        <M>MOCK_SELLER_ACCOUNT</M> (mock) or <M>SELLER_SIGNER_PEM_PATH</M> / <M>--pem</M> (live). If the
         signing key is not the service owner, the chain&apos;s 403 is reworded into a clear
         owner-only <M>not_authorized</M> error.
       </P>

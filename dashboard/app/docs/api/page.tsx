@@ -16,6 +16,7 @@ import {
 import { CommandBlock } from '@/components/copy';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/docs/api' },
   title: 'HTTP API',
   description:
     'Reference for every AgentGate HTTP endpoint: the 402 paywall gateway (health, public metadata, the paywalled proxy, self-service upstream mapping, and the admin API) and the dashboard read-only /api routes.',
@@ -793,8 +794,8 @@ export default function Page() {
 
       <NextLinks
         links={[
-          { href: '/docs/buyers', label: 'Client SDK' },
-          { href: '/docs/protocol#invoice-rejection-fields', label: 'Error codes' },
+          { href: '/docs/sdk', label: 'Client SDK' },
+          { href: '/docs/errors', label: 'Error codes' },
         ]}
       />
     </>

@@ -50,10 +50,10 @@ export function Nav() {
             );
           })}
           <a
-            href="https://github.com/agentgate"
+            href="https://example.invalid/AgentGate"
             target="_blank"
             rel="noopener noreferrer"
-            title="GitHub (placeholder link pre-launch)"
+            title="AgentGate on GitHub"
             className="ml-1 hidden border border-line px-3 py-2 font-mono text-xs uppercase tracking-[0.18em] text-mut transition-colors hover:border-accent/60 hover:text-white sm:block"
           >
             GitHub
