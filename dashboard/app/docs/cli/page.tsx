@@ -31,19 +31,18 @@ export default function Page() {
 
       {/* ───────────────────────────── invocation ───────────────────────────── */}
       <H2 id="invocation">Invocation</H2>
+      <P>The published CLI runs with <M>npx</M> — no install, no clone:</P>
+      <CommandBlock text="npx @neargate/cli <command> [args] [options]" />
       <P>
-        Run the CLI from the repo root through the workspace script. Everything after the{' '}
-        <M>--</M> is forwarded verbatim to the <M>agentgate</M> binary:
+        From a cloned repo you can run it through the workspace script instead (everything after the{' '}
+        <M>--</M> is forwarded verbatim to the <M>agentgate</M> binary), or invoke the binary
+        directly if it is on your <M>PATH</M>:
       </P>
       <CommandBlock text="npm run agentgate -- <command> [args] [options]" />
-      <P>
-        The underlying entry point is <M>packages/cli/src/bin.ts</M> (a <M>commander</M>{' '}
-        program named <M>agentgate</M>). If you have the workspace binary on your{' '}
-        <M>PATH</M> you can invoke it directly instead:
-      </P>
       <CommandBlock text="agentgate <command> [args] [options]" />
       <P>
-        There are six commands: <DocLink href="#wrap">wrap</DocLink>,{' '}
+        The entry point is <M>packages/cli/src/bin.ts</M> (a <M>commander</M> program named{' '}
+        <M>agentgate</M>). There are six commands: <DocLink href="#wrap">wrap</DocLink>,{' '}
         <DocLink href="#list">list</DocLink>, <DocLink href="#status">status</DocLink>,{' '}
         <DocLink href="#pause">pause</DocLink>, <DocLink href="#resume">resume</DocLink> and{' '}
         <DocLink href="#demo-accounts">demo-accounts</DocLink>. Every command exits{' '}
@@ -174,7 +173,7 @@ export default function Page() {
       </P>
       <CommandBlock
         wrap
-        text='npm run agentgate -- wrap <upstreamUrl> --price <cspr> --name <name> [options]'
+        text='npx @neargate/cli wrap <upstreamUrl> --price <cspr> --name <name> --pem <path> [options]'
       />
       <DocTable
         head={['Flag / arg', 'Required', 'Default', 'Meaning']}
@@ -226,13 +225,13 @@ export default function Page() {
       <H3 id="wrap-example">Example</H3>
       <CommandBlock
         wrap
-        text='npm run agentgate -- wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed"'
+        text='npx @neargate/cli wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --pem ./key.pem'
       />
       <CodeBlock
         label="output"
         code={[
           'service id:      1',
-          'public endpoint: http://localhost:4021/svc/1',
+          'public endpoint: https://gateway.example.org/svc/1',
           'dashboard:       http://localhost:3000/services/1',
           'register tx:     <txHash>',
         ].join('\n')}
@@ -267,7 +266,7 @@ export default function Page() {
         List the on-chain service catalog joined with scores and trust tiers, in the order the
         chain returns it. Takes no arguments and no options.
       </P>
-      <CommandBlock text="npm run agentgate -- list" />
+      <CommandBlock text="npx @neargate/cli list" />
       <CodeBlock
         label="output"
         code={[
@@ -298,7 +297,7 @@ export default function Page() {
         Show one service in depth: the full record, its score, trust tier and recent
         attestations.
       </P>
-      <CommandBlock text="npm run agentgate -- status <id>" />
+      <CommandBlock text="npx @neargate/cli status <id>" />
       <DocTable
         head={['Argument', 'Required', 'Rule']}
         rows={[
@@ -341,7 +340,7 @@ export default function Page() {
         and prints the new state. While paused the gateway answers 403 on{' '}
         <M>/svc/&lt;id&gt;</M> and the catalog shows it as inactive. The score is untouched.
       </P>
-      <CommandBlock text="npm run agentgate -- pause <id>" />
+      <CommandBlock text="npx @neargate/cli pause <id> --pem <path>" />
       <DocTable
         head={['Argument', 'Required', 'Rule']}
         rows={[
@@ -374,7 +373,7 @@ export default function Page() {
         Same argument rules, owner-only check and signer resolution as <M>pause</M>. Calls flow
         through the paywall again and discovery shows the service on the next catalog read.
       </P>
-      <CommandBlock text="npm run agentgate -- resume <id>" />
+      <CommandBlock text="npx @neargate/cli resume <id> --pem <path>" />
       <DocTable
         head={['Argument', 'Required', 'Rule']}
         rows={[
@@ -401,9 +400,10 @@ export default function Page() {
         <strong className="text-white">mock mode only</strong>: in live mode it throws{' '}
         <M>MOCK_ONLY</M>. It generates a buyer and a seller mock public key (<M>01</M> + 64
         random hex chars from 32 CSPRNG bytes) and faucets 1000 CSPR to each via{' '}
-        <M>POST &lt;DEVNET_URL&gt;/faucet</M>. Takes no arguments or options.
+        <M>POST &lt;DEVNET_URL&gt;/faucet</M>, so it needs a local mock devnet running
+        (<M>npm run dev</M>). Since the CLI defaults to <M>live</M>, pass <M>--mode mock</M>.
       </P>
-      <CommandBlock text="npm run agentgate -- demo-accounts" />
+      <CommandBlock text="npx @neargate/cli demo-accounts --mode mock" />
       <CodeBlock
         label="output"
         code={[
