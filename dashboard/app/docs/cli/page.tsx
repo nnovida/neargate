@@ -68,7 +68,7 @@ export default function Page() {
             name: 'AGENTGATE_MODE',
             type: "'mock' | 'live'",
             required: false,
-            default: 'mock',
+            default: 'live',
             desc: (
               <>
                 Selects the chain backend. <M>mock</M> uses the in-process devnet (offline);{' '}

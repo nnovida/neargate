@@ -137,10 +137,11 @@ export default function InstallationPage() {
           ],
           [
             <M key="p">packages/cli</M>,
-            <M key="n">@agentgate/cli</M>,
+            <M key="n">@neargate/cli</M>,
             <span key="d">
-              The <M>agentgate</M> CLI: <M>wrap</M>, <M>list</M>, <M>status</M>, <M>pause</M>,{' '}
-              <M>resume</M>, <M>demo-accounts</M>.
+              The <M>agentgate</M> CLI (published on npm — <M>npx @neargate/cli</M>):{' '}
+              <M>wrap</M>, <M>list</M>, <M>status</M>, <M>pause</M>, <M>resume</M>,{' '}
+              <M>demo-accounts</M>.
             </span>,
           ],
           [
@@ -307,12 +308,12 @@ export default function InstallationPage() {
       <H3 id="verify-test">Run the test suite</H3>
       <CommandBlock prompt={null} text="npm test" />
       <P>
-        Runs <M>vitest</M> across every package unit suite plus the end-to-end loop — 274 tests.
+        Runs <M>vitest</M> across every package unit suite plus the end-to-end loop — 329 tests.
         A clean install passes all of them.
       </P>
       <CodeBlock
         label="expected (abbreviated)"
-        code={'Test Files  17 passed (17)\n     Tests  274 passed (274)\n  Duration  ...s'}
+        code={'Test Files  25 passed (25)\n     Tests  329 passed (329)\n  Duration  ...s'}
       />
 
       <H3 id="verify-typecheck">Type-check the workspace</H3>
@@ -339,7 +340,7 @@ export default function InstallationPage() {
       />
       <Callout tone="ok" title="Install verified">
         Green <M>npm test</M>, a clean <M>npm run typecheck</M>, and a <M>npm run demo</M> that
-        exits 0 with two transaction hashes confirm the install is healthy. Optionally, run the 17
+        exits 0 with two transaction hashes confirm the install is healthy. Optionally, run the 20
         contract tests with <M>cd contracts/agentgate-registry &amp;&amp; cargo odra test</M> if
         you have the Rust toolchain installed.
       </Callout>

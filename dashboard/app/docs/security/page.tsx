@@ -216,8 +216,11 @@ export default function SecurityPage() {
         <M>PRICE_EXCEEDED</M> (HTTP <M>402</M>) <em>before</em> signing any transfer. The whole invoice
         is also strictly validated by <M>parsePaymentRequired</M> (x402 V1:{' '}
         <M>x402Version:1</M>, finds an <M>accepts[]</M> entry matching the chain network,{' '}
-        <M>payTo</M> must match <M>account-hash-&lt;64 hex&gt;</M>, nonce must be a u64 decimal{' '}
-        <M>&le; 2^64-1</M>, <M>extra.expiresAtMs</M> must be in the future) — anything off throws{' '}
+        <M>payTo</M> must match <M>account-hash-&lt;64 hex&gt;</M>, the nonce must be a decimal
+        string (the gateway issues nonces{' '}
+        <M>&le; 2^53&minus;2</M>, capped below <M>Number.MAX_SAFE_INTEGER</M> so CSPR.cloud&apos;s
+        float64 transfer-id round-trips on verification), <M>extra.expiresAtMs</M> must be in the
+        future) — anything off throws{' '}
         <M>BAD_INVOICE</M>.
       </P>
 
@@ -258,7 +261,7 @@ export default function SecurityPage() {
       <H2 id="rate-limit">Rate limiting and the reverse proxy</H2>
       <P>
         The middleware mounts <M>helmet()</M> for hardened response headers, disables the{' '}
-        <M>x-powered-by</M> banner, and applies two per-IP rate limits via{' '}
+        <M>x-powered-by</M> banner, and applies three per-IP rate limits via{' '}
         <M>express-rate-limit</M> over a 60-second window:
       </P>
       <DocTable
@@ -269,6 +272,11 @@ export default function SecurityPage() {
             <M key="a">/admin</M>,
             <M key="b">20</M>,
             'Stricter — blunts brute force against the admin bearer token.',
+          ],
+          [
+            <M key="a">/services</M>,
+            <M key="b">20</M>,
+            'Self-service upstream mapping (owner-signed) — blunts signature-spam / mapping churn.',
           ],
         ]}
       />

@@ -45,7 +45,7 @@ const FULL_EXAMPLE = [
   '',
   '// 4. One call runs the whole exchange: GET -> 402 -> validate -> pay -> retry-with-proof.',
   'try {',
-  '  const res = await client.fetchPaid("https://gateway.example.com/svc/1");',
+  '  const res = await client.fetchPaid("https://gateway.example.org/svc/1");',
   '',
   '  if (res.paid) {',
   '    // Paid path: requirements / deployHash / priceMotes / settlement are populated.',
@@ -72,7 +72,7 @@ const FULL_EXAMPLE = [
 const PARSE_EXAMPLE = [
   "import { parsePaymentRequired } from '@agentgate/client';",
   '',
-  'const res = await fetch("https://gateway.example.com/svc/1");',
+  'const res = await fetch("https://gateway.example.org/svc/1");',
   'if (res.status === 402) {',
   '  // Throws AgentGateError("BAD_INVOICE") on any malformed or expired challenge.',
   '  // Selects the first accepts[] entry matching chain.network + scheme:"exact".',
@@ -92,11 +92,11 @@ const INVOICE_SHAPE = [
   '      "maxAmountRequired": "500000000",',
   '      "asset": "CSPR",',
   '      "payTo": "account-hash-0000...<64 hex>",',
-  '      "resource": "http://gateway:4021/svc/1",',
+  '      "resource": "https://gateway.example.org/svc/1",',
   '      "description": "RWA FX & Gold Oracle",',
   '      "maxTimeoutSeconds": 300,',
   '      "extra": {',
-  '        "nonce": "17283746500000001",',
+  '        "nonce": "6203715498220417",',
   '        "serviceId": 1,',
   '        "expiresAtMs": 1750000300000,',
   '        "settlement": "casper-native-transfer",',
@@ -455,7 +455,9 @@ export default function Page() {
           [
             <M key="nc">accepts[].extra.nonce</M>,
             <>
-              u64 decimal string (1–20 digits, &le; 2<sup>64</sup>−1) — used as the transfer id.
+              u64 decimal string (1–20 digits, &le; 2<sup>64</sup>−1) used as the native transfer
+              id — though the gateway issues it as a positive integer &le; 2<sup>53</sup>−2 so it
+              stays exact as a CSPR.cloud float64 transfer id.
             </>,
           ],
           [
@@ -510,7 +512,7 @@ export default function Page() {
           [
             <M key="bi">BAD_INVOICE</M>,
             '502',
-            'The 402 body is not JSON, fails PaymentRequiredResponse validation (missing x402Version/accepts[]), has no accepts[] entry matching the client network, or has an already-expired nonce.',
+            'The 402 body is not JSON, fails PaymentRequiredResponse validation (missing x402Version/accepts[], or no accepts[] entry with scheme "exact"), or has an already-expired nonce. A body that parses but offers no entry on the client network throws NETWORK_MISMATCH instead.',
           ],
           [
             <M key="ut">UPSTREAM_TIMEOUT</M>,

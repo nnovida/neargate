@@ -374,7 +374,7 @@ export default function Page() {
           [
             <M key="rl">rate_limited</M>,
             '429',
-            'Too many requests: /svc/* allows 60/min, /admin/* allows 20/min, keyed by client IP. Includes draft-7 RateLimit-* headers.',
+            'Too many requests: /svc/* allows 60/min, /admin/* allows 20/min, and the self-service /services/* map endpoint allows 20/min, keyed by client IP. Includes draft-7 RateLimit-* headers.',
             'Back off and retry after the window; honor the reset value in the draft-7 RateLimit / RateLimit-Policy headers.',
           ],
           [

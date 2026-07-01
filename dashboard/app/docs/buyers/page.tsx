@@ -307,7 +307,8 @@ export default function Page() {
         The client refuses to pay unless the <M>PaymentRequiredResponse</M> offers an{' '}
         <M>accepts[]</M> entry matching <M>chain.network</M> (<M>NETWORK_MISMATCH</M>). You never
         sign a transfer on one chain for a paywall expecting another. The invoice is also fully
-        validated — exact version, future <M>expiresAtMs</M>, u64 <M>nonce</M>,{' '}
+        validated — exact version, future <M>expiresAtMs</M>, a positive-integer{' '}
+        <M>nonce</M> below 2^53 (the <M>transfer_id</M>),{' '}
         <M>account-hash</M> target — or it is rejected as <M>BAD_INVOICE</M> before any payment.
       </P>
       <H3 id="prompt-injection">Prompt-injection containment</H3>

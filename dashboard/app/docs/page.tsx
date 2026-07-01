@@ -153,7 +153,7 @@ export default function Page() {
             'Payment verify',
             'Devnet transfer lookup',
             <span key="v">
-              CSPR.cloud <M>GET /transfers?deploy_hash=</M>
+              CSPR.cloud <M>GET /deploys/&lt;hash&gt;/transfers</M>
             </span>,
           ],
           ['Signers', 'Mock account strings', 'PEM keys'],

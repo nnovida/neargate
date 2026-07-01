@@ -204,13 +204,16 @@ export default function ConfigurationPage() {
             <span key="d">
               <M>&apos;&apos;</M> (empty)
             </span>,
-            'effectively (for registry use)',
+            'no via CLI (has default)',
             <span key="m">
               Package hash of the deployed AgentGateRegistry contract (<M>hash-&lt;64hex&gt;</M>).
-              For Casper Testnet live mode set this to{' '}
-              <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. Not
-              enforced by <M>loadConfig()</M>, but when left empty every live registry call returns{' '}
-              <M>NOT_DEPLOYED</M> (fallback only — the registry is live on Testnet). See{' '}
+              <M>loadConfig()</M> defaults it to empty and does not enforce it, so a gateway or
+              service built directly from that config returns <M>NOT_DEPLOYED</M> on every registry
+              call while it stays empty (the registry itself is live on Testnet). The published CLI
+              overlays the deployed hash{' '}
+              <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M> as its own
+              built-in default, so <M>npx @neargate/cli list</M> / <M>status</M> read live Testnet
+              with zero config; set this only to point at a different deploy. See{' '}
               <DocLink href="/docs/contract">Smart contract</DocLink>.
             </span>,
           ],

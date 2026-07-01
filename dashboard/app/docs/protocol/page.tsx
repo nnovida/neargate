@@ -165,7 +165,7 @@ export default function Page() {
       <P>
         The body of every <M>402</M> response is a <M>PaymentRequiredResponse</M> — the x402 V1
         envelope that tells the agent exactly how to pay. It is defined in{' '}
-        <M>packages/shared/src/types.ts</M> and built by the gateway in{' '}
+        <M>packages/shared/src/x402.ts</M> and built by the gateway in{' '}
         <M>buildRequirements()</M>/<M>respond402</M>. The protocol version number is fixed:{' '}
         <M>x402Version: 1</M>.
       </P>
@@ -186,7 +186,7 @@ export default function Page() {
           '      "description": "Weather Oracle",',
           '      "maxTimeoutSeconds": 300,',
           '      "extra": {',
-          '        "nonce": "4521903117755646001",',
+          '        "nonce": "4521903117755646",',
           '        "serviceId": 7,',
           '        "expiresAtMs": 1750000300000,',
           '        "settlement": "casper-native-transfer",',
@@ -295,12 +295,14 @@ export default function Page() {
           },
           {
             name: 'accepts[].extra.nonce',
-            type: 'string (u64 decimal)',
+            type: 'string (decimal ≤ 2^53−2)',
             required: true,
             desc: (
               <>
-                Per-invoice u64 decimal string (1–20 digits, ≤ 18,446,744,073,709,551,615). Used
-                verbatim as the transfer&apos;s <M>transfer_id</M> and echoed back in{' '}
+                Per-invoice decimal string — a positive integer ≤ 2^53−2
+                (9,007,199,254,740,990; at most 16 digits), capped below{' '}
+                <M>Number.MAX_SAFE_INTEGER</M> because CSPR.cloud returns transfer ids as float64.
+                Used verbatim as the transfer&apos;s <M>transfer_id</M> and echoed back in{' '}
                 <M>payload.transferId</M> of the <M>X-PAYMENT</M> header.
               </>
             ),
