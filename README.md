@@ -7,13 +7,16 @@ no config, no keys:
 npx @neargate/cli list
 ```
 
-Wrap any HTTP API into a paid, on-chain-registered service in one command (needs a funded
-seller key + a running gateway):
+Wrap any HTTP API into a paid, on-chain-registered service in one command — the only thing
+on the line besides the args is your funded wallet key:
 
 ```bash
-npx @neargate/cli wrap https://api.example.com/data --price 0.5 --name "My Data API" \
-  --pem ./seller.pem --gateway https://your-gateway
+npx @neargate/cli wrap https://api.example.com/data --price 0.5 --name "My Data API" --pem ./key.pem
 ```
+
+`wrap` registers on-chain (signed by `--pem`) and maps your upstream on the gateway by
+signing an ownership challenge — no shared admin token. `--gateway` defaults to the hosted
+gateway; pass it to target a local/self-hosted one.
 
 Sellers put a **402 paywall** in front of their API and register it in an on-chain
 registry. Buyer agents discover services from the registry, pay with a **native CSPR
