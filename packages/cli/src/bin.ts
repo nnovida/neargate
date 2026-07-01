@@ -14,8 +14,9 @@ import { listServices } from './list';
 import { setServiceActive } from './pause';
 import { serviceStatus, STATUS_ATTESTATION_LIMIT } from './status';
 import { wrapService } from './wrap';
+import { resolveCliEnv, type CliConfigFlags } from './cli-env';
 
-interface WrapCmdOpts {
+interface WrapCmdOpts extends CliConfigFlags {
   price: string;
   name: string;
   description?: string;
@@ -55,30 +56,60 @@ function renderTable(header: string[], rows: string[][]): string {
     .join('\n');
 }
 
+/** Attach the shared chain-config flags (mode/node/registry) to a command. */
+function withConfigFlags(cmd: Command): Command {
+  return cmd
+    .option('--mode <mode>', 'chain mode: mock | live (published CLI defaults to live)')
+    .option('--node-url <url>', 'Casper node RPC URL (default: Casper Testnet)')
+    .option('--registry <hash>', 'AgentGateRegistry package hash (default: the deployed one)');
+}
+
+/**
+ * Build runtime config from flags + env. The CLI needs neither a CSPR.cloud key
+ * nor a strong admin token just to load — read commands run zero-env, and wrap
+ * surfaces a token/gateway problem at the admin POST, not at config load.
+ */
+function cliConfig(opts: CliConfigFlags): AgentGateConfig {
+  return loadConfig(
+    resolveCliEnv({
+      mode: opts.mode,
+      nodeUrl: opts.nodeUrl,
+      registry: opts.registry,
+      pem: opts.pem,
+      apiKey: opts.apiKey,
+      adminToken: opts.adminToken,
+    }),
+    { requireCloudKey: false, requireStrongAdminToken: false },
+  );
+}
+
 const program = new Command();
 
 program
   .name('agentgate')
   .description('AgentGate — wrap any API into a 402-paywalled, on-chain-registered service');
 
-program
-  .command('wrap')
-  .description('Wrap an upstream API behind the AgentGate 402 paywall and register it on-chain')
-  .argument('<upstreamUrl>', 'upstream API URL to wrap (kept private, only sent to the gateway)')
-  .requiredOption('--price <cspr>', 'price per call in CSPR (e.g. 0.5)')
-  .requiredOption('--name <name>', 'service name')
-  .option('--description <d>', 'service description', '')
-  .option('--gateway <url>', 'gateway base URL (default: http://localhost:<MIDDLEWARE_PORT|4021>)')
-  .option(
-    '--payment-target <accountHash>',
-    'payment target account-hash (default: derived from the seller signer)',
-  )
-  .option(
-    '--attestor <publicKeyHex>',
-    'public key allowed to record attestations (default: the seller signer public key)',
-  )
-  .action(async (upstreamUrl: string, opts: WrapCmdOpts) => {
-    const config = loadConfig();
+withConfigFlags(
+  program
+    .command('wrap')
+    .description('Wrap an upstream API behind the AgentGate 402 paywall and register it on-chain')
+    .argument('<upstreamUrl>', 'upstream API URL to wrap (kept private, only sent to the gateway)')
+    .requiredOption('--price <cspr>', 'price per call in CSPR (e.g. 0.5)')
+    .requiredOption('--name <name>', 'service name')
+    .option('--description <d>', 'service description', '')
+    .option('--gateway <url>', 'gateway base URL (default: http://localhost:<MIDDLEWARE_PORT|4021>)')
+    .option(
+      '--payment-target <accountHash>',
+      'payment target account-hash (default: derived from the seller signer)',
+    )
+    .option(
+      '--attestor <publicKeyHex>',
+      'public key allowed to record attestations (default: the seller signer public key)',
+    )
+    .option('--pem <path>', 'seller signer PEM path (required for live writes)')
+    .option('--admin-token <token>', 'gateway admin bearer token (leaks into shell history/ps)'),
+).action(async (upstreamUrl: string, opts: WrapCmdOpts) => {
+    const config = cliConfig(opts);
     const chain = createChainClient(config);
     const signer = sellerSigner(config);
     const gateway = opts.gateway ?? `http://localhost:${config.middlewarePort}`;
@@ -107,11 +138,12 @@ program
     }
   });
 
-program
-  .command('list')
-  .description('List the on-chain service catalog with scores and trust tiers')
-  .action(async () => {
-    const config = loadConfig();
+withConfigFlags(
+  program
+    .command('list')
+    .description('List the on-chain service catalog with scores and trust tiers'),
+).action(async (opts: CliConfigFlags) => {
+    const config = cliConfig(opts);
     const chain = createChainClient(config);
     const listings = await listServices({ chain });
     if (listings.length === 0) {
@@ -132,11 +164,16 @@ program
     console.log(renderTable(['ID', 'NAME', 'PRICE', 'TIER', 'SCORE', 'ACTIVE', 'ENDPOINT'], rows));
   });
 
-program
-  .command('status')
-  .description('Show one service: record, score, trust tier and recent attestations')
-  .argument('<id>', 'service id')
-  .action(async (idRaw: string) => {
+withConfigFlags(
+  program
+    .command('status')
+    .description('Show one service: record, score, trust tier and recent attestations')
+    .argument('<id>', 'service id')
+    .option(
+      '--api-key <key>',
+      'CSPR.cloud key to fetch attestation history (leaks into shell history/ps)',
+    ),
+).action(async (idRaw: string, opts: CliConfigFlags) => {
     // Service ids are 1-based (matches pause/resume); serviceStatus also enforces id >= 1.
     if (!/^\d+$/.test(idRaw.trim()) || Number(idRaw.trim()) < 1) {
       throw new AgentGateError(
@@ -145,11 +182,13 @@ program
         400,
       );
     }
-    const config = loadConfig();
+    const config = cliConfig(opts);
     const chain = createChainClient(config);
+    const hasKey = config.csprCloudApiKey !== '';
     const { service, score, tier, attestations } = await serviceStatus({
       chain,
       id: Number(idRaw.trim()),
+      includeAttestations: hasKey,
     });
     console.log(
       `service:        #${service.id} ${service.name}${service.active ? '' : '  [INACTIVE]'}`,
@@ -161,6 +200,10 @@ program
     console.log(`owner:          ${service.owner}`);
     console.log(`attestor:       ${service.attestor}`);
     console.log(`trust:          ${tier} (${score.successCalls}/${score.totalCalls} calls ok)`);
+    if (!hasKey) {
+      console.log('attestations:   (set CSPR_CLOUD_API_KEY or pass --api-key to view history)');
+      return;
+    }
     if (attestations.length === 0) {
       console.log('attestations:   none yet');
       return;
@@ -175,7 +218,7 @@ program
   });
 
 /** Shared action for `pause` / `resume`: toggle the on-chain active flag and report. */
-async function toggleActive(idRaw: string, active: boolean): Promise<void> {
+async function toggleActive(idRaw: string, active: boolean, opts: CliConfigFlags): Promise<void> {
   if (!/^\d+$/.test(idRaw.trim())) {
     throw new AgentGateError(
       'INVALID_SERVICE_ID',
@@ -183,7 +226,7 @@ async function toggleActive(idRaw: string, active: boolean): Promise<void> {
       400,
     );
   }
-  const config = loadConfig();
+  const config = cliConfig(opts);
   const chain = createChainClient(config);
   const signer = sellerSigner(config);
   const { txHash, service } = await setServiceActive({
@@ -197,23 +240,28 @@ async function toggleActive(idRaw: string, active: boolean): Promise<void> {
   console.log(`set_active tx: ${txHash}`);
 }
 
-program
-  .command('pause')
-  .description('Pause a service you own: set_active(false) on-chain, the paywall answers 403')
-  .argument('<id>', 'service id')
-  .action(async (idRaw: string) => toggleActive(idRaw, false));
+withConfigFlags(
+  program
+    .command('pause')
+    .description('Pause a service you own: set_active(false) on-chain, the paywall answers 403')
+    .argument('<id>', 'service id')
+    .option('--pem <path>', 'seller signer PEM path (required for live writes)'),
+).action(async (idRaw: string, opts: CliConfigFlags) => toggleActive(idRaw, false, opts));
 
-program
-  .command('resume')
-  .description('Resume a paused service you own: set_active(true) on-chain, calls flow again')
-  .argument('<id>', 'service id')
-  .action(async (idRaw: string) => toggleActive(idRaw, true));
+withConfigFlags(
+  program
+    .command('resume')
+    .description('Resume a paused service you own: set_active(true) on-chain, calls flow again')
+    .argument('<id>', 'service id')
+    .option('--pem <path>', 'seller signer PEM path (required for live writes)'),
+).action(async (idRaw: string, opts: CliConfigFlags) => toggleActive(idRaw, true, opts));
 
-program
-  .command('demo-accounts')
-  .description('Create faucet-funded buyer/seller demo accounts on the mock devnet (mock mode only)')
-  .action(async () => {
-    const config = loadConfig();
+withConfigFlags(
+  program
+    .command('demo-accounts')
+    .description('Create faucet-funded buyer/seller demo accounts on the mock devnet (mock mode only)'),
+).action(async (opts: CliConfigFlags) => {
+    const config = cliConfig(opts);
     if (config.mode !== 'mock') {
       throw new AgentGateError(
         'MOCK_ONLY',
