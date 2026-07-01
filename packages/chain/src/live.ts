@@ -321,8 +321,22 @@ function cloudArg(deploy: CloudDeploy, name: string): unknown {
   return entry?.parsed;
 }
 
-function cloudEntryPoint(deploy: CloudDeploy): string {
-  return deploy.entry_point?.name ?? deploy.entry_point_name ?? '';
+/**
+ * The registry entry point of a CSPR.cloud contract-call deploy. CSPR.cloud
+ * dropped the entry-point NAME (it now returns only a numeric `entry_point_id`),
+ * so when the name is absent we infer it from the call's argument set — the
+ * registry's entry points have disjoint args. Exported for unit testing.
+ */
+export function cloudEntryPoint(deploy: CloudDeploy): string {
+  if (deploy.entry_point?.name) return deploy.entry_point.name;
+  if (deploy.entry_point_name) return deploy.entry_point_name;
+  const args = deploy.args ?? {};
+  const has = (k: string): boolean => k in args;
+  if (has('payment_deploy_hash')) return 'record_attestation';
+  if (has('name') && has('price')) return 'register_service';
+  if (has('active')) return 'set_active';
+  if (has('attestor')) return 'set_attestor';
+  return '';
 }
 
 function parseCloudTimestamp(value: string | undefined): number {
