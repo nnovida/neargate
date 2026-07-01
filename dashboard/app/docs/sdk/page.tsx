@@ -15,7 +15,12 @@ import {
   StepFlow,
 } from '@/components/docs';
 
-export const metadata = { title: 'Client SDK' };
+export const metadata = {
+  title: 'Client SDK',
+  description:
+    '@agentgate/client reference: createAgentGateClient and the fetchPaid helper that parses a 402, validates the x402 invoice, pays a native CSPR transfer, and retries with the X-PAYMENT proof — options, return shapes, and errors.',
+  alternates: { canonical: '/docs/sdk' },
+};
 
 const INSTALL_IMPORT = [
   "import { createAgentGateClient, parsePaymentRequired } from '@agentgate/client';",

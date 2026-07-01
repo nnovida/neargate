@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isPrivateHost, validateUpstreamUrl } from '../src/index';
+import { isPrivateHost, resolvePinnedIp, validateUpstreamUrl } from '../src/index';
 
 describe('isPrivateHost', () => {
   const privateHosts = [
@@ -91,5 +91,29 @@ describe('validateUpstreamUrl', () => {
     expect(
       validateUpstreamUrl('http://127.0.0.1:4010/feed', { rejectPrivateHosts: false }),
     ).toMatchObject({ ok: true });
+  });
+});
+
+describe('resolvePinnedIp — F6 DNS-rebinding pin', () => {
+  it('returns null for empty and localhost hosts', async () => {
+    expect(await resolvePinnedIp('')).toBeNull();
+    expect(await resolvePinnedIp('localhost')).toBeNull();
+    expect(await resolvePinnedIp('api.localhost')).toBeNull();
+  });
+
+  it('refuses private/loopback/link-local IP literals (no pin target)', async () => {
+    expect(await resolvePinnedIp('127.0.0.1')).toBeNull();
+    expect(await resolvePinnedIp('169.254.169.254')).toBeNull(); // cloud metadata
+    expect(await resolvePinnedIp('10.0.0.5')).toBeNull();
+    expect(await resolvePinnedIp('::1')).toBeNull();
+    expect(await resolvePinnedIp('[fd00::1]')).toBeNull();
+  });
+
+  it('pins a public IP literal to itself', async () => {
+    expect(await resolvePinnedIp('8.8.8.8')).toEqual({ address: '8.8.8.8', family: 4 });
+    expect(await resolvePinnedIp('[2606:4700:4700::1111]')).toEqual({
+      address: '2606:4700:4700::1111',
+      family: 6,
+    });
   });
 });

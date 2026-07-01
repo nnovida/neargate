@@ -300,7 +300,7 @@ describe('expired invoices', () => {
 });
 
 describe('proxy hardening', () => {
-  it('unreachable upstream → 502 with constant error code, no upstream URL leaked, attestation success=false', async () => {
+  it('unreachable upstream → 502 with constant error code, no upstream URL leaked, no attestation (F4)', async () => {
     const gw = await bootGateway();
     try {
       gw.fake.addService({ id: 1 });
@@ -313,8 +313,10 @@ describe('proxy hardening', () => {
       expect(JSON.parse(text)).toEqual({ error: 'upstream_unreachable' });
       expect(text).not.toContain('127.0.0.1:1');
       expect(text).not.toContain('secret-path');
-      await until(() => gw.fake.attestations.length === 1);
-      expect(gw.fake.attestations[0]).toMatchObject({ success: false });
+      // F4: a gateway-level failure (upstream unreachable) is the seller's backend
+      // being down, not a service outcome — it is not scored either way.
+      await sleep(100);
+      expect(gw.fake.attestations.length).toBe(0);
     } finally {
       await gw.close();
     }
@@ -330,8 +332,9 @@ describe('proxy hardening', () => {
       const res = await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
       expect(res.status).toBe(504);
       expect(await res.json()).toEqual({ error: 'upstream_timeout' });
-      await until(() => gw.fake.attestations.length === 1);
-      expect(gw.fake.attestations[0]).toMatchObject({ success: false });
+      // F4: an upstream timeout is a gateway-level failure — not scored either way.
+      await sleep(100);
+      expect(gw.fake.attestations.length).toBe(0);
     } finally {
       await gw.close();
       await upstream.close();
@@ -378,8 +381,8 @@ describe('attestation retry', () => {
     }
   });
 
-  it('both attestation attempts failing → buyer still served, no attestation recorded', async () => {
-    const gw = await bootGateway({ attestationRetryDelayMs: 50 });
+  it('all attestation attempts failing → buyer still served, no attestation recorded', async () => {
+    const gw = await bootGateway({ attestationRetryDelayMs: 50, attestationMaxAttempts: 2 });
     const upstream = await startUpstream();
     try {
       gw.fake.addService({ id: 1 });

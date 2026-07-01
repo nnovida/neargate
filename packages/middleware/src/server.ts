@@ -20,8 +20,15 @@ export interface MiddlewareStartOpts {
   upstreamsFile?: string;
   /** Custom invoice store (default: in-memory + TTL sweep). */
   invoiceStore?: InvoiceStore;
-  /** Delay before the single attestation retry. Default 5000 ms. */
+  /**
+   * Persist invoices to this JSON file so they survive a restart (F2). Defaults
+   * to the INVOICE_STORE_PATH env var. Ignored when `invoiceStore` is injected.
+   */
+  invoiceStorePath?: string;
+  /** Base delay before the first attestation retry (exponential backoff). Default 5000 ms. */
   attestationRetryDelayMs?: number;
+  /** Total attestation attempts before giving up. Default 4. */
+  attestationMaxAttempts?: number;
 }
 
 export interface RunningServer {
@@ -50,14 +57,21 @@ export async function startServer(opts: MiddlewareStartOpts = {}): Promise<Runni
     chain = createChainClient(config);
   }
 
+  // Persist invoices across restarts when a path is configured (F2).
+  const invoiceStorePath = opts.invoiceStorePath ?? process.env.INVOICE_STORE_PATH;
+
   const app = createApp({
     config,
     chain,
     logger,
     ...(opts.upstreamsFile !== undefined ? { upstreamsFile: opts.upstreamsFile } : {}),
     ...(opts.invoiceStore !== undefined ? { invoiceStore: opts.invoiceStore } : {}),
+    ...(invoiceStorePath !== undefined ? { invoiceStorePath } : {}),
     ...(opts.attestationRetryDelayMs !== undefined
       ? { attestationRetryDelayMs: opts.attestationRetryDelayMs }
+      : {}),
+    ...(opts.attestationMaxAttempts !== undefined
+      ? { attestationMaxAttempts: opts.attestationMaxAttempts }
       : {}),
   });
   const internals = app.locals['agentgate'] as AppInternals | undefined;

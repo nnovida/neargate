@@ -15,6 +15,7 @@ import {
 } from '@/components/docs';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/docs/protocol' },
   title: 'How it works',
   description:
     'A concepts walkthrough of the x402 V1 payment protocol: discovery, the 402 PaymentRequiredResponse challenge (accepts[] / PaymentRequirements), a native CSPR transfer carrying the nonce as transfer_id, the X-PAYMENT proof header, on-chain verification, single-use nonce burning, the upstream proxy, and the attestation that feeds a trust score.',
@@ -45,7 +46,7 @@ export default function Page() {
             body: (
               <>
                 The agent reads the on-chain registry to find services and their{' '}
-                <DocLink href="/docs/protocol">trust scores</DocLink>, choosing one to call. Each
+                <DocLink href="/docs/protocol#attestation">trust scores</DocLink>, choosing one to call. Each
                 service record carries a public gateway URL (<M>/svc/:id</M>) — never the upstream.
               </>
             ),
@@ -107,7 +108,7 @@ export default function Page() {
                 The gateway decodes the <M>X-PAYMENT</M> header, validates invoice state (nonce
                 must exist, be unused, and be within <M>expiresAtMs</M>), then calls{' '}
                 <M>chain.verifyTransfer</M> to check the transfer&apos;s target, amount, transfer
-                id, and age (see <DocLink href="/docs/protocol">Verification rules</DocLink>). A
+                id, and age (see <DocLink href="/docs/protocol#verification">Verification rules</DocLink>). A
                 still-settling transfer returns <M>402</M> with <M>error:"settlement_pending"</M>{' '}
                 and a <M>Retry-After: 2</M> response header.
               </>
@@ -154,7 +155,7 @@ export default function Page() {
                 Each attestation increments the service&apos;s on-chain counters
                 (<M>totalCalls</M>, and <M>successCalls</M> on success). Those counters map to a
                 trust tier the next discovering agent reads (see{' '}
-                <DocLink href="/docs/protocol">Attestation and trust score</DocLink>).
+                <DocLink href="/docs/protocol#attestation">Attestation and trust score</DocLink>).
               </>
             ),
           },

@@ -13,6 +13,7 @@ import {
 } from '@/components/docs';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/docs/errors' },
   title: 'Error codes',
   description:
     'Every AgentGate error code: the AgentGateError(code, message, httpStatus) shape, the lowercased JSON error body, and a code-by-code reference grouped by config, chain/live, the 402 paywall + admin API, the client SDK, the buyer agent, and the CLI.',

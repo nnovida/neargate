@@ -21,7 +21,8 @@
     "test": "vitest run",
     "build": "npm run build -w dashboard",
     "agent": "tsx packages/buyer-agent/src/main.ts",
-    "agentgate": "tsx packages/cli/src/bin.ts"
+    "agentgate": "tsx packages/cli/src/bin.ts",
+    "smoke:live": "tsx scripts/smoke-live-read.ts"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

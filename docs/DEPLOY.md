@@ -115,13 +115,16 @@ deploy, walk this list top to bottom:
 - [ ] **CSPR.cloud payload field names** — `/transfers?deploy_hash=`, `/deploys`,
       `/accounts/:id`, contract-package resolution, pending-deploy detection
       (`block_hash`/`error_message` fields).
+- [ ] **Read-path smoke (F3)**: `npm run smoke:live` against the deployed contract — asserts
+      `getService(1)` / `getScore(1)` / `listServices()` decode to the known on-chain truth
+      (catches a silent Odra dictionary-index/decode bug the mock/OdraVM tests cannot reach).
 - [ ] **End-to-end smoke**: `agentgate wrap` a real upstream, pay 0.5 CSPR from the buyer
       key, confirm 200 + attestation on https://testnet.cspr.live, score (1,1).
 
 ## 7. Rollout order
 
 1. Deploy contract → set `REGISTRY_CONTRACT_PACKAGE_HASH`.
-2. Run the §6 checklist (read paths first: `agentgate list`, dashboard).
+2. Run the §6 checklist (read paths first: `npm run smoke:live`, `agentgate list`, dashboard).
 3. Start middleware + dashboard in live mode.
 4. `agentgate wrap` the oracle (or any API) with a non-default admin token.
 5. Run the buyer agent with a small budget (`--budget 1`).

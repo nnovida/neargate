@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { MemoryInvoiceStore, UpstreamStore } from '../src/index';
+import { FileInvoiceStore, MemoryInvoiceStore, UpstreamStore } from '../src/index';
 import { sleep, until } from './helpers';
 
 describe('MemoryInvoiceStore', () => {
@@ -47,6 +47,69 @@ describe('MemoryInvoiceStore', () => {
 
   it('rejects a non-positive sweep interval', () => {
     expect(() => new MemoryInvoiceStore(0)).toThrow(RangeError);
+  });
+});
+
+describe('FileInvoiceStore', () => {
+  async function tmpFile(): Promise<string> {
+    return path.join(await mkdtemp(path.join(os.tmpdir(), 'agentgate-inv-')), 'invoices.json');
+  }
+
+  it('survives a restart: invoices persist to disk and reload (F2)', async () => {
+    const file = await tmpFile();
+    const a = new FileInvoiceStore(file);
+    try {
+      await a.put({ nonce: '42', serviceId: 1, priceMotes: '100', expiresAt: Date.now() + 60_000, used: false });
+    } finally {
+      a.close();
+    }
+    const b = new FileInvoiceStore(file); // simulate a restart
+    try {
+      expect(await b.get('42')).toMatchObject({ nonce: '42', serviceId: 1, used: false });
+    } finally {
+      b.close();
+    }
+  });
+
+  it('persists markUsed across a restart (nonce stays single-use)', async () => {
+    const file = await tmpFile();
+    const a = new FileInvoiceStore(file);
+    try {
+      await a.put({ nonce: '7', serviceId: 1, priceMotes: '100', expiresAt: Date.now() + 60_000, used: false });
+      expect(await a.markUsed('7')).toBe(true);
+    } finally {
+      a.close();
+    }
+    const b = new FileInvoiceStore(file);
+    try {
+      expect((await b.get('7'))?.used).toBe(true);
+      expect(await b.markUsed('7')).toBe(false); // already used, even after restart
+    } finally {
+      b.close();
+    }
+  });
+
+  it('starts empty on a missing or corrupt file (never throws on boot)', async () => {
+    const s1 = new FileInvoiceStore(await tmpFile());
+    try {
+      expect(await s1.get('x')).toBeNull();
+    } finally {
+      s1.close();
+    }
+    const file = await tmpFile();
+    await writeFile(file, '{not json', 'utf8');
+    const s2 = new FileInvoiceStore(file);
+    try {
+      expect(await s2.get('x')).toBeNull();
+    } finally {
+      s2.close();
+    }
+  });
+
+  it('rejects an empty path and a non-positive sweep interval', async () => {
+    expect(() => new FileInvoiceStore('')).toThrow();
+    const file = await tmpFile();
+    expect(() => new FileInvoiceStore(file, 0)).toThrow(RangeError);
   });
 });
 

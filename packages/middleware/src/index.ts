@@ -11,11 +11,12 @@ export type { MiddlewareDeps, AppInternals } from './app';
 export { startServer } from './server';
 export type { MiddlewareStartOpts, RunningServer } from './server';
 export { MemoryInvoiceStore } from './invoice-store';
+export { FileInvoiceStore } from './invoice-store-file';
 export type { InvoiceStore, StoredInvoice } from './invoice-store';
 export { UpstreamStore } from './upstream-store';
 export type { UpstreamMapping } from './upstream-store';
 export { ServiceCache, SERVICE_CACHE_TTL_MS } from './service-cache';
-export { isPrivateHost, validateUpstreamUrl } from './ssrf';
+export { isPrivateHost, resolvePinnedIp, validateUpstreamUrl } from './ssrf';
 export type { UpstreamUrlValidation } from './ssrf';
 export {
   MAX_PROXY_BODY_BYTES,

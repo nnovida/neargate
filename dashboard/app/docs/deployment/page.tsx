@@ -15,6 +15,7 @@ import {
 import { CommandBlock } from '@/components/copy';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/docs/deployment' },
   title: 'Deploy to production',
   description:
     'Deploy the AgentGate 402 gateway: what to host, the hosting docker-compose stack, Railway + Vercel, the live-mode checklist enforced by loadConfig(), health/readiness probes, and built-in hardening.',
@@ -259,7 +260,7 @@ export default function DeploymentPage() {
             <span key="d">
               The deployed registry&apos;s <M>hash-&lt;64hex&gt;</M>. Empty is accepted by{' '}
               <M>loadConfig()</M> but every registry read/write then fails — see{' '}
-              <DocLink href="/docs/contract#deploy-status">Contract → Deploy status</DocLink>.
+              <DocLink href="/docs/contract#build-deploy">Contract → Build and deploy</DocLink>.
             </span>,
           ],
           [

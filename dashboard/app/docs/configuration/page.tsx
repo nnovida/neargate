@@ -13,6 +13,7 @@ import {
 } from '@/components/docs';
 
 export const metadata: Metadata = {
+  alternates: { canonical: '/docs/configuration' },
   title: 'Configuration',
   description:
     'Complete reference for every AgentGate environment variable: names, defaults, validation rules, which are required in live mode, and the loadConfig() guardrails that refuse an unsafe live configuration.',
@@ -498,7 +499,7 @@ export default function ConfigurationPage() {
       <Callout tone="info" title="One rule for every CSPR amount">
         Any CSPR value anywhere in the system (prices, budgets) allows at most 9 decimal places — 1
         mote = 1e-9 CSPR — and is processed as a bigint-backed decimal string. See{' '}
-        <DocLink href="/docs/protocol">Protocol → Money units</DocLink>.
+        <DocLink href="/docs/protocol#invoice">Protocol → the 402 invoice body</DocLink>.
       </Callout>
 
       <NextLinks

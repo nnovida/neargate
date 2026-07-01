@@ -15,7 +15,12 @@ import {
   StepFlow,
 } from '@/components/docs';
 
-export const metadata = { title: 'Build an agent' };
+export const metadata = {
+  title: 'Build an agent',
+  description:
+    'Build a buying agent that discovers services on-chain, handles the HTTP 402, pays with a native CSPR transfer carrying the nonce, and retries with proof — via the bundled LLM agent, the client SDK, or plain curl.',
+  alternates: { canonical: '/docs/buyers' },
+};
 
 const SDK_EXAMPLE = [
   "import { createAgentGateClient } from '@agentgate/client';",
@@ -282,7 +287,8 @@ export default function Page() {
       <CodeBlock label="typescript" code={SDK_EXAMPLE} />
       <P>
         <M>fetchPaid</M> returns a <M>PayAndFetchResult</M> (<M>status</M>, <M>body</M>,{' '}
-        <M>paid</M>, and on payment <M>invoice</M> / <M>deployHash</M> / <M>priceMotes</M>). A
+        <M>paid</M>, and on payment <M>requirements</M> / <M>deployHash</M> / <M>priceMotes</M> /{' '}
+        <M>settlement</M>). A
         first response that is not a 402 passes straight through with <M>paid: false</M>. For every
         option, field and pending-retry detail, see the{' '}
         <DocLink href="/docs/sdk">Client SDK reference</DocLink>.
