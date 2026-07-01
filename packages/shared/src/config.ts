@@ -112,9 +112,10 @@ function readBool01(env: Env, key: string, fallback: boolean): boolean {
  */
 export function loadConfig(
   env: Env = process.env,
-  opts: { requireCloudKey?: boolean } = {},
+  opts: { requireCloudKey?: boolean; requireStrongAdminToken?: boolean } = {},
 ): AgentGateConfig {
   const requireCloudKey = opts.requireCloudKey ?? true;
+  const requireStrongAdminToken = opts.requireStrongAdminToken ?? true;
   const modeRaw = readStr(env, 'AGENTGATE_MODE', 'mock');
   if (modeRaw !== 'mock' && modeRaw !== 'live') {
     throw configError(`AGENTGATE_MODE must be "mock" or "live", got ${JSON.stringify(modeRaw)}`);
@@ -177,7 +178,7 @@ export function loadConfig(
     if (requireCloudKey && csprCloudApiKey === '') {
       throw configError('live mode requires CSPR_CLOUD_API_KEY (get one at console.cspr.cloud)');
     }
-    if (adminToken === DEFAULT_ADMIN_TOKEN) {
+    if (requireStrongAdminToken && adminToken === DEFAULT_ADMIN_TOKEN) {
       throw configError(
         'live mode refuses the default AGENTGATE_ADMIN_TOKEN — set a strong unique token',
       );

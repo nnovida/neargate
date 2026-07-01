@@ -146,6 +146,16 @@ describe('loadConfig — requireCloudKey opt-out (CLI reads)', () => {
     );
   });
 
+  it('allows live mode with no key and the default admin token when both guards are off (CLI reads)', () => {
+    const cfg = loadConfig(
+      { AGENTGATE_MODE: 'live' },
+      { requireCloudKey: false, requireStrongAdminToken: false },
+    );
+    expect(cfg.mode).toBe('live');
+    expect(cfg.csprCloudApiKey).toBe('');
+    expect(cfg.adminToken).toBe(DEFAULT_ADMIN_TOKEN);
+  });
+
   it('exposes the deployed registry package hash constant', () => {
     expect(DEFAULT_REGISTRY_PACKAGE_HASH).toBe(
       'hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9',
