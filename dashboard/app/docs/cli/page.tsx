@@ -73,8 +73,9 @@ export default function Page() {
             desc: (
               <>
                 Selects the chain backend. <M>mock</M> uses the in-process devnet (offline);{' '}
-                <M>live</M> targets Casper Testnet and additionally requires{' '}
-                <M>CSPR_CLOUD_API_KEY</M>.
+                <M>live</M> targets Casper Testnet. Reads (<M>list</M>, <M>status</M>) need
+                no keys; <M>CSPR_CLOUD_API_KEY</M> (via <M>--api-key</M>) is only used to
+                fetch attestation history in <M>status</M>.
               </>
             ),
           },
@@ -110,8 +111,11 @@ export default function Page() {
             default: 'dev-admin-token',
             desc: (
               <>
-                Bearer token for the gateway admin mapping <M>POST &lt;gateway&gt;/admin/services</M>{' '}
-                used by <M>wrap</M>. Live mode refuses the shipped default.
+                Bearer token for the legacy admin mapping{' '}
+                <M>POST &lt;gateway&gt;/admin/services</M>, used by <M>wrap</M> in{' '}
+                <M>mock</M> mode or against a self-hosted admin gateway. Live wrap does not
+                use it — it maps the upstream with an owner-signed request to{' '}
+                <M>&lt;gateway&gt;/services/&lt;id&gt;/map</M> instead.
               </>
             ),
           },
@@ -122,7 +126,9 @@ export default function Page() {
             default: '4021',
             desc: (
               <>
-                Feeds the default <M>--gateway</M> (<M>http://localhost:&lt;MIDDLEWARE_PORT&gt;</M>).
+                Feeds the default <M>--gateway</M> in <M>mock</M> mode
+                (<M>http://localhost:&lt;MIDDLEWARE_PORT&gt;</M>); <M>live</M> mode defaults{' '}
+                <M>--gateway</M> to the hosted <M>https://gateway.example.org</M>.
               </>
             ),
           },
@@ -157,10 +163,14 @@ export default function Page() {
       <H2 id="wrap">wrap</H2>
       <P>
         Wrap an upstream API behind the AgentGate 402 paywall and register it on-chain. The
-        upstream URL is kept private — it is only sent to the gateway admin API, never to the
+        upstream URL is kept private — it is only sent to the gateway mapping API, never to the
         registry. <M>wrap</M> performs two steps: it registers the service on-chain first,
-        then POSTs the <M>{'{serviceId, upstreamUrl}'}</M> mapping to{' '}
-        <M>&lt;gateway&gt;/admin/services</M>.
+        then maps the upstream on the gateway. In live mode this is a self-service call —{' '}
+        <M>wrap</M> signs an ownership challenge with the seller key and POSTs{' '}
+        <M>{'{upstreamUrl, publicKeyHex, timestamp, signatureHex}'}</M> to{' '}
+        <M>&lt;gateway&gt;/services/&lt;id&gt;/map</M> (no admin token). Mock mode and
+        self-hosted admin gateways use the legacy <M>POST &lt;gateway&gt;/admin/services</M>{' '}
+        with <M>AGENTGATE_ADMIN_TOKEN</M> instead.
       </P>
       <CommandBlock
         wrap
@@ -191,7 +201,7 @@ export default function Page() {
           [
             <M key="g">--gateway {'<url>'}</M>,
             'no',
-            <M key="gd">http://localhost:&lt;MIDDLEWARE_PORT&gt;</M>,
+            <M key="gd">https://gateway.example.org (live) · http://localhost:&lt;MIDDLEWARE_PORT&gt; (mock)</M>,
             'Gateway base URL (this base is what gets stored on-chain; readers compute <base>/svc/<id>). No query/fragment; https required for non-localhost hosts in live mode.',
           ],
           [
@@ -230,16 +240,17 @@ export default function Page() {
       <Callout tone="warn" title="The on-chain registration is never rolled back">
         <P>
           Step 1 (registration) and step 2 (gateway mapping) are independent. If the gateway
-          mapping fails, the service is already registered on-chain. <M>wrap</M> prints a
-          warning with the exact retry curl to stderr (it references{' '}
-          <M>$AGENTGATE_ADMIN_TOKEN</M> rather than inlining the secret), and the success
-          output gains a final line:
+          mapping fails, the service is already registered on-chain, and the success output
+          gains a final line:
         </P>
         <CodeBlock
           code={'note: gateway upstream mapping FAILED — see the warning above for the retry curl.'}
         />
         <P>
-          Until the mapping exists, <M>http://localhost:4021/svc/1</M> will 404.
+          The printed retry hint depends on the path: live (<M>--pem</M>) wrap re-runs the
+          owner-signed mapping to <M>&lt;gateway&gt;/services/&lt;id&gt;/map</M> (no secret);
+          mock or self-hosted-admin wrap prints a curl referencing <M>$AGENTGATE_ADMIN_TOKEN</M>.
+          Until the mapping exists, the <M>/svc/&lt;id&gt;</M> endpoint will 404.
         </P>
       </Callout>
       <H3 id="wrap-signer">Signer it reads</H3>
@@ -424,7 +435,7 @@ export default function Page() {
           [<M key="c1">INVALID_PRICE</M>, '400', 'wrap', 'Price is not greater than 0 CSPR.'],
           [<M key="c2">INVALID_INPUT</M>, '400', 'wrap', 'Empty/blank name, or text with control characters or over the length limit.'],
           [<M key="c3">INVALID_URL</M>, '400', 'wrap', 'upstreamUrl / gateway is not a valid http(s) URL (or carries a query/fragment).'],
-          [<M key="c4">INSECURE_URL</M>, '400', 'wrap', 'Live mode + non-localhost gateway over http:// (would leak the admin token).'],
+          [<M key="c4">INSECURE_URL</M>, '400', 'wrap', 'Live mode + non-localhost gateway over http:// (the signed mapping request must not travel in cleartext).'],
           [<M key="c5">INVALID_ACCOUNT_HASH</M>, '400', 'wrap', '--payment-target is not account-hash-<64 hex>.'],
           [<M key="c6">INVALID_PUBLIC_KEY</M>, '400', 'wrap', '--attestor is not a valid Casper public key hex.'],
           [<M key="c7">SIGNER_MISSING</M>, '400', 'wrap / pause / resume', 'Mock mode missing MOCK_SELLER_ACCOUNT, or live mode missing SELLER_SIGNER_PEM_PATH.'],

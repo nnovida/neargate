@@ -39,7 +39,7 @@ export default function SecurityPage() {
       <H2 id="ssrf">SSRF protection</H2>
       <P>
         The gateway makes outbound HTTP requests to URLs that a <em>seller</em> controls (the
-        on-chain <M>endpointUrl</M> / the admin-mapped <M>upstreamUrl</M>). Without guards, a seller
+        on-chain <M>endpointUrl</M> / the mapped <M>upstreamUrl</M>). Without guards, a seller
         could point a service at <M>http://169.254.169.254/</M> (cloud metadata),{' '}
         <M>http://127.0.0.1</M>, or an RFC1918 address and turn the gateway into a Server-Side Request
         Forgery proxy into the operator&apos;s internal network. AgentGate blocks this at two
@@ -50,7 +50,9 @@ export default function SecurityPage() {
 
       <H3 id="ssrf-register">Layer 1 — registration-time literal check</H3>
       <P>
-        When an upstream is mapped via <M>POST /admin/services</M>, the middleware runs{' '}
+        When an upstream is mapped — whether via the self-service{' '}
+        <M>POST /services/:id/map</M> (owner-signed) or the admin{' '}
+        <M>POST /admin/services</M> — the middleware runs{' '}
         <M>validateUpstreamUrl(upstreamUrl, &#123; rejectPrivateHosts &#125;)</M> (a thin wrapper over{' '}
         <M>validateHttpUrl</M>). It enforces: a parseable URL no longer than{' '}
         <M>2048</M> characters (<M>MAX_URL_LENGTH</M>); a protocol of exactly <M>http:</M> or{' '}

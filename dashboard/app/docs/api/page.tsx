@@ -18,7 +18,7 @@ import { CommandBlock } from '@/components/copy';
 export const metadata: Metadata = {
   title: 'HTTP API',
   description:
-    'Reference for every AgentGate HTTP endpoint: the 402 paywall gateway (health, public metadata, the paywalled proxy, and the admin API) and the dashboard read-only /api routes.',
+    'Reference for every AgentGate HTTP endpoint: the 402 paywall gateway (health, public metadata, the paywalled proxy, self-service upstream mapping, and the admin API) and the dashboard read-only /api routes.',
 };
 
 export default function Page() {
@@ -27,7 +27,7 @@ export default function Page() {
       <DocHeader
         kicker="reference"
         title="HTTP API"
-        lede="Two surfaces. Part 1 is the gateway (the middleware): health probes, public service metadata, the 402 paywall proxy, and the Bearer-authenticated admin API. Part 2 is the dashboard's own read-only /api routes that feed the catalog and activity views."
+        lede="Two surfaces. Part 1 is the gateway (the middleware): health probes, public service metadata, the 402 paywall proxy, self-service upstream mapping, and the Bearer-authenticated admin API. Part 2 is the dashboard's own read-only /api routes that feed the catalog and activity views."
       />
 
       <P>
@@ -36,7 +36,9 @@ export default function Page() {
         routes (Part 2) instead. Both default to JSON responses; the gateway proxy passes the
         upstream&apos;s status and <M>Content-Type</M> through unchanged on a paid call. Ports below
         are the repo defaults; override with environment variables documented in{' '}
-        <DocLink href="/docs/configuration">Configuration</DocLink>.
+        <DocLink href="/docs/configuration">Configuration</DocLink>. The public hosted gateway runs
+        at <M>https://gateway.example.org</M> (live mode, <M>casper-test</M>); the{' '}
+        <M>localhost:4021</M> examples below target a self-hosted or local gateway.
       </P>
 
       <DocTable
@@ -45,7 +47,7 @@ export default function Page() {
           [
             <M key="g">gateway / middleware</M>,
             <M key="gb">:4021</M>,
-            'Health, /svc/:id/meta, the 402 paywall proxy, and /admin/*',
+            'Health, /svc/:id/meta, the 402 paywall proxy, /services/:id/map, and /admin/*',
           ],
           [
             <M key="d">dashboard</M>,
@@ -58,9 +60,10 @@ export default function Page() {
       {/* ════════════════════════════ PART 1 — GATEWAY ════════════════════════════ */}
       <H2 id="gateway">Part 1 — Gateway (middleware)</H2>
       <P>
-        All gateway endpoints are defined in <M>packages/middleware/src/app.ts</M>. Two
-        independent rate limiters apply: <M>/svc/*</M> is capped at 60 requests per 60 s window and{' '}
-        <M>/admin/*</M> at 20 per minute, both keyed by client IP and returning{' '}
+        All gateway endpoints are defined in <M>packages/middleware/src/app.ts</M>. Three
+        independent rate limiters apply: <M>/svc/*</M> is capped at 60 requests per 60 s window,
+        while <M>/services/*</M> (self-service mapping) and <M>/admin/*</M> are capped at 20 per
+        minute each — all keyed by client IP and returning{' '}
         <M>429 {'{ "error": "rate_limited" }'}</M> with draft-7 <M>RateLimit-*</M> headers on
         excess. The JSON request body limit is 256 KB; proxied bodies are capped at 1 MiB in both
         directions. Unknown routes return <M>404 {'{ "error": "not_found" }'}</M>.
@@ -413,11 +416,157 @@ export default function Page() {
         The attestation for that call records success=false.
       </Callout>
 
+      {/* ─────────────── Self-service mapping ─────────────── */}
+      <H2 id="self-map">Self-service mapping (owner signature)</H2>
+      <ApiBadge method="POST" path="/services/:id/map" />
+      <P>
+        Before the paywall can proxy a service, its on-chain id must be mapped to a real upstream
+        URL on this gateway (the mapping lives only on the gateway, never on-chain). The default,
+        token-free path is <M>POST /services/:id/map</M>: the service <em>owner</em> proves control
+        by signing a canonical challenge with the key whose account-hash equals the on-chain{' '}
+        <M>owner</M> — no shared admin token. This is exactly what{' '}
+        <M>npx @neargate/cli wrap &lt;url&gt; --pem ./key.pem</M> does against the hosted gateway.
+        The <M>/services/*</M> path is rate-limited to 20 requests per minute per IP.
+      </P>
+      <PropList
+        items={[
+          {
+            name: 'upstreamUrl',
+            type: 'string (http/https URL)',
+            required: true,
+            desc: (
+              <>
+                The real API URL to proxy to after payment. Signed over verbatim and re-validated by
+                the same SSRF guard as the admin path (private/loopback/reserved hosts rejected in
+                live mode).
+              </>
+            ),
+          },
+          {
+            name: 'publicKeyHex',
+            type: 'string (hex public key)',
+            required: true,
+            desc: (
+              <>
+                The seller&apos;s Casper public key. Its derived account-hash must equal the
+                service&apos;s on-chain <M>owner</M>.
+              </>
+            ),
+          },
+          {
+            name: 'timestamp',
+            type: 'number (ms since epoch)',
+            required: true,
+            desc: (
+              <>
+                Client clock, used for freshness: must be within 120,000 ms of the gateway clock and
+                strictly greater than the last accepted timestamp for this id.
+              </>
+            ),
+          },
+          {
+            name: 'signatureHex',
+            type: 'string (hex signature)',
+            required: true,
+            desc: (
+              <>
+                Signature by <M>publicKeyHex</M> over the canonical self-map message below.
+              </>
+            ),
+          },
+        ]}
+      />
+      <P>
+        The signed message is a domain-separated, newline-joined string (the CLI and gateway build
+        it from one shared function), so network, service id, URL, and timestamp are all bound into
+        the signature:
+      </P>
+      <CodeBlock
+        label="canonical self-map message (newline-joined, then signed)"
+        code={
+          'AgentGate/self-map/v1\n' +
+          'casper-test\n' +
+          '1\n' +
+          'https://api.example.com/gold\n' +
+          '1718000000000'
+        }
+      />
+      <CodeBlock
+        label="POST /services/1/map — request body"
+        code={
+          '{\n' +
+          '  "upstreamUrl": "https://api.example.com/gold",\n' +
+          '  "publicKeyHex": "01<hex>",\n' +
+          '  "timestamp": 1718000000000,\n' +
+          '  "signatureHex": "<hex>"\n' +
+          '}'
+        }
+      />
+      <P>
+        Checks run cheapest-first, so a caller never reaches the signature or SSRF work without
+        first passing the basic ones. On success the normalized URL is stored and the gateway
+        returns <M>204 No Content</M>.
+      </P>
+      <DocTable
+        head={['Status', 'Body', 'When']}
+        rows={[
+          [<M key="s">204</M>, '(empty)', 'Signature valid, owner matched — mapping stored.'],
+          [
+            <M key="s">400</M>,
+            <M key="b">{'{ "error": "invalid_service_id" }'}</M>,
+            'Path id is malformed.',
+          ],
+          [
+            <M key="s">400</M>,
+            <M key="b">{'{ "error": "invalid_body" }'}</M>,
+            'Body is not a JSON object, or a field has the wrong type.',
+          ],
+          [
+            <M key="s">400</M>,
+            <M key="b">{'{ "error": "<ssrf reason>" }'}</M>,
+            'upstreamUrl failed the SSRF / scheme guard.',
+          ],
+          [
+            <M key="s">401</M>,
+            <M key="b">{'{ "error": "stale_request" }'}</M>,
+            'timestamp is more than 120 s from the gateway clock.',
+          ],
+          [
+            <M key="s">401</M>,
+            <M key="b">{'{ "error": "invalid_signature" }'}</M>,
+            'Signature does not verify against publicKeyHex.',
+          ],
+          [
+            <M key="s">403</M>,
+            <M key="b">{'{ "error": "not_service_owner" }'}</M>,
+            'Signing account-hash does not equal the on-chain owner.',
+          ],
+          [
+            <M key="s">404</M>,
+            <M key="b">{'{ "error": "service_not_found" }'}</M>,
+            'No service with that id on-chain.',
+          ],
+          [
+            <M key="s">409</M>,
+            <M key="b">{'{ "error": "replayed" }'}</M>,
+            'timestamp not greater than the last accepted map for this id.',
+          ],
+          [
+            <M key="s">429</M>,
+            <M key="b">{'{ "error": "rate_limited" }'}</M>,
+            'Over 20 requests/min on /services paths.',
+          ],
+        ]}
+      />
+
       {/* ─────────────── Admin API ─────────────── */}
       <H2 id="admin">Admin API</H2>
       <P>
-        The admin API maps on-chain service ids to the real upstream URLs this gateway will proxy
-        to. The mapping lives only on the gateway (it is never on-chain). Every admin route requires{' '}
+        The admin API is the operator / self-hosted path for that same upstream mapping — sellers on
+        the hosted gateway use the token-free{' '}
+        <DocLink href="#self-map">self-service map</DocLink> above instead. It maps on-chain service
+        ids to the real upstream URLs this gateway will proxy to. The mapping lives only on the
+        gateway (it is never on-chain). Every admin route requires{' '}
         <M>Authorization: Bearer &lt;AGENTGATE_ADMIN_TOKEN&gt;</M>, compared in constant time; a
         missing or wrong token returns <M>401 {'{ "error": "unauthorized" }'}</M>. In live mode the
         default token <M>dev-admin-token</M> is refused at config load — see{' '}

@@ -33,11 +33,13 @@ export default function Page() {
         service&apos;s name, description, price (in motes), payment target, attestor, owner, and
         an active flag — and crucially the <em>gateway base URL</em>, not your real upstream.
         Second it <strong className="text-white">maps the upstream on the gateway</strong> by
-        POSTing the new <M>serviceId</M> together with your private <M>upstreamUrl</M> to{' '}
-        <M>POST &lt;gateway&gt;/admin/services</M> with the admin Bearer token.
+        signing an ownership challenge with your seller key and POSTing the mapping{' '}
+        (<M>{'{ upstreamUrl, publicKeyHex, timestamp, signatureHex }'}</M>) to{' '}
+        <M>POST &lt;gateway&gt;/services/&lt;serviceId&gt;/map</M> — no shared admin token. The
+        gateway verifies the signature against the on-chain <M>owner</M> before storing it.
       </P>
       <P>
-        Your upstream URL is never written on-chain. It is sent only to the gateway admin API and
+        Your upstream URL is never written on-chain. It is sent only to the gateway and
         lives only in the gateway&apos;s private mapping. Everyone reading the registry sees the
         canonical public endpoint computed as <M>&lt;gateway&gt;/svc/&lt;serviceId&gt;</M> — the
         404-or-proxy facade through which buyers actually call your API.
@@ -51,9 +53,9 @@ export default function Page() {
             'name, description, gateway base URL, priceMotes, paymentTarget, attestor, owner, active=true. Readers compute the public endpoint as <base>/svc/<id>.',
           ],
           [
-            <M key="b">POST /admin/services</M>,
+            <M key="b">POST /services/&lt;id&gt;/map</M>,
             'gateway (private map)',
-            'The serviceId -> upstreamUrl mapping. This is the only place your real upstream URL exists.',
+            'The owner-signed serviceId -> upstreamUrl mapping. This is the only place your real upstream URL exists.',
           ],
         ]}
       />
@@ -85,8 +87,11 @@ export default function Page() {
         If the required variable is unset, <M>agentgate wrap</M> aborts before any side effect with{' '}
         <M>SIGNER_MISSING</M>. The mock-mode message points you at{' '}
         <M>agentgate demo-accounts</M>; the live-mode message tells you to set{' '}
-        <M>SELLER_SIGNER_PEM_PATH</M>. You also need the gateway running and a matching{' '}
-        <M>AGENTGATE_ADMIN_TOKEN</M> so the upstream-mapping step can authenticate.
+        <M>SELLER_SIGNER_PEM_PATH</M> (or pass <M>--pem</M>). The upstream-mapping step
+        authenticates by <strong className="text-white">signing with that same seller key</strong>,
+        so no admin token is needed for the normal wrap flow. The gateway defaults to the hosted{' '}
+        <M>https://gateway.example.org</M>, so you don&apos;t need to run one yourself — pass{' '}
+        <M>--gateway</M> to target a self-hosted gateway instead.
       </P>
 
       <H2 id="wrap-your-api">Wrap your API</H2>
@@ -99,8 +104,7 @@ export default function Page() {
         text={
           'npm run agentgate -- wrap https://api.example.com/gold ' +
           '--price 0.5 --name "Gold Spot Feed" ' +
-          '--description "Live gold spot price, refreshed every 10s" ' +
-          '--gateway http://localhost:4021'
+          '--description "Live gold spot price, refreshed every 10s"'
         }
       />
       <P>Arguments and flags:</P>
@@ -113,7 +117,7 @@ export default function Page() {
             desc: (
               <>
                 The upstream API URL to wrap. Must be a valid <M>http://</M> or <M>https://</M>{' '}
-                URL. Kept private — only ever sent to the gateway admin API, never written
+                URL. Kept private — only ever sent to the gateway, never written
                 on-chain.
               </>
             ),
@@ -158,14 +162,16 @@ export default function Page() {
             name: '--gateway <url>',
             type: 'url',
             required: false,
-            default: 'http://localhost:<MIDDLEWARE_PORT|4021>',
+            default: 'https://gateway.example.org',
             desc: (
               <>
-                Gateway base URL. This — not the upstream — is the <M>endpointUrl</M> stored
-                on-chain; the public endpoint becomes <M>&lt;gateway&gt;/svc/&lt;id&gt;</M>. Must
-                be a base URL with no query string or fragment. In live mode a non-loopback host{' '}
-                <strong className="text-white">must</strong> use <M>https://</M> (the admin token
-                is POSTed here).
+                Gateway base URL, defaulting to the hosted{' '}
+                <M>https://gateway.example.org</M>. This — not the upstream — is the{' '}
+                <M>endpointUrl</M> stored on-chain; the public endpoint becomes{' '}
+                <M>&lt;gateway&gt;/svc/&lt;id&gt;</M>. Must be a base URL with no query string or
+                fragment. In live mode a non-loopback host{' '}
+                <strong className="text-white">must</strong> use <M>https://</M> (your signed
+                mapping is POSTed here).
               </>
             ),
           },
@@ -202,7 +208,7 @@ export default function Page() {
       <CodeBlock
         code={[
           'service id:      7',
-          'public endpoint: http://localhost:4021/svc/7',
+          'public endpoint: https://gateway.example.org/svc/7',
           'dashboard:       http://localhost:3000/services/7',
           'register tx:     <txHash>',
         ].join('\n')}
@@ -215,9 +221,8 @@ export default function Page() {
             title: 'Validate everything first',
             body: (
               <>
-                Name, description, upstream URL, gateway base, admin token and price are all
-                checked before any side effect. Fail-fast: nothing is registered if an input is
-                bad.
+                Name, description, upstream URL, gateway base and price are all checked before any
+                side effect. Fail-fast: nothing is registered if an input is bad.
               </>
             ),
           },
@@ -235,10 +240,11 @@ export default function Page() {
             title: 'Map the upstream on the gateway',
             body: (
               <>
-                The CLI POSTs <M>{'{ serviceId, upstreamUrl }'}</M> to{' '}
-                <M>&lt;gateway&gt;/admin/services</M> with{' '}
-                <M>Authorization: Bearer &lt;adminToken&gt;</M>. This is the only step that knows
-                your real upstream.
+                The CLI signs an ownership challenge with your seller key and POSTs{' '}
+                <M>{'{ upstreamUrl, publicKeyHex, timestamp, signatureHex }'}</M> to{' '}
+                <M>&lt;gateway&gt;/services/&lt;id&gt;/map</M>. The gateway checks the signature
+                against the on-chain owner (plus freshness and SSRF) — this is the only step that
+                knows your real upstream.
               </>
             ),
           },
@@ -249,7 +255,7 @@ export default function Page() {
                 On success it prints the id, public endpoint{' '}
                 (<M>&lt;gateway&gt;/svc/&lt;id&gt;</M>), dashboard URL and tx hash. If the mapping
                 step failed, the on-chain registration is <strong className="text-white">not</strong>{' '}
-                rolled back and a retry curl is printed (see Troubleshooting).
+                rolled back and you&apos;ll need to re-create the mapping (see Troubleshooting).
               </>
             ),
           },
@@ -311,7 +317,7 @@ export default function Page() {
 
       <H2 id="going-live">Going live</H2>
       <P>
-        Live mode (<M>AGENTGATE_MODE=live</M>) targets Casper Testnet and adds three hard
+        Live mode (<M>AGENTGATE_MODE=live</M>) targets Casper Testnet and adds two hard
         requirements:
       </P>
       <DocTable
@@ -327,13 +333,7 @@ export default function Page() {
             <span key="b">
               <M>--gateway</M> uses <M>https://</M> for any non-localhost host
             </span>,
-            'The admin Bearer token is POSTed to the gateway; cleartext http would leak it. Non-loopback http is rejected with INSECURE_URL.',
-          ],
-          [
-            <span key="c">
-              A strong, unique <M>AGENTGATE_ADMIN_TOKEN</M>
-            </span>,
-            'Live mode refuses the default dev-admin-token — set your own before the gateway will start.',
+            'Your signed upstream mapping is POSTed to the gateway; cleartext http would expose it. Non-loopback http is rejected with INSECURE_URL.',
           ],
         ]}
       />
@@ -355,16 +355,18 @@ export default function Page() {
       <P>
         Each successful wrap registers a <strong className="text-white">new</strong> service with a
         new id. Re-running it does not update an existing service — it creates a duplicate. If you
-        only need to fix the upstream mapping, use the admin endpoint directly rather than wrapping
-        again.
+        only need to fix the upstream mapping, re-map the upstream directly (see below) rather than
+        wrapping again.
       </P>
       <H3 id="ts-admin-map-failed">Gateway upstream mapping failed</H3>
       <P>
-        If step 2 fails (gateway down, wrong token, timeout), the on-chain registration is{' '}
-        <strong className="text-white">not rolled back</strong> — <M>/svc/&lt;id&gt;</M> will fail
-        for callers until the mapping exists. The CLI prints a warning to stderr with the exact
-        retry curl, then appends a one-line note to stdout. The curl references{' '}
-        <M>$AGENTGATE_ADMIN_TOKEN</M> from your environment so no secret is printed:
+        If step 2 fails (gateway unreachable, signature rejected, timeout), the on-chain
+        registration is <strong className="text-white">not rolled back</strong> —{' '}
+        <M>/svc/&lt;id&gt;</M> will fail for callers until the mapping exists. The CLI prints a
+        warning to stderr with the details it used so you can re-create the mapping. On a
+        self-hosted <em>admin-token</em> gateway you can re-create it directly with the admin
+        endpoint (the curl references <M>$AGENTGATE_ADMIN_TOKEN</M> from your environment so no
+        secret is printed):
       </P>
       <CodeBlock
         label="retry curl (re-create the upstream mapping)"

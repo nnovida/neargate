@@ -126,11 +126,13 @@ export default function Page() {
       <Callout tone="info" title="Contract is live on Casper Testnet">
         <M>AgentGateRegistry</M> is deployed and live on Casper Testnet (network{' '}
         <M>casper-test</M>, Casper 2.0). Package hash:{' '}
-        <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. Set{' '}
-        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> to this value (along with{' '}
-        <M>CSPR_CLOUD_API_KEY</M> and signer PEM paths) to enable live reads/writes.{' '}
-        <M>NOT_DEPLOYED</M> (503) is a fallback — it fires only when the env var is unset (e.g. a
-        fresh checkout with no <M>.env</M>).
+        <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. The
+        published CLI already defaults to this hash, so reads run zero-env via node RPC — no{' '}
+        <M>CSPR_CLOUD_API_KEY</M> is needed for reads. Set{' '}
+        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> explicitly for a self-hosted gateway, which also
+        needs <M>CSPR_CLOUD_API_KEY</M> (payment/attestation) and a signer PEM (writes).{' '}
+        <M>NOT_DEPLOYED</M> (503) is a fallback — it fires only for a gateway/server that leaves
+        the hash unset.
       </Callout>
 
       <H3 id="chain-deploy">Deploy &amp; transactions</H3>
@@ -141,7 +143,7 @@ export default function Page() {
             <M key="nd">NOT_DEPLOYED</M>,
             '503',
             'A contract call/read was attempted while REGISTRY_CONTRACT_PACKAGE_HASH is unset.',
-            'Set REGISTRY_CONTRACT_PACKAGE_HASH to the live package hash (hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9) in your .env. The contract is deployed on Casper Testnet; this error only fires on a fresh checkout with no .env configured.',
+            'The published CLI already defaults REGISTRY_CONTRACT_PACKAGE_HASH to the live package hash (hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9), so CLI reads run zero-env. This error only fires for a self-hosted gateway/server that leaves the hash unset — set it there.',
           ],
           [
             <M key="tf">TX_FAILED</M>,
@@ -167,6 +169,12 @@ export default function Page() {
             'A node-RPC call (status / put / get / dictionary read) exceeded the per-call timeout (UPSTREAM_TIMEOUT_MS).',
             'The node is slow or half-open. Retry; switch CASPER_NODE_URL to a faster endpoint or raise UPSTREAM_TIMEOUT_MS.',
           ],
+          [
+            <M key="crf">CONTRACT_RESOLVE_FAILED</M>,
+            '502',
+            'Node RPC (query_global_state on the registry package key) returned no contractPackage stored value, or no enabled contract versions, for the package hash. Contract resolution uses node RPC and needs no CSPR.cloud key.',
+            'Confirm REGISTRY_CONTRACT_PACKAGE_HASH names a real, deployed package on this network and CASPER_NODE_URL points at a healthy node.',
+          ],
         ]}
       />
 
@@ -191,12 +199,6 @@ export default function Page() {
             '502',
             'The fetch to CSPR.cloud failed at the transport layer (DNS/connection refused, etc.) — not a timeout.',
             'Confirm outbound network access and that CSPR_CLOUD_API_URL resolves.',
-          ],
-          [
-            <M key="crf">CONTRACT_RESOLVE_FAILED</M>,
-            '502',
-            'CSPR.cloud could not resolve an active contract hash for the registry package hash.',
-            'Confirm REGISTRY_CONTRACT_PACKAGE_HASH names a real, deployed package on this network.',
           ],
         ]}
       />
@@ -361,7 +363,7 @@ export default function Page() {
             <M key="su">service_unavailable</M>,
             '503',
             'The service is registered on-chain but has no upstream mapping on this gateway, or (live) its upstream host now resolves to a forbidden/private address. Never charged.',
-            'Map the upstream via POST /admin/services; in live mode ensure the upstream resolves to a public host.',
+            'Map the upstream — in live mode the seller `wrap` self-service maps via POST /services/:id/map (owner signature, no admin token); POST /admin/services still exists for admin/mock mapping. In live mode also ensure the upstream resolves to a public host.',
           ],
           [
             <M key="umt">unsupported_media_type</M>,
@@ -583,7 +585,7 @@ export default function Page() {
           [
             <M key="isu">INSECURE_URL</M>,
             '400',
-            'In live mode a non-localhost gateway base used http:// — the admin Bearer token would be sent in cleartext.',
+            'In live mode a non-localhost gateway base used http:// — the wrap mapping request to that gateway (the owner-signed self-service map, or an admin Bearer token) would travel over cleartext http.',
             'Use https:// for the gateway in live mode (localhost may stay http).',
           ],
           [

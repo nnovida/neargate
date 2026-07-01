@@ -45,7 +45,8 @@ export default function ArchitecturePage() {
               maps its upstream URL on the gateway.
             </>,
             <>
-              <M>chain</M> (register / setActive) and the gateway admin API (map upstream)
+              <M>chain</M> (register / setActive) and the gateway (owner-signed self-service
+              upstream mapping)
             </>,
           ],
           [
@@ -249,8 +250,11 @@ export default function ArchitecturePage() {
               <>
                 The CLI calls <M>chain.registerService</M> (name, price in motes, payment target,
                 attestor), getting back a <M>serviceId</M>. It then maps the private upstream URL to
-                that id on the gateway via <M>POST /admin/services</M> (admin token required). The
-                service record lives on-chain; the upstream URL never does.
+                that id on the gateway. In live mode this is a self-service, owner-signed{' '}
+                <M>POST /services/:id/map</M> — the seller signs an ownership challenge with the
+                service owner key, so no admin token is needed; a legacy token-guarded{' '}
+                <M>POST /admin/services</M> remains for self-hosted admin. The service record lives
+                on-chain; the upstream URL never does.
               </>
             ),
           },

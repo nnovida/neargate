@@ -172,7 +172,10 @@ export default function Page() {
         <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. If{' '}
         <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> is unset (e.g. a fresh checkout with no .env), the
         gateway falls back to <M>NOT_DEPLOYED</M> (503). See{' '}
-        <DocLink href="/docs/contract">Smart contracts</DocLink>.
+        <DocLink href="/docs/contract">Smart contracts</DocLink>. These prerequisites apply only
+        when you run the gateway/stack yourself — the public gateway is already hosted at{' '}
+        <M>https://gateway.example.org</M>, and the published CLI defaults the registry hash and
+        reads Casper Testnet with no keys.
       </Callout>
 
       <H2 id="get-started">Browse the docs — Get started</H2>

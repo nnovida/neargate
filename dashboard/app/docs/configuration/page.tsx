@@ -81,8 +81,10 @@ export default function ConfigurationPage() {
             <M key="v">MIDDLEWARE_PORT</M>,
             <M key="d">4021</M>,
             <span key="s">
-              402 paywall gateway; also the default <M>--gateway</M> for{' '}
-              <DocLink href="/docs/cli">agentgate wrap</DocLink>.
+              402 paywall gateway. For a self-hosted gateway, pass{' '}
+              <M>--gateway http://localhost:4021</M> to{' '}
+              <DocLink href="/docs/cli">agentgate wrap</DocLink>; the published CLI otherwise
+              defaults <M>--gateway</M> to the hosted gateway.
             </span>,
           ],
           [

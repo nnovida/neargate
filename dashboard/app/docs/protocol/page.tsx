@@ -182,7 +182,7 @@ export default function Page() {
           '      "maxAmountRequired": "500000000",',
           '      "asset": "CSPR",',
           '      "payTo": "account-hash-3b0c...e91f",',
-          '      "resource": "http://gateway:4021/svc/7",',
+          '      "resource": "https://gateway.example.org/svc/7",',
           '      "description": "Weather Oracle",',
           '      "maxTimeoutSeconds": 300,',
           '      "extra": {',
