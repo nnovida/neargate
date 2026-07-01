@@ -4,6 +4,7 @@ import { LiveCasperClient } from './live';
 
 export { MockChainHttpClient, mockAccountHash } from './mock';
 export { LiveCasperClient } from './live';
+export { verifyOwnerSignature, type OwnerSignatureResult } from './signature';
 
 /**
  * Picks the ChainClient implementation by `config.mode` (SPEC §4):
