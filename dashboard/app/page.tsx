@@ -2,15 +2,16 @@ import Link from 'next/link';
 import { StatsStrip } from '@/components/stats-strip';
 import { CommandBlock } from '@/components/copy';
 
+const LIST_CMD = 'npx @neargate/cli list';
 const WRAP_CMD =
-  'npx @neargate/cli wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed"';
+  'npx @neargate/cli wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --pem ./seller.pem --gateway https://your-gateway';
 
 const STEPS = [
   {
     n: '01',
     title: 'Wrap',
     body: 'One command registers your API on the Casper registry contract and drops a 402 paywall in front of it. No billing code, no accounts, no keys to issue.',
-    code: 'npx @neargate/cli wrap <url> --price 0.5',
+    code: 'npx @neargate/cli wrap <url> --price 0.5 --pem ./seller.pem',
   },
   {
     n: '02',
@@ -90,7 +91,14 @@ export default function Home() {
           className="mt-9 animate-fade-up"
           style={{ animationDelay: '270ms' }}
         >
-          <CommandBlock text={WRAP_CMD} wrap typewriter />
+          <CommandBlock text={LIST_CMD} wrap typewriter />
+          <p className="mt-3 font-mono text-[11px] text-mut">
+            read the live on-chain catalog — zero setup, no keys. Then{' '}
+            <Link href="#get-started" className="text-accent underline underline-offset-4">
+              wrap your own API
+            </Link>
+            .
+          </p>
         </div>
         <div
           className="mt-7 flex flex-wrap items-center gap-3 animate-fade-up"
@@ -215,7 +223,7 @@ export default function Home() {
       </section>
 
       {/* ── closing CTA ──────────────────────────────────────── */}
-      <section className="pb-24 sm:pb-32">
+      <section id="get-started" className="pb-24 sm:pb-32">
         <div className="panel relative overflow-hidden p-8 sm:p-12">
           <div
             aria-hidden

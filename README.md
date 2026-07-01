@@ -1,10 +1,18 @@
 # AgentGate
 
-**Stripe for AI agents on Casper.** Wrap any HTTP API into a paid, on-chain-registered
-service in one command:
+**Stripe for AI agents on Casper.** Read the live on-chain service catalog with zero setup —
+no config, no keys:
 
 ```bash
-npx @neargate/cli wrap https://api.example.com/data --price 0.5 --name "My Data API"
+npx @neargate/cli list
+```
+
+Wrap any HTTP API into a paid, on-chain-registered service in one command (needs a funded
+seller key + a running gateway):
+
+```bash
+npx @neargate/cli wrap https://api.example.com/data --price 0.5 --name "My Data API" \
+  --pem ./seller.pem --gateway https://your-gateway
 ```
 
 Sellers put a **402 paywall** in front of their API and register it in an on-chain
@@ -95,8 +103,12 @@ Set `ANTHROPIC_API_KEY` to let the buyer agent use Claude instead of the MockLlm
 | Registry | devnet mirrors the Odra contract rules | deployed `AgentGateRegistry` contract |
 | Guardrails | default admin token OK, SSRF guard off | default token refused, SSRF guard on |
 
-All env vars are documented in [.env.example](.env.example). Live mode requires
-`CSPR_CLOUD_API_KEY` and a non-default `AGENTGATE_ADMIN_TOKEN` (enforced by config).
+All env vars are documented in [.env.example](.env.example). The **gateway and background
+services** in live mode require `CSPR_CLOUD_API_KEY` and a non-default `AGENTGATE_ADMIN_TOKEN`
+(enforced by config). The **CLI is looser**: `list`/`status` read the public node with no keys
+at all; only `status` attestation history needs `CSPR_CLOUD_API_KEY`, and `wrap`'s gateway
+mapping needs the gateway's admin token. Every value can also be passed as a flag
+(`--mode`, `--node-url`, `--registry`, `--pem`, `--api-key`, `--admin-token`; flag > env > default).
 
 ## Repo layout
 

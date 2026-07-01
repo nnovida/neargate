@@ -52,12 +52,16 @@ export default function Page() {
       </P>
 
       {/* ───────────────────────────── environment ───────────────────────────── */}
-      <H2 id="environment">Environment it reads</H2>
+      <H2 id="environment">Environment &amp; flags it reads</H2>
       <P>
-        Every command calls <M>loadConfig()</M>, so the CLI is driven by environment
-        variables, not flags, for mode and identity. The table below covers only what the
-        commands here touch; the full list lives in{' '}
-        <DocLink href="/docs/configuration">Configuration</DocLink>.
+        Every command calls <M>loadConfig()</M>, but each config value can be supplied as a{' '}
+        <strong>flag or an environment variable</strong> — precedence is{' '}
+        <M>flag &gt; env var &gt; built-in default</M>. The published CLI defaults to{' '}
+        <M>live</M> mode and the deployed registry hash, so <M>list</M> and <M>status</M> read
+        Casper Testnet with no configuration at all; <M>--mode</M>, <M>--node-url</M>,{' '}
+        <M>--registry</M>, <M>--pem</M>, <M>--admin-token</M> and <M>--api-key</M> override the
+        matching env vars. The table below covers only what the commands here touch; the full
+        list lives in <DocLink href="/docs/configuration">Configuration</DocLink>.
       </P>
       <PropList
         items={[
