@@ -19,7 +19,7 @@ Wrap any HTTP API into a paid, on-chain-registered service in one command — th
 on the line besides the args is your funded wallet key:
 
 ```bash
-npx @neargate/cli wrap https://api.example.com/data --price 0.5 --name "My Data API" --pem ./key.pem
+npx @neargate/cli wrap https://api.example.com/data --price 2.5 --name "My Data API" --pem ./key.pem
 ```
 
 Buy one call to any listed service the same way — the CLI pays the 402 invoice and prints
@@ -184,6 +184,9 @@ runs on-chain; the trust score reads `(1,1)` after the attestation below. Set
 | `register_service` tx | [`35d10755…`](https://testnet.cspr.live/transaction/35d10755398108bd4838575dbd7760838e826a0ae4196de7626edfe94cd5b3b2) |
 | Payment transfer tx (`transfer_id` = nonce) | [`7cbba41d…`](https://testnet.cspr.live/transaction/7cbba41da6d3ebb4520ee2cd87dbc2387b56cd25c185b6514234d6fd04e8c1b0) |
 | `record_attestation` tx | [`f9759829…`](https://testnet.cspr.live/transaction/f9759829f536db00e981bcc53540455ef8141ff2ab3732909806b80da054ee01) |
+| Flagship service #5 `register_service` (2026-07-02) | [`dbfdecbb…`](https://testnet.cspr.live/transaction/dbfdecbbc43441fe8d59876387bfd9520e8f63bfc36ab79ddb0905903e3bf78f) |
+| #5 buyer-paid transfer via `agentgate buy` (2.5 CSPR) | [`d6cbfcab…`](https://testnet.cspr.live/transaction/d6cbfcab88a68c3b20c48fc7b47f1e814a9f9e0f0b716c4c5a1d9d3e0380f318) |
+| #5 `record_attestation` | [`23ddacf9…`](https://testnet.cspr.live/transaction/23ddacf9e6c969afb1461d15f5fe87576e073d6f0e890ab58644d8be2d9bc251) |
 
 ## Going live
 

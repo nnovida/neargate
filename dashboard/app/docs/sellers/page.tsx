@@ -127,7 +127,7 @@ export default function Page() {
         wrap
         text={
           'npx @neargate/cli wrap https://api.example.com/gold ' +
-          '--price 0.5 --name "Gold Spot Feed" --pem ./key.pem ' +
+          '--price 2.5 --name "Gold Spot Feed" --pem ./key.pem ' +
           '--description "Live gold spot price, refreshed every 10s"'
         }
       />
@@ -252,9 +252,9 @@ export default function Page() {
       <P>On success the CLI prints the service id, public endpoint, dashboard link and tx hash:</P>
       <CodeBlock
         code={[
-          'service id:      1',
-          'public endpoint: https://gateway.example.org/svc/1',
-          'dashboard:       https://agentgate.example.org/services/1',
+          'service id:      5',
+          'public endpoint: https://gateway.example.org/svc/5',
+          'dashboard:       https://agentgate.example.org/services/5',
           'register tx:     <txHash>',
         ].join('\n')}
       />
@@ -264,16 +264,16 @@ export default function Page() {
         An unpaid request to the public endpoint must answer <M>HTTP 402</M> with an x402
         challenge — that is the paywall working, not an error:
       </P>
-      <CommandBlock text="curl -i https://gateway.example.org/svc/1" />
+      <CommandBlock text="curl -i https://gateway.example.org/svc/5" />
       <CodeBlock
         label="expected (trimmed)"
         code={[
           'HTTP/2 402',
           '',
           '{"x402Version":1,"error":"X-PAYMENT header is required",',
-          ' "accepts":[{"scheme":"exact","network":"casper-test","maxAmountRequired":"500000000",',
-          '   "asset":"CSPR","payTo":"account-hash-…","resource":"https://gateway.example.org/svc/1",',
-          '   …,"extra":{"nonce":"…","serviceId":1,…}}]}',
+          ' "accepts":[{"scheme":"exact","network":"casper-test","maxAmountRequired":"2500000000",',
+          '   "asset":"CSPR","payTo":"account-hash-…","resource":"https://gateway.example.org/svc/5",',
+          '   …,"extra":{"nonce":"…","serviceId":5,…}}]}',
         ].join('\n')}
       />
       <P>

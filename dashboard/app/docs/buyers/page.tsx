@@ -319,16 +319,16 @@ export default function Page() {
         the response body to stdout (pipeable), with the payment receipt on stderr — see the{' '}
         <DocLink href="/docs/cli#buy">buy reference</DocLink> for flags:
       </P>
-      <CommandBlock wrap text="npx @neargate/cli buy 1 --pem ./buyer.pem --max 5 --gateway https://gateway.example.org" />
+      <CommandBlock wrap text="npx @neargate/cli buy 5 --pem ./buyer.pem --max 3" />
       <P>
         But the exchange is plain HTTP, so any client works — the CLI and SDK are conveniences,
         not requirements. Here is the same loop by hand against the live hosted gateway
-        (service <M>#1</M>, 0.5 CSPR per call on Casper Testnet). First, request without
+        (service <M>#5</M>, 2.5 CSPR per call on Casper Testnet). First, request without
         payment and a real invoice comes back:
       </P>
       <CodeBlock
         label="1 — the 402 challenge"
-        code={'curl -sS https://gateway.example.org/svc/1'}
+        code={'curl -sS https://gateway.example.org/svc/5'}
       />
       <CodeBlock
         label="response (abbreviated) — keep payTo and extra.nonce"
@@ -336,7 +336,7 @@ export default function Page() {
           '{',
           '  "x402Version": 1,',
           '  "accepts": [{',
-          '    "maxAmountRequired": "500000000",',
+          '    "maxAmountRequired": "2500000000",',
           '    "payTo": "account-hash-19ff…b5f0",',
           '    "extra": { "nonce": "1542202979977604", "expiresAtMs": … }',
           '  }]',
@@ -345,9 +345,9 @@ export default function Page() {
       />
       <P>
         Second, pay: send a native CSPR transfer to <M>payTo</M> with{' '}
-        <M>transfer_id = extra.nonce</M>, for at least <M>maxAmountRequired</M> and never below
-        the 2.5 CSPR network minimum (here: 2.5 CSPR, since the 0.5 CSPR price is under the
-        floor). Any signer works — <M>casper-client</M>, Casper Wallet, or the SDK:
+        <M>transfer_id = extra.nonce</M>, for the invoiced <M>maxAmountRequired</M> (here:
+        exactly 2.5 CSPR — the service is priced at Casper&apos;s native-transfer floor). Any
+        signer works — <M>casper-client</M>, Casper Wallet, or the SDK:
       </P>
       <CodeBlock
         label="2 — pay with casper-client (amount in motes; 0.1 CSPR gas)"
@@ -374,7 +374,7 @@ export default function Page() {
           "PROOF=$(printf '%s' '{\"x402Version\":1,\"scheme\":\"exact\",\"network\":\"casper-test\",",
           '  \"payload\":{\"transaction\":\"<deploy-hash>\",\"transferId\":\"<nonce>\"}}\' | base64 -w0)',
           '',
-          'curl -sS https://gateway.example.org/svc/1 -H "X-PAYMENT: $PROOF"',
+          'curl -sS https://gateway.example.org/svc/5 -H "X-PAYMENT: $PROOF"',
         ].join('\n')}
       />
       <P>

@@ -16,7 +16,7 @@ npx @neargate/cli status 1    # one service: record, price, trust, attestations
 `wrap` registers your service **on Casper Testnet** and drops a 402 paywall in front of it — one line, the only thing besides the args is your funded wallet key:
 
 ```bash
-npx @neargate/cli wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --pem ./key.pem
+npx @neargate/cli wrap https://api.example.com/gold --price 2.5 --name "Gold Spot Feed" --pem ./key.pem
 ```
 
 It signs the on-chain registration with `--pem`, then maps your upstream on the gateway by **signing an ownership challenge with the same key** — no shared admin token. `--gateway` defaults to the hosted gateway; pass it to target a local or self-hosted one. (`--pem` is irreducible: registering on-chain is a signed, gas-paying transaction.)

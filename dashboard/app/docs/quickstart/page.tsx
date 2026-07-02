@@ -33,10 +33,10 @@ export default function Page() {
       <H2 id="see-it-live">See it live in 10 seconds</H2>
       <P>
         Before installing anything: the hosted gateway is running against Casper Testnet right
-        now. Ask it for service <M>#1</M> and a real 402 invoice comes back — a fresh{' '}
+        now. Ask it for service <M>#5</M> and a real 402 invoice comes back — a fresh{' '}
         <M>nonce</M>, the on-chain price, and the seller&apos;s payment account:
       </P>
-      <CodeBlock label="no install required" code={'curl -sS https://gateway.example.org/svc/1'} />
+      <CodeBlock label="no install required" code={'curl -sS https://gateway.example.org/svc/5'} />
       <CodeBlock
         label="response (abbreviated)"
         code={[
@@ -45,16 +45,16 @@ export default function Page() {
           '  "error": "X-PAYMENT header is required",',
           '  "accepts": [{',
           '    "scheme": "exact", "network": "casper-test",',
-          '    "maxAmountRequired": "500000000",',
+          '    "maxAmountRequired": "2500000000",',
           '    "payTo": "account-hash-19ff…b5f0",',
-          '    "extra": { "nonce": "1542202979977604", "serviceId": 1, … }',
+          '    "extra": { "nonce": "1542202979977604", "serviceId": 5, … }',
           '  }]',
           '}',
         ].join('\n')}
       />
       <P>
         Paying that invoice and redeeming the proof is one command —{' '}
-        <M>npx @neargate/cli buy 1 --pem key.pem</M> — or the{' '}
+        <M>npx @neargate/cli buy 5 --pem key.pem</M> — or the{' '}
         <DocLink href="/docs/buyers#plain-curl">three-step curl flow</DocLink>. The rest of this
         page runs the same loop fully offline instead — an in-process mock chain, no keys and no
         faucet needed.
