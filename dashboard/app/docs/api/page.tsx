@@ -26,7 +26,7 @@ export default function Page() {
   return (
     <>
       <DocHeader
-        kicker="reference"
+        kicker="REFERENCE"
         title="HTTP API"
         lede="Two surfaces. Part 1 is the gateway (the middleware): health probes, public service metadata, the 402 paywall proxy, self-service upstream mapping, and the Bearer-authenticated admin API. Part 2 is the dashboard's own read-only /api routes that feed the catalog and activity views."
       />
@@ -66,7 +66,9 @@ export default function Page() {
         while <M>/services/*</M> (self-service mapping) and <M>/admin/*</M> are capped at 20 per
         minute each — all keyed by client IP and returning{' '}
         <M>429 {'{ "error": "rate_limited" }'}</M> with draft-7 <M>RateLimit-*</M> headers on
-        excess. The JSON request body limit is 256 KB; proxied bodies are capped at 1 MiB in both
+        excess. The JSON request body limit is 256 KB — a larger body returns{' '}
+        <M>413 {'{ "error": "payload_too_large" }'}</M> and malformed JSON returns{' '}
+        <M>400 {'{ "error": "invalid_json" }'}</M>; proxied bodies are capped at 1 MiB in both
         directions. Unknown routes return <M>404 {'{ "error": "not_found" }'}</M>.
       </P>
 
@@ -123,8 +125,8 @@ export default function Page() {
           '{\n' +
           '  "service": {\n' +
           '    "id": 1,\n' +
-          '    "name": "Gold Spot Feed",\n' +
-          '    "description": "Live XAU/USD spot price",\n' +
+          '    "name": "RWA FX & Gold Oracle",\n' +
+          '    "description": "USD/IDR rate + gold spot with confidence",\n' +
           '    "endpointUrl": "http://gateway:4021/svc/1",\n' +
           '    "priceMotes": "500000000",\n' +
           '    "paymentTarget": "account-hash-<64hex>",\n' +
@@ -134,7 +136,7 @@ export default function Page() {
           '    "createdAt": 1717900000000\n' +
           '  },\n' +
           '  "score": { "totalCalls": 100, "successCalls": 95 },\n' +
-          '  "trustTier": "reliable"\n' +
+          '  "trustTier": "trusted"\n' +
           '}'
         }
       />
@@ -203,8 +205,10 @@ export default function Page() {
                 <M>scheme:"exact"</M>, <M>network:"casper-test"</M> (or <M>"mock"</M>),{' '}
                 <M>payload.transaction</M> (deploy hash of the native CSPR transfer),{' '}
                 <M>payload.transferId</M> (the <M>extra.nonce</M> from the challenge),{' '}
-                <M>payload.from</M> (payer account-hash, optional). A missing or malformed value
-                re-issues a fresh challenge with <M>error:"invalid_payment_header"</M>.
+                <M>payload.from</M> (payer account-hash, optional). A malformed value — or a{' '}
+                <M>network</M> that does not match the gateway&apos;s chain — re-issues a fresh
+                challenge with <M>error:"invalid_payment_header"</M>; a missing header is simply
+                the challenge phase (<M>error:"X-PAYMENT header is required"</M>).
               </>
             ),
           },
@@ -234,7 +238,7 @@ export default function Page() {
           '      "asset": "CSPR",\n' +
           '      "payTo": "account-hash-<64hex>",\n' +
           '      "resource": "http://localhost:4021/svc/1",\n' +
-          '      "description": "Gold Spot Feed",\n' +
+          '      "description": "RWA FX & Gold Oracle",\n' +
           '      "maxTimeoutSeconds": 300,\n' +
           '      "extra": {\n' +
           '        "nonce": "73920184556012",\n' +
@@ -261,6 +265,7 @@ export default function Page() {
       </P>
       <CommandBlock
         wrap
+        prompt={null}
         text={
           '# Build the X-PAYMENT payload:\n' +
           '# base64({"x402Version":1,"scheme":"exact","network":"mock",\n' +
@@ -414,7 +419,9 @@ export default function Page() {
       <Callout tone="warn" title="upstream failures still consumed the invoice">
         The nonce is burned <em>before</em> proxying, so a <M>502</M>/<M>504</M> from the upstream
         still consumes that invoice — the buyer must obtain a new invoice (and pay again) to retry.
-        The attestation for that call records success=false.
+        No attestation is recorded for these gateway-level failures — the seller&apos;s backend
+        being unreachable is not scored either way. Only a response the upstream actually returned
+        is attested (success = 2xx, so a proxied 500 from the upstream is attested success=false).
       </Callout>
 
       {/* ─────────────── Self-service mapping ─────────────── */}
@@ -641,11 +648,17 @@ export default function Page() {
       <H3 id="admin-list">List upstream mappings</H3>
       <ApiBadge method="GET" path="/admin/services" />
       <P>
-        Returns the full id → URL map this gateway holds. Bearer auth required.
+        Returns every mapping this gateway holds as a JSON array of{' '}
+        <M>{'{ serviceId, upstreamUrl }'}</M> objects, sorted by service id. Bearer auth required.
       </P>
       <CodeBlock
         label="200 OK"
-        code={'{\n  "1": "https://api.example.com/gold",\n  "2": "https://api.example.com/fx"\n}'}
+        code={
+          '[\n' +
+          '  { "serviceId": 1, "upstreamUrl": "https://api.example.com/gold" },\n' +
+          '  { "serviceId": 2, "upstreamUrl": "https://api.example.com/fx" }\n' +
+          ']'
+        }
       />
 
       {/* DELETE /admin/services/:id */}
@@ -671,15 +684,17 @@ export default function Page() {
       {/* ════════════════════════════ PART 2 — DASHBOARD ════════════════════════════ */}
       <H2 id="dashboard">Part 2 — Dashboard read API</H2>
       <P>
-        The dashboard&apos;s own read-only routes under <M>dashboard/app/api/*</M>. They run on the
-        Node.js runtime, are force-dynamic and never cached, and read the chain through one
+        The dashboard&apos;s own read-only routes under <M>dashboard/app/api/*</M>. The hosted
+        instance serves them at <M>https://agentgate.example.org/api/*</M>;{' '}
+        <M>localhost:3000</M> is the repo default. They run on the Node.js runtime, are
+        force-dynamic and never cached, and read the chain through one
         server-side client (the browser never talks to the chain directly). On a chain outage every
         data route answers <M>503 {'{ "error": "chain_unreachable" }'}</M> (or{' '}
         <M>500 {'{ "error": "config_invalid" }'}</M> on an invalid config), and the UI shows a
         banner. Response types are exported from <M>dashboard/lib/api-types.ts</M>.
       </P>
 
-      <H3 id="dash-services">GET /api/services</H3>
+      <H3 id="dash-services">Service catalog</H3>
       <ApiBadge method="GET" path="/api/services" />
       <P>
         The full catalog: every service with its score and derived trust tier. Type{' '}
@@ -692,16 +707,16 @@ export default function Page() {
           '  "network": "mock",\n' +
           '  "services": [\n' +
           '    {\n' +
-          '      "service": { "id": 1, "name": "Gold Spot Feed", "priceMotes": "500000000", ... },\n' +
+          '      "service": { "id": 1, "name": "RWA FX & Gold Oracle", "priceMotes": "500000000", ... },\n' +
           '      "score": { "totalCalls": 100, "successCalls": 95 },\n' +
-          '      "trustTier": "reliable"\n' +
+          '      "trustTier": "trusted"\n' +
           '    }\n' +
           '  ]\n' +
           '}'
         }
       />
 
-      <H3 id="dash-service">GET /api/services/[id]</H3>
+      <H3 id="dash-service">Service detail</H3>
       <ApiBadge method="GET" path="/api/services/:id" />
       <P>
         Detail for one service, plus the 50 most recent attestations and money math. Type{' '}
@@ -727,9 +742,9 @@ export default function Page() {
           '{\n' +
           '  "network": "mock",\n' +
           '  "mode": "mock",\n' +
-          '  "service": { "id": 1, "name": "Gold Spot Feed", ... },\n' +
+          '  "service": { "id": 1, "name": "RWA FX & Gold Oracle", ... },\n' +
           '  "score": { "totalCalls": 100, "successCalls": 95 },\n' +
-          '  "trustTier": "reliable",\n' +
+          '  "trustTier": "trusted",\n' +
           '  "attestations": [ { "serviceId": 1, "success": true, "timestamp": 1718000000000, ... } ],\n' +
           '  "revenueMotes": "47500000000",\n' +
           '  "balanceMotes": "12000000000"\n' +
@@ -737,11 +752,14 @@ export default function Page() {
         }
       />
 
-      <H3 id="dash-activity">GET /api/activity</H3>
+      <H3 id="dash-activity">Activity feed</H3>
       <ApiBadge method="GET" path="/api/activity" />
       <P>
         The recent global activity feed, newest first. Type <M>ActivityResponse</M>. The optional{' '}
-        <M>?limit=</M> query is clamped to 1–200 (default 50).
+        <M>?limit=</M> query is clamped to 1–200 (default 50). <M>kind</M> is one of{' '}
+        <M>service_registered</M> | <M>payment</M> | <M>attestation</M>; <M>amountMotes</M> appears
+        only on <M>payment</M> events and <M>success</M> only on <M>attestation</M> events. In live
+        mode <M>serviceId</M> is <M>null</M> on registration events (the id is assigned on-chain).
       </P>
       <CodeBlock
         label="200 OK"
@@ -750,20 +768,26 @@ export default function Page() {
           '  "network": "mock",\n' +
           '  "events": [\n' +
           '    {\n' +
-          '      "kind": "service_registered",\n' +
+          '      "kind": "payment",\n' +
           '      "txHash": "<64hex>",\n' +
           '      "serviceId": 1,\n' +
           '      "amountMotes": "500000000",\n' +
-          '      "success": true,\n' +
           '      "timestamp": 1718000000000,\n' +
-          '      "detail": "Service \'Gold Spot Feed\' registered by 01..."\n' +
+          '      "detail": "payment of 0.5 CSPR to account-hash-<64hex> (transfer_id 73920184556012)"\n' +
+          '    },\n' +
+          '    {\n' +
+          '      "kind": "service_registered",\n' +
+          '      "txHash": "<64hex>",\n' +
+          '      "serviceId": 1,\n' +
+          '      "timestamp": 1717900000000,\n' +
+          '      "detail": "service \\"RWA FX & Gold Oracle\\" registered (id 1) at 0.5 CSPR/call"\n' +
           '    }\n' +
           '  ]\n' +
           '}'
         }
       />
 
-      <H3 id="dash-stats">GET /api/stats</H3>
+      <H3 id="dash-stats">Platform stats</H3>
       <ApiBadge method="GET" path="/api/stats" />
       <P>
         Aggregate platform totals. Type <M>StatsResponse</M>. <M>revenueMotes</M> = Σ (price ×
@@ -783,7 +807,7 @@ export default function Page() {
         }
       />
 
-      <H3 id="dash-health">GET /api/health</H3>
+      <H3 id="dash-health">Dashboard liveness</H3>
       <ApiBadge method="GET" path="/api/health" />
       <P>
         Liveness probe for the dashboard process itself. Deliberately does not touch the chain (that

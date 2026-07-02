@@ -25,7 +25,7 @@ export default function ConfigurationPage() {
       <DocHeader
         kicker="REFERENCE"
         title="Configuration"
-        lede="Every AgentGate setting is an environment variable read once by loadConfig() in @agentgate/shared. This page documents exactly what that function reads, its defaults, its validation, and which values are mandatory in live mode."
+        lede="Every AgentGate setting is an environment variable — almost all read once by loadConfig() in @agentgate/shared. This page documents exactly what is read where, the defaults, the validation, and which values are mandatory in live mode."
       />
 
       <P>
@@ -34,7 +34,10 @@ export default function ConfigurationPage() {
         of truth: it reads each variable, validates it, applies defaults, and returns a validated
         <M>AgentGateConfig</M>. Every value has a working <M>mock</M>-mode default, so a fresh clone
         runs with zero setup. A commented template listing every variable lives at
-        <M>.env.example</M> in the repo root.
+        <M>.env.example</M> in the repo root. Two variables are read outside{' '}
+        <M>loadConfig()</M>: <M>LOG_LEVEL</M> (by the shared logger — see{' '}
+        <DocLink href="#logging">Logging</DocLink>) and <M>INVOICE_STORE_PATH</M> (by the gateway
+        server — see <DocLink href="#middleware">Gateway</DocLink>).
       </P>
       <P>
         Two cross-cutting rules apply to <em>every</em> variable. First, empty and whitespace-only
@@ -62,11 +65,30 @@ export default function ConfigurationPage() {
             <span key="m">
               <M>mock</M> = in-process devnet, fully offline. <M>live</M> = Casper Testnet via node
               RPC + CSPR.cloud. Any other value throws <M>CONFIG_INVALID</M> (
-              <M>AGENTGATE_MODE must be &quot;mock&quot; or &quot;live&quot;</M>).
+              <M>AGENTGATE_MODE must be &quot;mock&quot; or &quot;live&quot;</M>). The published CLI
+              overrides this default to <M>live</M> — see below.
             </span>,
           ],
         ]}
       />
+
+      <H2 id="cli-overlay">How the CLI overlays this config</H2>
+      <P>
+        Every <DocLink href="/docs/cli">CLI</DocLink> command builds its env before calling{' '}
+        <M>loadConfig()</M>. Precedence per key: explicit flag &gt; non-empty{' '}
+        <M>process.env</M> &gt; CLI built-in default. Two CLI built-ins differ from the defaults on
+        this page: the published CLI defaults <M>AGENTGATE_MODE</M> to <M>live</M> (not{' '}
+        <M>mock</M>) and <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> to the deployed registry hash. The
+        config-bearing flags are <M>--mode</M>, <M>--node-url</M>, <M>--registry</M>, <M>--pem</M>,{' '}
+        <M>--api-key</M> and <M>--admin-token</M>.
+      </P>
+      <P>
+        <M>loadConfig()</M> also takes a second <M>opts</M> argument —{' '}
+        <M>{'{ requireCloudKey, requireStrongAdminToken }'}</M>, both <M>true</M> by default. The
+        CLI passes both as <M>false</M> so read commands (<M>list</M>, <M>status</M>) run with zero
+        env; the gateway and buyer agent use the defaults, so the{' '}
+        <DocLink href="#live-guardrails">live-mode guardrails</DocLink> always apply to them.
+      </P>
 
       <H2 id="ports">Ports</H2>
       <P>
@@ -102,10 +124,11 @@ export default function ConfigurationPage() {
         URL.
       </P>
 
-      <H2 id="middleware">Middleware</H2>
+      <H2 id="middleware">Gateway (middleware)</H2>
       <P>
         Settings for the 402 gateway itself — auth, invoice lifetime, upstream timeout, and proxy
-        trust.
+        trust. The gateway process lives in <M>packages/middleware</M>, hence the{' '}
+        <M>MIDDLEWARE_*</M> variable names.
       </P>
       <DocTable
         head={['Variable', 'Default', 'Validation', 'Meaning']}
@@ -127,6 +150,19 @@ export default function ConfigurationPage() {
               integer <M>1 … MAX_SAFE_INTEGER</M>
             </span>,
             'Invoice / nonce validity window in milliseconds (default 5 minutes). Also bounds the accepted age of an on-chain transfer.',
+          ],
+          [
+            <M key="v">INVOICE_STORE_PATH</M>,
+            <span key="d">
+              <M>&apos;&apos;</M> (empty)
+            </span>,
+            'plain string — read by the gateway server, not loadConfig()',
+            <span key="m">
+              Optional JSON file path. When set, issued invoices persist via{' '}
+              <M>FileInvoiceStore</M> and survive a gateway restart; empty keeps the in-memory
+              store, so a restart invalidates in-flight invoices (a proof for an already-paid nonce
+              is then rejected with a fresh 402). Set this for any production gateway.
+            </span>,
           ],
           [
             <M key="v">UPSTREAM_TIMEOUT_MS</M>,
@@ -184,8 +220,10 @@ export default function ConfigurationPage() {
               yes
             </strong>,
             <span key="m">
-              CSPR.cloud API key. Live mode refuses to start while this is empty (
-              <M>get one at console.cspr.cloud</M>). Sent as a raw token — no <M>Bearer</M> prefix.
+              CSPR.cloud API key. A live gateway or buyer agent refuses to boot while this is empty
+              (<M>get one at console.cspr.cloud</M>); the CLI relaxes this check so read commands (
+              <M>list</M>/<M>status</M>) run key-free. Sent as a raw token — no <M>Bearer</M>{' '}
+              prefix.
             </span>,
           ],
           [
@@ -335,8 +373,9 @@ export default function ConfigurationPage() {
               <M>&apos;&apos;</M> (empty)
             </span>,
             <span key="m">
-              Buyer mock public key (typically <M>01</M> + 64 hex). Populated by{' '}
-              <DocLink href="/docs/cli">agentgate demo-accounts</DocLink>.
+              Buyer mock public key (typically <M>01</M> + 64 hex). Generated by{' '}
+              <DocLink href="/docs/cli">agentgate demo-accounts</DocLink> — paste the printed{' '}
+              <M>export</M> lines into your shell or <M>.env</M>.
             </span>,
           ],
           [
@@ -373,13 +412,29 @@ export default function ConfigurationPage() {
         ]}
       />
 
+      <H2 id="dashboard">Dashboard</H2>
+      <P>
+        The dashboard has one env var of its own, read at build time in{' '}
+        <M>dashboard/lib/seo.ts</M> — not by <M>loadConfig()</M>.
+      </P>
+      <DocTable
+        head={['Variable', 'Default', 'Meaning']}
+        rows={[
+          [
+            <M key="v">NEXT_PUBLIC_SITE_URL</M>,
+            <M key="d">https://agentgate.example.org</M>,
+            'Build-time base URL for the canonical and Open Graph links the dashboard emits. Set it when self-hosting the dashboard under another domain.',
+          ],
+        ]}
+      />
+
       <H2 id="live-guardrails">Live-mode guardrails</H2>
       <P>
         When <M>AGENTGATE_MODE=live</M>, <M>loadConfig()</M> runs extra checks after parsing and
         refuses to start on an unsafe configuration. These are the hard stops:
       </P>
       <Callout tone="warn" title="Live mode REFUSES to start when…">
-        <P>
+        <p className="mt-2">
           <strong>The default admin token is still set.</strong> If{' '}
           <M>AGENTGATE_ADMIN_TOKEN</M> equals <M>dev-admin-token</M> (
           <M>DEFAULT_ADMIN_TOKEN</M>), it throws{' '}
@@ -387,19 +442,18 @@ export default function ConfigurationPage() {
             live mode refuses the default AGENTGATE_ADMIN_TOKEN — set a strong unique token
           </M>
           .
-        </P>
-        <P>
+        </p>
+        <p className="mt-2">
           <strong>The CSPR.cloud key is empty.</strong> If <M>CSPR_CLOUD_API_KEY</M> is empty it
           throws <M>live mode requires CSPR_CLOUD_API_KEY (get one at console.cspr.cloud)</M>.
-        </P>
-        <P>
-          <strong>Signers are missing.</strong> <M>GATE_SIGNER_PEM_PATH</M> (and the buyer/seller
-          equivalents) are not validated by <M>loadConfig()</M> itself, but a live deployment cannot
-          write attestations, pay, or register services without them — leaving{' '}
-          <M>GATE_SIGNER_PEM_PATH</M> empty means the gateway has no key to sign on-chain
-          attestations. Provide all three before going live.
-        </P>
+        </p>
       </Callout>
+      <P>
+        Not enforced at load: the three <M>*_PEM_PATH</M> values. A live gateway without{' '}
+        <M>GATE_SIGNER_PEM_PATH</M> boots but cannot write attestations, and the buyer/seller
+        equivalents are needed to pay and to register services — provide all three signers before
+        going live.
+      </P>
       <DocTable
         head={['Guardrail', 'Where', 'Error / consequence']}
         rows={[
@@ -454,8 +508,8 @@ export default function ConfigurationPage() {
 
       <H2 id="env-example">.env.example at a glance</H2>
       <P>
-        The repo-root template, reproduced here. Mock-mode defaults are filled in; live-only secrets
-        are intentionally blank.
+        The repo-root template, lightly abridged (comments shortened to fit). Mock-mode defaults
+        are filled in; live-only secrets are intentionally blank.
       </P>
       <CodeBlock
         label=".env.example (repo root)"
@@ -471,6 +525,7 @@ export default function ConfigurationPage() {
           '# --- middleware ---\n' +
           'AGENTGATE_ADMIN_TOKEN=dev-admin-token   # MUST be changed in live mode\n' +
           'INVOICE_TTL_MS=300000\n' +
+          'INVOICE_STORE_PATH=                     # optional: persist invoices across restarts (FileInvoiceStore)\n' +
           'UPSTREAM_TIMEOUT_MS=30000\n' +
           'LOG_LEVEL=info                          # debug|info|warn|error\n' +
           'TRUST_PROXY=0                           # trusted reverse-proxy hops (set 1 behind one proxy)\n' +

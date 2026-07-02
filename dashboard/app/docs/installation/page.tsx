@@ -24,7 +24,7 @@ export default function InstallationPage() {
   return (
     <>
       <DocHeader
-        kicker="docs / installation"
+        kicker="GET STARTED"
         title="Installation"
         lede="AgentGate is an npm-workspaces monorepo. One install at the repo root builds every package plus the dashboard, and a clean clone runs end to end in mock mode with no keys, no network and no chain access. This page covers requirements, the project layout, the two run modes, the env file, and how to verify the install."
       />
@@ -37,7 +37,7 @@ export default function InstallationPage() {
         agent or dashboard.
       </P>
       <DocTable
-        head={['Requirement', 'Version', 'Needed for']}
+        head={['Requirement', 'Version / status', 'Needed for']}
         rows={[
           [
             <M key="n">Node.js</M>,
@@ -78,8 +78,24 @@ export default function InstallationPage() {
         package hash is{' '}
         <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. You can
         install, run the full payment loop, and pass every test without ever touching Rust. The
-        Rust toolchain only matters if you want to run the 20 OdraVM contract tests locally.
+        Rust toolchain only matters if you want to run the 45 OdraVM contract tests (20 registry +
+        25 SpendGuard) locally.
       </Callout>
+
+      <H2 id="install-cli">Install the CLI (npm)</H2>
+      <P>
+        Sellers who only need the <M>agentgate</M> CLI can skip the clone entirely — the published
+        CLI targets Casper Testnet and the hosted gateway by default.
+      </P>
+      <CommandBlock prompt={null} text="npx @neargate/cli list" />
+      <P>Or install globally:</P>
+      <CommandBlock prompt={null} text={'npm install -g @neargate/cli\nagentgate list'} />
+      <P>
+        A table of registered services confirms the install. The rest of this page covers the
+        from-source monorepo install — needed for the gateway, buyer agent, dashboard and
+        contracts. See the <DocLink href="/docs/cli">CLI reference</DocLink> for every command and
+        flag.
+      </P>
 
       <H2 id="clone-install">Clone and install</H2>
       <P>
@@ -89,7 +105,7 @@ export default function InstallationPage() {
       <CommandBlock
         wrap
         prompt={null}
-        text={'git clone <repo-url> agentgate\ncd agentgate\nnpm install'}
+        text={'git clone https://example.invalid/AgentGate.git agentgate\ncd agentgate\nnpm install'}
       />
       <P>
         After install, no further setup is required for mock mode — every environment variable has
@@ -234,8 +250,13 @@ export default function InstallationPage() {
           ],
           [
             'Guardrails',
-            'Default admin token OK, SSRF guard off',
-            'Default token refused, SSRF guard on',
+            <span key="m">
+              Default admin token OK,{' '}
+              <DocLink href="/docs/security">SSRF</DocLink> guard off (localhost upstreams allowed)
+            </span>,
+            <span key="l">
+              Default token refused, SSRF guard on (private/localhost upstream URLs rejected)
+            </span>,
           ],
         ]}
       />
@@ -244,7 +265,8 @@ export default function InstallationPage() {
         <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> to{' '}
         <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>, plus{' '}
         <M>CSPR_CLOUD_API_KEY</M> and your PEM signer paths in <M>.env</M>, then set{' '}
-        <M>AGENTGATE_MODE=live</M>. The full loop (register_service, pay, record_attestation,
+        <M>AGENTGATE_MODE=live</M> and start the live stack with <M>npm run dev:live</M> (the one
+        script that auto-loads <M>.env</M>). The full loop (register_service, pay, record_attestation,
         trust score reads) runs on-chain. Real transaction links are in the repo README under
         "Deployed addresses (Casper Testnet)". Use <M>AGENTGATE_MODE=mock</M> for a keys-free
         local run.
@@ -257,10 +279,17 @@ export default function InstallationPage() {
       <H2 id="env-file">Environment file</H2>
       <P>
         A commented template with every variable lives at <M>.env.example</M> in the repo root.
-        Copy it to <M>.env</M> to start customizing; mock mode works with the file untouched
+        Copy it to <M>.env</M> to start customizing live mode; mock mode works with no file at all
         because every value already has a sensible default.
       </P>
       <CommandBlock prompt={null} text="cp .env.example .env" />
+      <Callout tone="warn" title="Who reads .env">
+        Only <M>npm run dev:live</M> auto-loads <M>.env</M> (a minimal loader in{' '}
+        <M>scripts/live.ts</M> — the repo has no dotenv dependency). The mock-mode commands
+        (<M>npm run dev</M>, <M>npm run demo</M>, <M>npm test</M>) and the CLI read the shell
+        environment only — export the variable (<M>export ANTHROPIC_API_KEY=…</M>) or prefix the
+        command (<M>ANTHROPIC_API_KEY=… npm run dev</M>).
+      </Callout>
       <P>
         Empty and whitespace-only values are treated as unset (the default applies), so you only
         need to fill in the variables you actually change. The most common ones to set:
@@ -310,12 +339,12 @@ export default function InstallationPage() {
       <H3 id="verify-test">Run the test suite</H3>
       <CommandBlock prompt={null} text="npm test" />
       <P>
-        Runs <M>vitest</M> across every package unit suite plus the end-to-end loop — 329 tests.
+        Runs <M>vitest</M> across every package unit suite plus the end-to-end loop — 341 tests.
         A clean install passes all of them.
       </P>
       <CodeBlock
         label="expected (abbreviated)"
-        code={'Test Files  25 passed (25)\n     Tests  329 passed (329)\n  Duration  ...s'}
+        code={'Test Files  26 passed (26)\n     Tests  341 passed (341)\n  Duration  ...s'}
       />
 
       <H3 id="verify-typecheck">Type-check the workspace</H3>
@@ -332,7 +361,8 @@ export default function InstallationPage() {
       <P>
         The fastest end-to-end proof. It boots the devnet, oracle and middleware in-process,
         creates faucet-funded demo accounts, wraps the oracle as a service, runs the buyer agent
-        once, records the attestation on-chain, prints both transaction hashes — and exits 0. The
+        once, records the attestation on the mock chain, prints both transaction hashes — and
+        exits 0. The
         data is ephemeral (gone when the process exits), so it will not appear in the dashboard;
         use <M>npm run dev:seed</M> for that.
       </P>
@@ -342,9 +372,10 @@ export default function InstallationPage() {
       />
       <Callout tone="ok" title="Install verified">
         Green <M>npm test</M>, a clean <M>npm run typecheck</M>, and a <M>npm run demo</M> that
-        exits 0 with two transaction hashes confirm the install is healthy. Optionally, run the 20
-        contract tests with <M>cd contracts/agentgate-registry &amp;&amp; cargo odra test</M> if
-        you have the Rust toolchain installed.
+        exits 0 with two transaction hashes confirm the install is healthy. Optionally, run the
+        contract tests with <M>cargo odra test</M> in <M>contracts/agentgate-registry</M> (20
+        tests) and <M>contracts/spend-guard</M> (25 tests) if you have the Rust toolchain
+        installed.
       </Callout>
 
       <NextLinks

@@ -18,16 +18,16 @@ export const metadata: Metadata = {
   alternates: { canonical: '/docs/deployment' },
   title: 'Deploy to production',
   description:
-    'Deploy the AgentGate 402 gateway: what to host, the hosting docker-compose stack, Railway + Vercel, the live-mode checklist enforced by loadConfig(), health/readiness probes, and built-in hardening.',
+    'Deploy the AgentGate 402 gateway: what to host, the hosting docker-compose stack, Railway + Vercel, bare-metal PM2/systemd behind a Cloudflare tunnel, the live-mode checklist enforced by loadConfig(), health/readiness probes, and built-in hardening.',
 };
 
 export default function DeploymentPage() {
   return (
     <>
       <DocHeader
-        kicker="docs / deployment"
+        kicker="RUN A GATEWAY"
         title="Deploy to production"
-        lede="The only public service that matters is the middleware gateway — a stateless 402 paywall reverse proxy. This guide covers what to host, the hosting compose stack, Railway/Vercel, the live-mode checklist that loadConfig() refuses to start without, health probes, and the hardening that ships in the box."
+        lede="The only service on the payment path is the middleware gateway — a stateless-by-default 402 paywall reverse proxy. This guide covers what to host, the hosting compose stack, Railway/Vercel, the bare-metal PM2/systemd + tunnel path, the live-mode checklist that loadConfig() refuses to start without, health probes, and the hardening that ships in the box."
       />
 
       <H2 id="what-to-deploy">What to deploy</H2>
@@ -42,8 +42,9 @@ export default function DeploymentPage() {
           [
             <M key="c">packages/middleware</M>,
             <span key="r">
-              The 402 paywall reverse proxy + admin API. The public service. Stateless apart from a
-              small upstream-map JSON file (<M>serviceId → upstream URL</M>).
+              The 402 paywall reverse proxy + admin API. The public service. Stateless apart from
+              two small JSON files: the upstream map (<M>serviceId → upstream URL</M>) and, when{' '}
+              <M>INVOICE_STORE_PATH</M> is set, the invoice store.
             </span>,
             <strong key="d" className="text-white">
               Yes — this is the product.
@@ -94,6 +95,51 @@ export default function DeploymentPage() {
         <M>CASPER_NODE_URL</M> + CSPR.cloud — there is no devnet to point at, and exposing one would
         be a mock chain serving real-looking data.
       </Callout>
+
+      <H2 id="live-path">The live path in four steps</H2>
+      <P>The rest of this page, in execution order:</P>
+      <StepFlow
+        steps={[
+          {
+            title: 'Fill the live env',
+            body: (
+              <>
+                Set everything in the <DocLink href="#live-checklist">live-mode checklist</DocLink>{' '}
+                — <M>loadConfig()</M> and <M>createApp()</M> refuse to boot without it.
+              </>
+            ),
+          },
+          {
+            title: 'Run the gateway',
+            body: (
+              <>
+                Pick one: <DocLink href="#single-image">a single Docker image</DocLink>,{' '}
+                <DocLink href="#railway">Railway</DocLink>, or{' '}
+                <DocLink href="#pm2-tunnel">bare-metal PM2 / systemd</DocLink>.
+              </>
+            ),
+          },
+          {
+            title: 'Front it with HTTPS',
+            body: (
+              <>
+                Terminate TLS at a platform proxy or a Cloudflare tunnel, and set{' '}
+                <M>TRUST_PROXY</M> to the real hop count.
+              </>
+            ),
+          },
+          {
+            title: 'Verify',
+            body: (
+              <>
+                Curl <DocLink href="#health"><M>/healthz</M> and <M>/readyz</M></DocLink>, then wrap
+                a test service with <M>--gateway</M> pointed at your instance and confirm{' '}
+                <M>/svc/&lt;id&gt;</M> answers 402.
+              </>
+            ),
+          },
+        ]}
+      />
 
       <H2 id="docker">Docker &amp; docker-compose</H2>
       <P>
@@ -183,6 +229,28 @@ export default function DeploymentPage() {
         wrap
         text="docker build -f packages/middleware/Dockerfile -t agentgate-middleware ."
       />
+      <P>
+        Run it live — mount the signer key read-only and a volume for the data directory (without
+        the volume, every <M>serviceId → upstream</M> mapping dies with the container and{' '}
+        <M>/svc/&lt;id&gt;</M> 404s after a restart):
+      </P>
+      <CommandBlock
+        prompt={null}
+        wrap
+        text={
+          'docker run -d --name agentgate-gateway -p 4021:4021 \\\n' +
+          '  -e AGENTGATE_MODE=live \\\n' +
+          '  -e REGISTRY_CONTRACT_PACKAGE_HASH=hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9 \\\n' +
+          '  -e CSPR_CLOUD_API_KEY="$CSPR_CLOUD_API_KEY" \\\n' +
+          '  -e AGENTGATE_ADMIN_TOKEN="$(openssl rand -hex 32)" \\\n' +
+          '  -e GATE_SIGNER_PEM_PATH=/keys/gate.pem \\\n' +
+          '  -e INVOICE_STORE_PATH=/app/packages/middleware/data/invoices.json \\\n' +
+          '  -e TRUST_PROXY=1 \\\n' +
+          '  -v /path/to/gate.pem:/keys/gate.pem:ro \\\n' +
+          '  -v agentgate-gateway-data:/app/packages/middleware/data \\\n' +
+          '  agentgate-middleware'
+        }
+      />
       <Callout tone="info" title="pin the base image for production">
         The Dockerfiles use <M>FROM node:22-alpine</M> and note in a comment: &ldquo;For production,
         pin to a digest: <M>FROM node:22-alpine@sha256:&lt;digest&gt;</M>&rdquo;. Pin it before you
@@ -212,6 +280,37 @@ export default function DeploymentPage() {
         <M>buildCommand: npm run build -w dashboard</M>, output at <M>dashboard/.next</M>. Deploy the
         gateway elsewhere (Railway/Docker) — Vercel hosts only the UI, which reads through its own
         server routes and is never on the payment path.
+      </P>
+
+      <H2 id="pm2-tunnel">Bare metal: PM2, systemd, and a Cloudflare tunnel</H2>
+      <P>
+        This is how the production gateway at <M>gateway.example.org</M> actually runs — no
+        Docker. Keep the gateway alive with the shipped PM2 config (it defines both{' '}
+        <M>agentgate-gateway</M> on <M>:4021</M> and <M>agentgate-dashboard</M> on <M>:3000</M>, and
+        sets <M>INVOICE_STORE_PATH</M> so issued invoices survive restarts), then expose it through
+        a TLS-terminating tunnel.
+      </P>
+      <CommandBlock
+        prompt={null}
+        wrap
+        text={
+          'pm2 start deploy/agentgate.ecosystem.config.cjs   # agentgate-gateway (:4021) + agentgate-dashboard (:3000)\n' +
+          'pm2 save                                           # persist across reboot\n' +
+          'pm2 logs agentgate-gateway'
+        }
+      />
+      <P>
+        No PM2? A systemd <M>--user</M> unit ships at <M>deploy/agentgate-gateway.service</M> — copy
+        it to <M>~/.config/systemd/user/</M>, run <M>loginctl enable-linger &quot;$USER&quot;</M>{' '}
+        (so it survives logout and starts on boot), then{' '}
+        <M>systemctl --user enable --now agentgate-gateway</M>.
+      </P>
+      <P>
+        Expose it with a Cloudflare tunnel: add a public hostname on an existing tunnel
+        (<M>gateway.&lt;your-domain&gt;</M> → <M>http://localhost:4021</M>) or create a dedicated
+        one with <M>cloudflared tunnel create</M> + <M>cloudflared tunnel route dns</M>. Behind
+        exactly one Cloudflare hop, set <M>TRUST_PROXY=1</M>. The full walkthrough, including the
+        tunnel config file, is in <M>docs/DEPLOY-GATEWAY.md</M> in the repo.
       </P>
 
       <H2 id="live-checklist">Live-mode checklist</H2>
@@ -252,7 +351,18 @@ export default function DeploymentPage() {
               <strong className="text-white">Required by the middleware.</strong>{' '}
               <M>createApp()</M> throws &ldquo;live mode requires GATE_SIGNER_PEM_PATH … refusing the
               mock-signer fallback&rdquo; when empty — this is the attestor key that signs on-chain
-              attestations.
+              attestations. It must hold CSPR: the gateway pays gas for one{' '}
+              <M>record_attestation</M> per successful paid call (buyers pay first, so it is
+              self-limiting, not an open drain). Keep the file at mode <M>600</M> — the gateway
+              warns when it loads a group/other-readable key.
+            </span>,
+          ],
+          [
+            <M key="v">INVOICE_STORE_PATH</M>,
+            <span key="d">
+              Path of a JSON file for the <M>FileInvoiceStore</M> so issued invoices survive a
+              restart — a buyer who already paid on-chain can still redeem. Unset = in-memory only;
+              a restart voids outstanding invoices.
             </span>,
           ],
           [
@@ -390,8 +500,8 @@ export default function DeploymentPage() {
         intentionally off — the gateway is a server-to-server API for agents.
       </P>
 
-      <H2 id="deferred">What is deferred</H2>
-      <Callout tone="info" title="Registry contract is live on Casper Testnet">
+      <H2 id="contract-status">Contract status and what is deferred</H2>
+      <Callout tone="ok" title="Registry contract is live on Casper Testnet">
         AgentGateRegistry is deployed and running on Casper Testnet (network{' '}
         <M>casper-test</M>, Casper 2.0). Package hash:{' '}
         <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. Set this as{' '}
@@ -402,15 +512,6 @@ export default function DeploymentPage() {
       <DocTable
         head={['Item', 'Status']}
         rows={[
-          [
-            'Registry contract deploy',
-            <span key="s">
-              <strong className="text-white">Live on Casper Testnet.</strong> Package hash:{' '}
-              <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. Set
-              this as <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> in <M>.env</M>. Transaction links are in
-              the repo README under &ldquo;Deployed addresses (Casper Testnet)&rdquo;.
-            </span>,
-          ],
           [
             'Contract wasm',
             <span key="s">
@@ -429,6 +530,14 @@ export default function DeploymentPage() {
           ],
         ]}
       />
+
+      <Callout tone="warn" title="point the CLI at your gateway">
+        In live mode the CLI&apos;s <M>wrap</M> defaults <M>--gateway</M> to the hosted{' '}
+        <M>https://gateway.example.org</M>. When self-hosting, pass{' '}
+        <M>--gateway https://your-gateway.example.com</M> (or your tunnel URL) so the seller&apos;s
+        upstream mapping lands on your instance — otherwise your <M>/svc/&lt;id&gt;</M> responds
+        404. See <DocLink href="/docs/cli">the CLI reference</DocLink>.
+      </Callout>
 
       <NextLinks
         links={[

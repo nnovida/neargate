@@ -32,8 +32,9 @@ export default function Page() {
 
       <H2 id="overview">Overview</H2>
       <P>
-        AgentGate ships two contracts under <M>contracts/</M>, each a standalone Odra crate
-        following the <M>cargo odra new --template full</M> layout (one crate, an{' '}
+        AgentGate ships two contracts under <M>contracts/</M>, each a standalone crate built with
+        Odra (Casper&rsquo;s Rust smart-contract framework), following the{' '}
+        <M>cargo odra new --template full</M> layout (one crate, an{' '}
         <M>Odra.toml</M>, and the generated build/schema bins). Source:{' '}
         <M>contracts/agentgate-registry/src/registry.rs</M> and{' '}
         <M>contracts/spend-guard/src/spend_guard.rs</M>.
@@ -44,7 +45,11 @@ export default function Page() {
           [
             <M key="c">AgentGateRegistry</M>,
             'Service discovery catalog + per-service payment-attestation reputation ledger.',
-            'Deployed to Casper Testnet (casper-test, Casper 2.0) and wired into the off-chain product (a live registry client). Package hash: hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9',
+            <span key="st">
+              Deployed to Casper Testnet (casper-test, Casper 2.0) and wired into the off-chain
+              product (a live registry client). Package <M>hash-10f9&hellip;27e9</M> (full hash in
+              the <M>.env</M> block below).
+            </span>,
           ],
           [
             <M key="c">SpendGuard</M>,
@@ -68,9 +73,9 @@ export default function Page() {
         The registry is the catalog and the reputation source of truth. A seller calls{' '}
         <M>register_service</M> to list a wrapped HTTP API; the caller becomes the service{' '}
         <M>owner</M> and the service starts <M>active</M>. After each paid call the AgentGate
-        middleware (the service&rsquo;s <M>attestor</M>) calls <M>record_attestation</M>, which
-        bumps a <M>(total_calls, success_calls)</M> score and appends to a capped attestation
-        history. The contract has no constructor args and no privileged admin — there is no global
+        gateway (the service&rsquo;s <M>attestor</M>) calls <M>record_attestation</M>, which
+        bumps a <M>(total_calls, success_calls)</M> score and prepends to a capped, newest-first
+        attestation history. The contract has no constructor args and no privileged admin — there is no global
         owner, only per-service owners.
       </P>
       <P>
@@ -125,7 +130,7 @@ export default function Page() {
             type: 'String',
             desc: (
               <>
-                Base URL of the AgentGate middleware fronting this service, stored verbatim. Readers
+                Base URL of the AgentGate gateway fronting this service, stored verbatim. Readers
                 compute the public endpoint as <M>{'{gateway_base_url}/svc/{id}'}</M>.
               </>
             ),
@@ -137,7 +142,7 @@ export default function Page() {
             type: 'Address',
             desc: <>The registration caller. May toggle <M>active</M>, rotate the attestor, and record attestations.</>,
           },
-          { name: 'attestor', type: 'Address', desc: <>Key allowed to record attestations (the AgentGate middleware signer).</> },
+          { name: 'attestor', type: 'Address', desc: <>Key allowed to record attestations (the AgentGate gateway signer).</> },
           {
             name: 'active',
             type: 'bool',
@@ -177,8 +182,9 @@ export default function Page() {
               prepends to the attestation list and truncates to 100, emits{' '}
               <M>AttestationRecorded</M> (carrying the post-update counters). Reverts{' '}
               <M>ServiceNotFound</M> (2), then <M>NotAuthorized</M> (1) for strangers,{' '}
-              <M>ServiceInactive</M> (3) if paused, <M>DuplicateAttestation</M> (4) if this hash was
-              already attested for this service.
+              <M>ServiceInactive</M> (3) if the service is inactive (<M>active=false</M> via{' '}
+              <M>set_active</M>), <M>DuplicateAttestation</M> (4) if this hash was already attested
+              for this service.
             </span>,
           ],
           [
@@ -194,8 +200,8 @@ export default function Page() {
             <M key="s">set_attestor(service_id, attestor)</M>,
             'owner only',
             <span key="b">
-              <strong>NEW.</strong> Rotates the authorised attestor key, emits{' '}
-              <M>ServiceAttestorChanged</M>. Lets an owner replace a compromised/rotated middleware
+              Rotates the authorised attestor key, emits{' '}
+              <M>ServiceAttestorChanged</M>. Lets an owner replace a compromised/rotated gateway
               signer without re-registering (which would mint a new id and reset the score) and
               without disabling the service. Reverts <M>ServiceNotFound</M> (2),{' '}
               <M>NotAuthorized</M> (1) for non-owners.
@@ -229,6 +235,13 @@ export default function Page() {
         <M>scores</M> mapping uses <M>saturating_add</M> and keeps the full count. After 105 calls,{' '}
         <M>get_attestations</M> returns the most recent 100 while <M>get_score</M> reports all 105.
       </Callout>
+      <P>
+        The contract stores raw counters only — the trust tier shown in the dashboard and read by
+        buyer agents is computed off-chain as the <M>success_calls / total_calls</M> ratio bucketed
+        by <M>trustTier()</M> in <M>packages/shared/src/trust.ts</M> (<M>new</M> / <M>reliable</M> /{' '}
+        <M>trusted</M>); see{' '}
+        <DocLink href="/docs/protocol#attestation">Attestation and trust score</DocLink>.
+      </P>
 
       <H3 id="registry-events">Events</H3>
       <P>
@@ -326,8 +339,9 @@ export default function Page() {
         <M>debit</M>; only the owner may <M>pause</M> / <M>withdraw</M>), <M>budget</M> (cumulative
         spend ceiling), <M>spent</M>, <M>balance</M> (escrowed motes available), <M>per_call_cap</M>
         , <M>window_ms</M> + <M>max_calls_in_window</M> (the sliding rate limit),{' '}
-        <M>min_trust_tier</M> (a <M>u8</M> 0..=255 mandate), <M>paused</M>, and{' '}
-        <M>created_at</M>.
+        <M>min_trust_tier</M> (a <M>u8</M> 0..=255 mandate — the tier value is supplied off-chain
+        by the gate on each <M>debit</M>, e.g. the registry success ratio bucketed into tiers),{' '}
+        <M>paused</M>, and <M>created_at</M>.
       </P>
 
       <H3 id="spendguard-entrypoints">Entrypoints</H3>
@@ -368,7 +382,7 @@ export default function Page() {
             <M key="s">withdraw(policy_id, amount)</M>,
             'owner only',
             <span key="b">
-              <strong>NEW.</strong> Reclaims unspent escrow to the owner (works even while paused, so
+              Reclaims unspent escrow to the owner (works even while paused, so
               funds are never locked); emits <M>Withdrawn</M>. Reverts <M>PolicyNotFound</M> (1),{' '}
               <M>NotAuthorized</M> (2), <M>ZeroAmount</M> (4), <M>OverBudget</M> (8) if{' '}
               <M>amount &gt; balance</M>.
@@ -438,12 +452,14 @@ export default function Page() {
         per-service duplicate guard, the inactive-flag freeze and reactivation, score math, the
         100-entry cap dropping oldest entries while counters keep full history, owner-only{' '}
         <M>set_active</M> / <M>set_attestor</M> (attestor rejected), and event emission. SpendGuard
-        has its own equivalent suite under <M>contracts/spend-guard/</M>.
+        has its own 25-test suite under <M>contracts/spend-guard/</M> (open/deposit/debit revert
+        matrix, rate window, withdraw, pause).
       </P>
       <CommandBlock text="cd contracts/agentgate-registry && cargo odra build" />
       <P>
-        Writes <M>wasm/AgentGateRegistry.wasm</M> (~288 KiB after cargo-odra&rsquo;s automatic{' '}
-        <M>wasm-opt</M> + <M>wasm-strip</M> pass; requires <M>cargo-odra --locked</M>, wabt for{' '}
+        Writes <M>wasm/AgentGateRegistry.wasm</M> (~291 KiB after cargo-odra&rsquo;s automatic{' '}
+        <M>wasm-opt</M> + <M>wasm-strip</M> pass — the exact size varies with the binaryen version;
+        requires <M>cargo-odra</M> (<M>cargo install cargo-odra --locked</M>), wabt for{' '}
         <M>wasm-strip</M>, and binaryen &ge; 121 for <M>wasm-opt</M> with{' '}
         <M>--llvm-memory-copy-fill-lowering</M> support). <M>cargo odra schema</M> emits the
         entrypoint/type/event JSON under <M>resources/casper_contract_schemas/</M>. Any committed
@@ -453,8 +469,34 @@ export default function Page() {
         AgentGateRegistry is live on Casper Testnet (network <M>casper-test</M>, Casper 2.0). The
         full loop &mdash; <M>register_service</M> &rarr; pay (native CSPR transfer, transfer_id =
         invoice nonce) &rarr; <M>record_attestation</M> &rarr; trust-score reads (1,1) &mdash; runs
-        on-chain. Real transaction links are in the repo README under &ldquo;Deployed addresses
-        (Casper Testnet)&rdquo;. The deploy runbook (keys, faucet,{' '}
+        on-chain. See the closing{' '}
+        <a
+          href="https://testnet.cspr.live/transaction/f9759829f536db00e981bcc53540455ef8141ff2ab3732909806b80da054ee01"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-accent underline underline-offset-4 hover:text-white"
+        >
+          record_attestation transaction
+        </a>{' '}
+        on the explorer; the install, register and payment links are in the{' '}
+        <a
+          href="https://example.invalid/AgentGate#deployed-addresses-casper-testnet"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-accent underline underline-offset-4 hover:text-white"
+        >
+          repo README
+        </a>{' '}
+        under &ldquo;Deployed addresses (Casper Testnet)&rdquo;, and the package is browsable on{' '}
+        <a
+          href="https://testnet.cspr.live/contract-package/10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-accent underline underline-offset-4 hover:text-white"
+        >
+          testnet.cspr.live
+        </a>
+        . The deploy runbook (keys, faucet,{' '}
         <M>casper-client put-deploy</M> session args) is in <M>contracts/README.md</M> and{' '}
         <M>contracts/DEPLOY-DAY1.md</M>.
       </Callout>

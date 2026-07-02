@@ -33,7 +33,9 @@ const FULL_EXAMPLE = [
   "import { loadConfig, AgentGateError } from '@agentgate/shared';",
   '',
   '// 1. Build a ChainClient from the environment (mock or live, by AGENTGATE_MODE).',
-  'const config = loadConfig();',
+  '//    Buyer scripts never touch the admin API, so opt out of the live-mode check',
+  '//    that otherwise refuses to start on the default AGENTGATE_ADMIN_TOKEN.',
+  'const config = loadConfig(process.env, { requireStrongAdminToken: false });',
   'const chain = createChainClient(config);',
   '',
   '// 2. Pick a signer. In mock mode this is a public key string; in live mode',
@@ -48,9 +50,16 @@ const FULL_EXAMPLE = [
   '  // settleDelayMs, requestTimeoutMs, rejectPrivateHosts, fetchImpl, logger are optional',
   '});',
   '',
-  '// 4. One call runs the whole exchange: GET -> 402 -> validate -> pay -> retry-with-proof.',
+  '// 4. Match the URL to the mode: mock mode must target the LOCAL gateway — its 402',
+  '//    advertises network "mock", while the public gateway advertises "casper-test",',
+  '//    so crossing them makes parsePaymentRequired throw NETWORK_MISMATCH.',
+  'const url = config.mode === "live"',
+  '  ? "https://gateway.example.org/svc/1"',
+  '  : `http://localhost:${config.middlewarePort}/svc/1`; // local mock gateway',
+  '',
+  '// 5. One call runs the whole exchange: GET -> 402 -> validate -> pay -> retry-with-proof.',
   'try {',
-  '  const res = await client.fetchPaid("https://gateway.example.org/svc/1");',
+  '  const res = await client.fetchPaid(url);',
   '',
   '  if (res.paid) {',
   '    // Paid path: requirements / deployHash / priceMotes / settlement are populated.',
@@ -79,7 +88,8 @@ const PARSE_EXAMPLE = [
   '',
   'const res = await fetch("https://gateway.example.org/svc/1");',
   'if (res.status === 402) {',
-  '  // Throws AgentGateError("BAD_INVOICE") on any malformed or expired challenge.',
+  '  // Throws BAD_INVOICE on a malformed/expired challenge, NETWORK_MISMATCH',
+  '  // if no accepts[] entry is on your network.',
   '  // Selects the first accepts[] entry matching chain.network + scheme:"exact".',
   '  const req = parsePaymentRequired(await res.json(), "casper-test");',
   '  console.log(req.maxAmountRequired, req.extra.nonce, req.payTo);',
@@ -99,11 +109,11 @@ const INVOICE_SHAPE = [
   '      "payTo": "account-hash-0000...<64 hex>",',
   '      "resource": "https://gateway.example.org/svc/1",',
   '      "description": "RWA FX & Gold Oracle",',
-  '      "maxTimeoutSeconds": 300,',
+  '      "maxTimeoutSeconds": 600,',
   '      "extra": {',
   '        "nonce": "6203715498220417",',
   '        "serviceId": 1,',
-  '        "expiresAtMs": 1750000300000,',
+  '        "expiresAtMs": 1893456000000,',
   '        "settlement": "casper-native-transfer",',
   '        "transferIdEncoding": "u64-decimal"',
   '      }',
@@ -116,16 +126,19 @@ export default function Page() {
   return (
     <>
       <DocHeader
-        kicker="REFERENCE"
+        kicker="FOR BUYERS"
         title="Client SDK"
         lede="@agentgate/client is the agent-side payment library. createAgentGateClient(opts) returns a client whose fetchPaid(url) GETs a paid endpoint, parses and validates the 402 PaymentRequiredResponse (x402 V1), pays a native CSPR transfer carrying the nonce as transfer_id, and retries with the X-PAYMENT proof header — in a single call."
       />
 
       <H2 id="install-and-import">Install and import</H2>
       <P>
-        <M>@agentgate/client</M> is a workspace package in the monorepo — it ships with the repo and
-        is resolved through the npm workspace, so there is nothing extra to install. Import the two
-        public entry points and, if you want them, the exported types:
+        <M>@agentgate/client</M> is a workspace package — it is not published to npm (only the{' '}
+        <DocLink href="/docs/cli">CLI</DocLink>, <M>@neargate/cli</M>, is), so{' '}
+        <M>npm install @agentgate/client</M> will not work. Clone the repo and run{' '}
+        <M>npm install</M> once (see <DocLink href="/docs/installation">Installation</DocLink>);
+        the workspace then resolves the package from any script in the repo with nothing extra to
+        install. Import the two public entry points and, if you want them, the exported types:
       </P>
       <CodeBlock label="typescript" code={INSTALL_IMPORT} />
       <P>
@@ -142,6 +155,77 @@ export default function Page() {
         same agent code run offline (<M>AGENTGATE_MODE=mock</M>) or on Casper Testnet (<M>live</M>).
         See <DocLink href="/docs/configuration">Configuration</DocLink>.
       </Callout>
+
+      <H2 id="chain-client">The ChainClient surface</H2>
+      <P>
+        The <M>ChainClient</M> you pass to <M>createAgentGateClient</M> is more than a payment
+        pipe — it is also the read surface for on-chain discovery. The same interface (defined in{' '}
+        <M>@agentgate/shared</M>) is implemented by the mock devnet client and the live Casper
+        client, so an agent can list services, check trust scores and verify transfers with the
+        identical code in both modes:
+      </P>
+      <DocTable
+        head={['Method', 'Returns', 'Notes']}
+        rows={[
+          [
+            <M key="ls">listServices()</M>,
+            <M key="lsr">ServiceRecord[]</M>,
+            <>
+              On-chain discovery. Each record carries <M>endpointUrl</M> (the public gateway{' '}
+              <M>/svc/:id</M> URL to pass to <M>fetchPaid</M>), <M>priceMotes</M>,{' '}
+              <M>paymentTarget</M> and <M>active</M>.
+            </>,
+          ],
+          [
+            <M key="gs">getService(id)</M>,
+            <M key="gsr">ServiceRecord | null</M>,
+            'A single registry entry by numeric id; null when it does not exist.',
+          ],
+          [
+            <M key="sc">getScore(id)</M>,
+            <M key="scr">{'{ totalCalls, successCalls }'}</M>,
+            'The attestation-fed trust score a buyer can rank services by.',
+          ],
+          [
+            <M key="la">listAttestations(serviceId, limit?)</M>,
+            <M key="lar">AttestationRecord[]</M>,
+            'Per-service attestation receipts (payment deploy hash, success flag, record tx).',
+          ],
+          [
+            <M key="ra">listRecentActivity(limit?)</M>,
+            <M key="rar">ActivityEvent[]</M>,
+            'Registrations, payments and attestations as a single feed (the dashboard uses it).',
+          ],
+          [
+            <M key="gb">getBalance(account)</M>,
+            <M key="gbr">Motes</M>,
+            'Native CSPR balance of an account-hash — check funds before an agent run.',
+          ],
+          [
+            <M key="vt">verifyTransfer(q)</M>,
+            <M key="vtr">VerifyResult</M>,
+            <>
+              Checks a transfer against target/amount/transfer-id/age — what the gateway runs on
+              your <M>X-PAYMENT</M> proof.
+            </>,
+          ],
+          [
+            <M key="tr">transfer(input, signer)</M>,
+            <M key="trr">{'{ deployHash }'}</M>,
+            <>
+              Sends the native CSPR payment. This is the only method <M>fetchPaid</M> calls.
+            </>,
+          ],
+          [
+            <M key="ws">registerService / recordAttestation / setActive</M>,
+            <M key="wsr">{'{ txHash, … }'}</M>,
+            <>
+              Seller- and gateway-side writes; agents never call them. See{' '}
+              <DocLink href="/docs/sellers">Wrap an API</DocLink>.
+            </>,
+          ],
+        ]}
+      />
 
       <H2 id="create-client">createAgentGateClient(opts)</H2>
       <P>
@@ -255,7 +339,7 @@ export default function Page() {
                 private/loopback/link-local hosts — including DNS names that resolve to them
                 (rebinding) — with <M>FORBIDDEN_HOST</M>. Defaults to{' '}
                 <M>chain.network !== &apos;mock&apos;</M>, i.e. on for live and off for mock so the
-                in-process devnet on localhost works.
+                local mock gateway on <M>localhost:4021</M> works.
               </>
             ),
           },
@@ -328,15 +412,22 @@ export default function Page() {
               <>
                 Re-requests with the <M>X-PAYMENT</M> header set (base64-encoded{' '}
                 <M>PaymentPayload</M>). A non-402 response returns the paid result; the{' '}
-                <M>X-PAYMENT-RESPONSE</M> header is decoded into <M>settlement</M>. A 402 with{' '}
-                <M>error:"settlement_pending"</M> is retried up to 5 times, sleeping the{' '}
-                <M>Retry-After</M> seconds (capped at 30 s); after that the last 402 is returned
-                with <M>paid: true</M>.
+                <M>X-PAYMENT-RESPONSE</M> header is decoded into <M>settlement</M>. A 402 carrying
+                a <M>Retry-After</M> header (the gateway&apos;s <M>settlement_pending</M> state) is
+                retried up to 5 times, sleeping the <M>Retry-After</M> seconds (capped at 30 s); a
+                402 <em>without</em> <M>Retry-After</M> (proof rejected) — or the last 402 once the
+                retries are spent — is returned immediately with <M>paid: true</M>.
               </>
             ),
           },
         ]}
       />
+      <Callout tone="warn" title="NATIVE TRANSFER MINIMUM: 2.5 CSPR">
+        Casper rejects native transfers below <M>2500000000</M> motes (2.5 CSPR).{' '}
+        <M>fetchPaid</M> pays exactly <M>maxAmountRequired</M> — it never rounds up — so in live
+        mode an invoice priced below 2.5 CSPR cannot be settled on this rail. Sellers should price
+        at or above it (see <DocLink href="/docs/sellers">Wrap an API</DocLink>).
+      </Callout>
       <P>The resolved object has these fields:</P>
       <PropList
         items={[
@@ -417,10 +508,10 @@ export default function Page() {
         ]}
       />
       <Callout tone="warn" title="paid: true DOES NOT GUARANTEE 2xx">
-        If the proof is still being verified after all 5 pending retries, <M>fetchPaid</M> returns
-        the last <M>402</M> with <M>paid: true</M> — the transfer happened but the gateway has not
-        served yet. Always check <M>status</M> in addition to <M>paid</M> before trusting{' '}
-        <M>body</M>.
+        If the proof is rejected (a 402 with no <M>Retry-After</M> header), or still pending after
+        all 5 retries, <M>fetchPaid</M> returns the last <M>402</M> with <M>paid: true</M> — the
+        transfer happened but the gateway has not served. Always check <M>status</M> in addition to{' '}
+        <M>paid</M> before trusting <M>body</M>.
       </Callout>
 
       <H2 id="parse-invoice">parsePaymentRequired(raw, network)</H2>
@@ -429,8 +520,9 @@ export default function Page() {
         <M>fetchPaid</M> uses internally, exported so you can validate a 402 body yourself. It takes
         an unknown value (typically <M>await res.json()</M>) and a chain network string, finds the
         first <M>accepts[]</M> entry matching <M>network</M> and <M>scheme:"exact"</M>, and returns
-        a fully typed <M>PaymentRequirements</M>, or throws{' '}
-        <M>AgentGateError(&apos;BAD_INVOICE&apos;)</M> (HTTP 502) on any violation.
+        a fully typed <M>PaymentRequirements</M>, or throws — <M>BAD_INVOICE</M> (502) for a
+        malformed or expired body, <M>NETWORK_MISMATCH</M> (502) when the body parses but offers no
+        entry on your network.
       </P>
       <DocTable
         head={['Check', 'Rule enforced']}
@@ -474,7 +566,12 @@ export default function Page() {
           ],
         ]}
       />
-      <P>A valid 402 challenge body — the shape it validates — looks like this:</P>
+      <P>
+        A valid 402 challenge body — the shape it validates — looks like this.{' '}
+        <M>maxTimeoutSeconds</M> is gateway-configured (<M>INVOICE_TTL_MS</M>; the default is 300,
+        the public gateway runs 600) and <M>extra.expiresAtMs</M> is the invoice issue time plus
+        that TTL:
+      </P>
       <CodeBlock label="PaymentRequiredResponse (application/json)" code={INVOICE_SHAPE} />
       <P>Validating a raw 402 response by hand:</P>
       <CodeBlock label="typescript" code={PARSE_EXAMPLE} />
@@ -546,12 +643,25 @@ export default function Page() {
       </P>
       <CodeBlock label="agent.ts" code={FULL_EXAMPLE} />
       <P>
-        Run it against the offline stack with <M>AGENTGATE_MODE=mock</M> (no node, no key); flip to
-        live by setting <M>AGENTGATE_MODE=live</M> and supplying a PEM signer and CSPR.cloud
-        credentials. The endpoint passed to <M>fetchPaid</M> is the public gateway URL{' '}
-        <M>/svc/:id</M> — never the seller&apos;s private upstream.
+        To run it offline (no node, no key), bring up the mock stack first —{' '}
+        <M>npm run dev:seed</M> starts the devnet (<M>:4030</M>) and gateway (<M>:4021</M>) and
+        seeds service #1 — then export a funded buyer identity:{' '}
+        <M>npm run agentgate -- demo-accounts --mode mock</M> prints the{' '}
+        <M>MOCK_BUYER_ACCOUNT</M> line to export. Without it, <M>config.mockBuyerAccount</M> is an
+        empty string and the devnet rejects the unfunded transfer. See{' '}
+        <DocLink href="/docs/quickstart">Quickstart</DocLink>.
       </P>
       <CommandBlock text="AGENTGATE_MODE=mock npx tsx agent.ts" />
+      <P>
+        To flip to live, set <M>AGENTGATE_MODE=live</M> and supply a PEM signer and{' '}
+        <M>CSPR_CLOUD_API_KEY</M>. <M>loadConfig</M> also refuses the default{' '}
+        <M>AGENTGATE_ADMIN_TOKEN</M> in live mode — even for buyer-side scripts that never touch
+        the admin API — unless you pass <M>{'{ requireStrongAdminToken: false }'}</M>, as the
+        example does. See{' '}
+        <DocLink href="/docs/configuration">Configuration</DocLink>. The endpoint passed to{' '}
+        <M>fetchPaid</M> is the public gateway URL <M>/svc/:id</M> — never the seller&apos;s
+        private upstream.
+      </P>
       <P>
         For a higher-level, batteries-included loop (on-chain discovery, an LLM that picks a service,
         budget enforcement and attestation receipts) see{' '}

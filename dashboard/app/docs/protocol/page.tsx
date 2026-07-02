@@ -32,10 +32,12 @@ export default function Page() {
 
       <H2 id="flow">The flow at a glance</H2>
       <P>
-        Every paid request follows the same single round trip: an unpaid <M>402</M> challenge,
+        Every paid request follows the same three-leg exchange: an unpaid <M>402</M> challenge,
         an on-chain payment, and a retry that carries proof of that payment. The gateway is a
-        reverse proxy in front of the seller&apos;s real API; it never holds an API key and
-        never reveals the upstream URL. The steps below are the exact sequence the gateway
+        reverse proxy in front of the seller&apos;s real API; buyers never need an API key, and
+        the upstream URL — which may embed the seller&apos;s own key — is stored only in the
+        gateway&apos;s private map and never appears in any response. The steps below are the
+        exact sequence the gateway
         (<M>packages/middleware/src/app.ts</M>) and the buyer client
         (<M>packages/client/src/index.ts</M>) implement.
       </P>
@@ -45,7 +47,8 @@ export default function Page() {
             title: 'Discover',
             body: (
               <>
-                The agent reads the on-chain registry to find services and their{' '}
+                The buyer client (the agent-side SDK, <M>packages/client</M>) reads the on-chain
+                registry to find services and their{' '}
                 <DocLink href="/docs/protocol#attestation">trust scores</DocLink>, choosing one to call. Each
                 service record carries a public gateway URL (<M>/svc/:id</M>) — never the upstream.
               </>
@@ -55,7 +58,7 @@ export default function Page() {
             title: 'Request the service',
             body: (
               <>
-                The agent issues the request to <M>GET /svc/:id</M> (any method is accepted via{' '}
+                The buyer client issues the request to <M>GET /svc/:id</M> (any method is accepted via{' '}
                 <M>app.all</M>) with no payment headers. The gateway resolves the service from a
                 60-second cache, rejects it if inactive (<M>403 service_inactive</M>) or unmapped
                 (<M>503 service_unavailable</M>), and rejects non-JSON request bodies before
@@ -80,10 +83,12 @@ export default function Page() {
             title: 'Pay with a native CSPR transfer',
             body: (
               <>
-                The client validates the response (<M>parsePaymentRequired</M> — selects the{' '}
-                <M>accepts[]</M> entry matching the chain network and <M>scheme:"exact"</M>),
+                The buyer client validates the response (<M>parsePaymentRequired</M> — selects
+                the <M>accepts[]</M> entry matching the chain network and <M>scheme:"exact"</M>),
                 refuses prices above its cap (<M>PRICE_EXCEEDED</M>), then sends a native CSPR
-                transfer of <M>maxAmountRequired</M> motes to <M>payTo</M> with{' '}
+                transfer of at least <M>maxAmountRequired</M> motes — never below the 2.5 CSPR
+                network minimum (see{' '}
+                <DocLink href="/docs/protocol#payment">Payment</DocLink>) — to <M>payTo</M> with{' '}
                 <M>transfer_id = extra.nonce</M>. The transfer&apos;s deploy hash becomes the
                 payment proof.
               </>
@@ -93,11 +98,12 @@ export default function Page() {
             title: 'Retry with proof',
             body: (
               <>
-                After a settle delay the client retries the same request with the{' '}
+                After a settle delay the buyer client retries the same request with the{' '}
                 <M>X-PAYMENT</M> header — a base64-encoded{' '}
                 <M>PaymentPayload</M>: <M>x402Version:1</M>, <M>scheme:"exact"</M>,{' '}
                 <M>network:"casper-test"</M>, and <M>payload.transaction</M> (the deploy hash),{' '}
-                <M>payload.transferId</M> (the nonce), <M>payload.from</M> (payer account).
+                <M>payload.transferId</M> (the nonce), <M>payload.from</M> (optional — ignored by
+                the gateway; payer identity is read from the on-chain transfer).
               </>
             ),
           },
@@ -130,10 +136,11 @@ export default function Page() {
               <>
                 The gateway forwards the request to the mapped upstream URL (a strict header
                 whitelist; the <M>X-PAYMENT</M> proof header is stripped), passing the upstream
-                status and content-type back to the agent. The <M>200</M> response carries{' '}
+                status and content-type back to the agent. Every paid response — whatever status
+                the upstream returned, and even a proxy failure — carries{' '}
                 <M>X-PAYMENT-RESPONSE</M> (base64 <M>SettlementResponse</M> with{' '}
-                <M>success:true</M>, <M>transaction</M>, <M>network</M>, <M>payer</M>). The
-                upstream URL never appears in any response.
+                <M>success:true</M> meaning the payment settled, plus <M>transaction</M>,{' '}
+                <M>network</M>, <M>payer</M>). The upstream URL never appears in any response.
               </>
             ),
           },
@@ -143,8 +150,10 @@ export default function Page() {
               <>
                 After responding, the gateway fires a non-blocking on-chain attestation —{' '}
                 <M>{'{ serviceId, paymentDeployHash, success }'}</M> where{' '}
-                <M>success</M> is true iff the upstream returned a 2xx. It retries exactly once on
-                failure.
+                <M>success</M> is true iff the upstream returned a 2xx — unless the payer is the
+                service&apos;s own owner/payout account, or the upstream never returned a
+                response. On failure it retries with exponential backoff (default 4 total
+                attempts: 5 s, 10 s, 20 s).
               </>
             ),
           },
@@ -167,7 +176,7 @@ export default function Page() {
         The body of every <M>402</M> response is a <M>PaymentRequiredResponse</M> — the x402 V1
         envelope that tells the agent exactly how to pay. It is defined in{' '}
         <M>packages/shared/src/x402.ts</M> and built by the gateway in{' '}
-        <M>buildRequirements()</M>/<M>respond402</M>. The protocol version number is fixed:{' '}
+        <M>buildRequirements()</M>/<M>respond402Fresh()</M>. The protocol version number is fixed:{' '}
         <M>x402Version: 1</M>.
       </P>
       <CodeBlock
@@ -185,11 +194,11 @@ export default function Page() {
           '      "payTo": "account-hash-19ff...b5f0",',
           '      "resource": "https://gateway.example.org/svc/1",',
           '      "description": "RWA FX & Gold Oracle",',
-          '      "maxTimeoutSeconds": 300,',
+          '      "maxTimeoutSeconds": 600,',
           '      "extra": {',
           '        "nonce": "4521903117755646",',
           '        "serviceId": 1,',
-          '        "expiresAtMs": 1750000300000,',
+          '        "expiresAtMs": 1782966672306,',
           '        "settlement": "casper-native-transfer",',
           '        "transferIdEncoding": "u64-decimal"',
           '      }',
@@ -292,7 +301,13 @@ export default function Page() {
             name: 'accepts[].maxTimeoutSeconds',
             type: 'number',
             required: true,
-            desc: <><M>INVOICE_TTL_MS / 1000</M> — deadline in seconds from issuance.</>,
+            desc: (
+              <>
+                <M>INVOICE_TTL_MS / 1000</M> — deadline in seconds from issuance. The default{' '}
+                <M>INVOICE_TTL_MS</M> is 300000 ms; the hosted gateway runs 600000, so live
+                responses show <M>600</M>.
+              </>
+            ),
           },
           {
             name: 'accepts[].extra.nonce',
@@ -333,14 +348,14 @@ export default function Page() {
           {
             name: 'accepts[].asset',
             type: '"CSPR"',
-            required: false,
-            desc: <>Native CSPR (no token contract).</>,
+            required: true,
+            desc: <>Native CSPR (no token contract). Always present; the reference client does not validate it.</>,
           },
           {
             name: 'accepts[].extra.transferIdEncoding',
             type: '"u64-decimal"',
-            required: false,
-            desc: <>How the nonce is encoded as the native transfer_id.</>,
+            required: true,
+            desc: <>How the nonce is encoded as the native transfer_id. Always present; the reference client does not validate it.</>,
           },
         ]}
       />
@@ -356,13 +371,20 @@ export default function Page() {
       <H2 id="payment">Payment and proof headers</H2>
       <P>
         Payment is a <strong className="text-white">native CSPR transfer</strong>, not a token
-        transfer. The client calls <M>chain.transfer</M> with <M>accepts[].payTo</M>,{' '}
+        transfer. The buyer client calls <M>chain.transfer</M> with <M>accepts[].payTo</M>,{' '}
         <M>accepts[].maxAmountRequired</M>, and crucially{' '}
         <M>transferId = accepts[].extra.nonce</M> — the invoice nonce is reused verbatim as the
         Casper <M>transfer_id</M>, which binds the on-chain payment to this specific invoice.
         The transfer returns a deploy hash. After a settle delay the client base64-encodes a{' '}
         <M>PaymentPayload</M> and sends it as the <M>X-PAYMENT</M> request header.
       </P>
+      <Callout tone="warn" title="Network minimum: 2.5 CSPR per native transfer">
+        Casper rejects native transfers below 2.5 CSPR (<M>2500000000</M> motes) at submit.
+        Verification only requires <M>amount ≥ maxAmountRequired</M> — overpayment is accepted —
+        so for a service priced below 2.5 CSPR the buyer must send{' '}
+        <M>max(maxAmountRequired, 2500000000)</M> motes. Sellers should simply price services at
+        ≥ 2.5 CSPR.
+      </Callout>
       <DocTable
         head={['Header', 'Direction', 'Carries']}
         rows={[
@@ -372,12 +394,13 @@ export default function Page() {
             <>
               base64(JSON): <M>x402Version:1</M>, <M>scheme:"exact"</M>,{' '}
               <M>network:"casper-test"</M>, <M>payload.transaction</M> (deploy hash),{' '}
-              <M>payload.transferId</M> (nonce), <M>payload.from</M> (payer account-hash).
+              <M>payload.transferId</M> (nonce), <M>payload.from</M> (optional, ignored — the
+              gateway derives the payer from the transfer itself; the reference client omits it).
             </>,
           ],
           [
             <M key="h2">X-PAYMENT-RESPONSE</M>,
-            'response (paid 200)',
+            'response (any paid reply)',
             <>
               base64(JSON): <M>success:true</M>, <M>transaction</M> (deploy hash),{' '}
               <M>network</M>, <M>payer</M> (account-hash). New in x402 V1.
@@ -398,12 +421,21 @@ export default function Page() {
         <M>
           chain.verifyTransfer({'{'} deployHash, expectedTarget, minAmountMotes, expectedTransferId,
           maxAgeMs {'}'})
-        </M>{' '}
-        — four checks, all of which must pass:
+        </M>. The deploy must first exist and contain a native transfer (<M>not_found</M>{' '}
+        otherwise); then four checks — evaluated in the order target → transfer id → amount →
+        age — must all pass:
       </P>
       <DocTable
         head={['#', 'Check', 'Rule', 'On failure']}
         rows={[
+          [
+            '0',
+            'Exists',
+            <span key="r0">
+              The deploy hash resolves to at least one native transfer.
+            </span>,
+            <M key="e0">not_found</M>,
+          ],
           [
             '1',
             'Target',
@@ -414,19 +446,19 @@ export default function Page() {
           ],
           [
             '2',
-            'Amount',
+            'Transfer id',
             <span key="r2">
-              <M>transfer.amount ≥ priceMotes</M> (bigint comparison — overpayment is accepted).
+              <M>transfer.transfer_id</M> equals the invoice nonce.
             </span>,
-            <M key="e2">amount_too_low</M>,
+            <M key="e2">wrong_transfer_id</M>,
           ],
           [
             '3',
-            'Transfer id',
+            'Amount',
             <span key="r3">
-              <M>transfer.transfer_id</M> equals the invoice nonce.
+              <M>transfer.amount ≥ priceMotes</M> (bigint comparison — overpayment is accepted).
             </span>,
-            <M key="e3">wrong_transfer_id</M>,
+            <M key="e3">amount_too_low</M>,
           ],
           [
             '4',
@@ -495,8 +527,18 @@ export default function Page() {
         without blocking the request. The attestation input is{' '}
         <M>{'{ serviceId, paymentDeployHash, success }'}</M>, where{' '}
         <M>success</M> is true exactly when the upstream returned a 2xx (<M>isUpstreamSuccess</M>).
-        If the attestation transaction fails, the gateway retries it once after a delay
-        (default 5,000 ms); a final failure is only logged and never affects the buyer.
+        If the attestation transaction fails, the gateway retries with exponential backoff — base
+        delay 5,000 ms doubling per attempt (5 s, 10 s, 20 s), up to 4 total attempts. A final
+        failure is only logged and never affects the buyer; a call whose attempts all fail is
+        under-counted, never over-counted.
+      </P>
+      <P>
+        Two situations record <strong className="text-white">no attestation at all</strong>: a
+        gateway-level proxy failure (<M>upstream_unreachable</M>, <M>upstream_timeout</M>,{' '}
+        <M>upstream_response_too_large</M>, <M>upstream_request_too_large</M> — the upstream never
+        returned a usable response, so the call is not scored either way), and a self-payment — a
+        payer whose account is the service&apos;s own <M>owner</M> or <M>paymentTarget</M> never
+        earns trust (wash-trade guard).
       </P>
       <P>
         Attestations accumulate into a per-service <M>ServiceScore</M> of two counters:{' '}

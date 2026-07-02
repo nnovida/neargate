@@ -139,7 +139,7 @@ Tip: run \`npm run dev:seed\` instead to auto-populate the dashboard in one step
 2. Wrap the oracle behind the 402 paywall:
 
    npm run agentgate -- wrap http://localhost:${oracle.port}/feed \\
-     --price 0.5 --name "RWA FX & Gold Oracle" \\
+     --mode mock --price 0.5 --name "RWA FX & Gold Oracle" \\
      --description "USD/IDR exchange rate and gold (XAU/USD) spot price feed"
 
 3. Let the buyer agent discover + pay for it:

@@ -8,12 +8,14 @@ interface Hit {
   href: string;
   label: string;
   group: string;
+  keywords: string[];
 }
 
 /**
  * Command-palette search over the docs pages. Opens on ⌘K / Ctrl-K (or the
- * trigger button), filters page titles + their section, and navigates on Enter.
- * Purely client-side over the static IA — no index/build step.
+ * trigger button), filters page titles + their section + per-page keywords
+ * (core vocabulary, error codes, env vars — see doc-links.ts), and navigates
+ * on Enter. Purely client-side over the static IA — no index/build step.
  */
 export function DocsSearch() {
   const router = useRouter();
@@ -23,7 +25,15 @@ export function DocsSearch() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const index = useMemo<Hit[]>(
-    () => DOC_GROUPS.flatMap((g) => g.links.map((l) => ({ href: l.href, label: l.label, group: g.label }))),
+    () =>
+      DOC_GROUPS.flatMap((g) =>
+        g.links.map((l) => ({
+          href: l.href,
+          label: l.label,
+          group: g.label,
+          keywords: (l.keywords ?? []).map((k) => k.toLowerCase()),
+        })),
+      ),
     [],
   );
 
@@ -31,7 +41,10 @@ export function DocsSearch() {
     const term = q.trim().toLowerCase();
     if (!term) return index;
     return index.filter(
-      (it) => it.label.toLowerCase().includes(term) || it.group.toLowerCase().includes(term),
+      (it) =>
+        it.label.toLowerCase().includes(term) ||
+        it.group.toLowerCase().includes(term) ||
+        it.keywords.some((k) => k.includes(term)),
     );
   }, [q, index]);
 

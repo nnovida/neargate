@@ -58,25 +58,40 @@ export function DocsTopNav() {
       aria-label="Documentation sections"
       className="-mx-5 overflow-x-auto border-b border-line px-5 pb-3 sm:-mx-8 sm:px-8"
     >
-      <ul className="flex w-max gap-2">
-        {DOC_LINKS.map(({ href, label }) => {
-          const active = isActive(pathname, href);
-          return (
-            <li key={href}>
-              <Link
-                href={href}
-                aria-current={active ? 'page' : undefined}
-                className={`block whitespace-nowrap border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.14em] transition-colors ${
-                  active
-                    ? 'border-accent/60 bg-accent-soft text-white'
-                    : 'border-line text-mut hover:border-accent/40 hover:text-white'
+      <ul className="flex w-max items-center gap-2">
+        {DOC_GROUPS.map((group, gi) => (
+          <li key={group.label}>
+            <ul className="flex items-center gap-2">
+              <li
+                aria-hidden
+                className={`whitespace-nowrap font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500 ${
+                  gi > 0 ? 'border-l border-line pl-3' : ''
                 }`}
               >
-                {label}
-              </Link>
-            </li>
-          );
-        })}
+                {group.label}
+              </li>
+              {group.links.map(({ href, label }) => {
+                const active = isActive(pathname, href);
+                return (
+                  <li key={href}>
+                    <Link
+                      href={href}
+                      title={`${group.label} — ${label}`}
+                      aria-current={active ? 'page' : undefined}
+                      className={`block whitespace-nowrap border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.14em] transition-colors ${
+                        active
+                          ? 'border-accent/60 bg-accent-soft text-white'
+                          : 'border-line text-mut hover:border-accent/40 hover:text-white'
+                      }`}
+                    >
+                      {label}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </li>
+        ))}
       </ul>
     </nav>
   );

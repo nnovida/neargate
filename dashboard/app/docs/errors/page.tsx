@@ -16,16 +16,16 @@ export const metadata: Metadata = {
   alternates: { canonical: '/docs/errors' },
   title: 'Error codes',
   description:
-    'Every AgentGate error code: the AgentGateError(code, message, httpStatus) shape, the lowercased JSON error body, and a code-by-code reference grouped by config, chain/live, the 402 paywall + admin API, the client SDK, the buyer agent, and the CLI.',
+    'Every AgentGate error code: the AgentGateError(code, message, httpStatus) shape, the lowercased JSON error body, and a code-by-code reference grouped by config, chain/live, the 402 paywall + admin API, the client SDK, the buyer agent, the CLI, and internal/mock-devnet codes.',
 };
 
 export default function Page() {
   return (
     <>
       <DocHeader
-        kicker="reference"
+        kicker="REFERENCE"
         title="Error codes"
-        lede="AgentGate fails loudly with one structured error type. This page lists every code the codebase throws — its HTTP status, what it means, and how to fix it — grouped by the package that raises it."
+        lede="AgentGate fails loudly with one structured error type. This page lists every code you can hit in normal operation — its HTTP status, what it means, and how to fix it — grouped by the package that raises it, with a closing table for internal and mock-devnet stragglers."
       />
 
       {/* ════════════════════════════ THE SHAPE ════════════════════════════ */}
@@ -83,7 +83,7 @@ export default function Page() {
         Bodies never leak the upstream URL, stack traces, or token material — only the code.
       </P>
 
-      <Callout tone="info" title="Where to read more">
+      <Callout tone="info" title="Live-mode-only codes">
         Codes prefixed <M>CSPR_CLOUD_*</M>, <M>TX_*</M>, <M>RPC_*</M> and <M>NOT_DEPLOYED</M> only
         appear in <M>live</M> mode (Casper Testnet). In <M>mock</M> mode the chain is the in-process
         devnet and these never fire. See <DocLink href="/docs/configuration">Configuration</DocLink>{' '}
@@ -94,8 +94,10 @@ export default function Page() {
       <H2 id="config">Configuration errors</H2>
       <P>
         Raised by <M>loadConfig()</M> (<M>packages/shared/src/config.ts</M>) and the money helpers (
-        <M>packages/shared/src/money.ts</M>) while reading the environment contract. All are{' '}
-        thrown at startup before any work begins, so a bad config never half-runs.
+        <M>packages/shared/src/money.ts</M>) while reading the environment contract.{' '}
+        <M>CONFIG_INVALID</M> is thrown by <M>loadConfig()</M> at startup, so a bad environment
+        never half-runs; <M>INVALID_AMOUNT</M> is raised wherever a CSPR/motes string is first
+        parsed — a CLI flag at command run, an SDK option at client construction.
       </P>
 
       <DocTable
@@ -104,13 +106,13 @@ export default function Page() {
           [
             <M key="ci">CONFIG_INVALID</M>,
             '500',
-            'An env var is missing, malformed, or an invalid combination: unknown AGENTGATE_MODE; a non-integer port/timeout; a bad URL; live mode without CSPR_CLOUD_API_KEY; or live mode still using the default AGENTGATE_ADMIN_TOKEN.',
+            'An env var is missing, malformed, or an invalid combination: unknown AGENTGATE_MODE; a non-integer port/timeout; a bad URL; a malformed BUYER_BUDGET_CSPR; live mode without CSPR_CLOUD_API_KEY; live mode still using the default AGENTGATE_ADMIN_TOKEN; or a live-mode gateway started without GATE_SIGNER_PEM_PATH (the attestor signing key — the gateway refuses the mock-signer fallback).',
             'Read the message — it names the exact variable and the constraint it violated. Set a valid value and restart.',
           ],
           [
             <M key="ia">INVALID_AMOUNT</M>,
             '400',
-            'A CSPR/motes value (e.g. BUYER_BUDGET_CSPR, --price, maxPriceMotes) is not a plain non-negative decimal string within ≤ 9 decimal places.',
+            'A CSPR/motes value (e.g. --price, maxPriceMotes) is not a plain non-negative decimal string within ≤ 9 decimal places. (A malformed BUYER_BUDGET_CSPR surfaces as CONFIG_INVALID instead.)',
             'Pass a positive decimal string of CSPR (e.g. "0.5") or an integer motes string — no signs, exponents, or commas.',
           ],
         ]}
@@ -216,14 +218,14 @@ export default function Page() {
           ],
           [
             <M key="spu">SIGNER_PEM_UNREADABLE</M>,
-            '500',
-            'The signer PEM file could not be read (missing path or permissions).',
+            '500 / 400 (CLI)',
+            'The signer PEM file could not be read (missing path or permissions). The chain client raises it with HTTP 500; the CLI raises the same code with 400 (input error).',
             'Point the *_SIGNER_PEM_PATH at an existing readable key file (chmod 600 recommended).',
           ],
           [
             <M key="spi">SIGNER_PEM_INVALID</M>,
-            '500',
-            'The PEM was read but is neither a valid ed25519 nor secp256k1 private key.',
+            '500 / 400 (CLI)',
+            'The PEM was read but is neither a valid ed25519 nor secp256k1 private key. The chain client raises it with HTTP 500; the CLI raises the same code with 400 (input error).',
             'Provide a valid Casper secret key PEM (ed25519 or secp256k1).',
           ],
           [
@@ -266,7 +268,10 @@ export default function Page() {
       <H3 id="paywall-402">402 reasons (PaywallErrorCode)</H3>
       <P>
         A <M>402</M> response is a JSON <M>PaymentRequiredResponse</M> body with an <M>error</M>{' '}
-        field (one of the codes below). When the payment is still settling the error is{' '}
+        field. On the very first request (no <M>X-PAYMENT</M> header yet) the field is the literal
+        string <M>{'"X-PAYMENT header is required"'}</M> — that is the normal challenge, not a
+        failure. After a proof is presented, the field is one of the rejection codes below. When
+        the payment is still settling the error is{' '}
         <M>{'"settlement_pending"'}</M> and a standard <M>Retry-After: 2</M> response header
         (seconds) is set — the same <M>accepts[]</M> entry (same nonce) is kept alive so the
         identical <M>X-PAYMENT</M> proof can be retried. Every other rejection re-issues a fresh{' '}
@@ -285,7 +290,7 @@ export default function Page() {
           [
             <M key="ue">unknown_nonce</M>,
             '402',
-            'The transferId in X-PAYMENT payload was malformed, unknown, or belonged to a different service. A fresh accepts[] is issued.',
+            'The transferId in the X-PAYMENT payload is well-formed but matches no live invoice, or the invoice belongs to a different service. (A syntactically malformed transferId is rejected earlier as invalid_payment_header.) A fresh accepts[] is issued.',
             'Use the nonce from the most recent 402 PaymentRequiredResponse for THIS service.',
           ],
           [
@@ -335,6 +340,40 @@ export default function Page() {
             '402',
             <>The transfer exists but has not settled yet. Same <M>accepts[]</M> nonce is kept; <M>Retry-After: 2</M> response header is set.</>,
             <>Wait the <M>Retry-After</M> seconds and retry the identical <M>X-PAYMENT</M> proof (the SDK does this up to 5×).</>,
+          ],
+        ]}
+      />
+
+      <H3 id="paywall-proxy">After payment: upstream proxy failures</H3>
+      <P>
+        The nonce is burned <em>before</em> the gateway proxies to the upstream, so these codes
+        reach a buyer whose invoice is already spent. The body is a plain{' '}
+        <M>{'{ "error": "<code>" }'}</M>; the <M>X-PAYMENT-RESPONSE</M> settlement header is still
+        set (the payment itself succeeded). These calls are not attested either way — a
+        gateway-level proxy failure is the seller&apos;s backend being unreachable, not a service
+        outcome, so it never moves the trust score.
+      </P>
+
+      <DocTable
+        head={['Code', 'HTTP', 'Meaning', 'How to fix']}
+        rows={[
+          [
+            <M key="uur">upstream_unreachable</M>,
+            '502',
+            "The paid request could not reach the seller's upstream (DNS/connect failure, or the pinned public IP refused the connection).",
+            'Seller-side outage — retry with a fresh invoice. Sellers: check the mapped upstream is up and publicly resolvable.',
+          ],
+          [
+            <M key="uto">upstream_timeout</M>,
+            '504',
+            'The upstream did not answer within UPSTREAM_TIMEOUT_MS (default 30 s).',
+            'Retry with a fresh invoice. Sellers: speed up the upstream or raise UPSTREAM_TIMEOUT_MS.',
+          ],
+          [
+            <M key="utl">upstream_request_too_large / upstream_response_too_large</M>,
+            '502',
+            'The forwarded JSON body or the upstream response exceeded the 1 MiB proxy cap.',
+            'Keep proxied bodies under 1 MiB in both directions.',
           ],
         ]}
       />
@@ -420,9 +459,48 @@ export default function Page() {
       <Callout tone="info" title="Admin upstream validation">
         <M>POST /admin/services</M> also returns <M>400</M> with the SSRF-guard&apos;s own reason
         codes (e.g. <M>invalid_upstream_url</M>, <M>forbidden_upstream_host</M>) when the supplied{' '}
-        <M>upstreamUrl</M> is not an acceptable public http(s) URL. See{' '}
+        <M>upstreamUrl</M> is not an acceptable public http(s) URL. The same reason codes apply to
+        the self-service <M>POST /services/:id/map</M> endpoint below. See{' '}
         <DocLink href="/docs/security">Security</DocLink> for the host policy.
       </Callout>
+
+      <H3 id="paywall-selfmap">Self-service map errors (POST /services/:id/map)</H3>
+      <P>
+        <M>agentgate wrap --pem</M> maps the upstream by POSTing an owner-signed request to{' '}
+        <M>/services/:id/map</M> — no admin token. Besides <M>invalid_service_id</M> /{' '}
+        <M>invalid_body</M> (400), <M>service_not_found</M> (404) and the SSRF reason codes above
+        (400), the signature auth can fail with:
+      </P>
+
+      <DocTable
+        head={['Code', 'HTTP', 'Meaning', 'How to fix']}
+        rows={[
+          [
+            <M key="str">stale_request</M>,
+            '401',
+            'The signed timestamp is outside the ±2 min freshness window — the wrap request is too old, or the machine clock is skewed.',
+            'Re-run agentgate wrap (it signs a fresh timestamp); check the machine clock.',
+          ],
+          [
+            <M key="ivs">invalid_signature</M>,
+            '401',
+            'The owner signature did not verify over the canonical challenge message.',
+            'Sign with the seller PEM used at registration (--pem).',
+          ],
+          [
+            <M key="nso">not_service_owner</M>,
+            '403',
+            "The signing key's account-hash does not equal the on-chain owner of this service.",
+            'Use the exact key that registered the service.',
+          ],
+          [
+            <M key="rpl">replayed</M>,
+            '409',
+            'The timestamp is not newer than the last accepted mapping for this service (per-service replay guard).',
+            'Re-run wrap to sign a newer timestamp.',
+          ],
+        ]}
+      />
 
       {/* ════════════════════════════ CLIENT / SDK ════════════════════════════ */}
       <H2 id="client">Client SDK errors</H2>
@@ -462,7 +540,7 @@ export default function Page() {
           [
             <M key="bi">BAD_INVOICE</M>,
             '502',
-            'The 402 body was not JSON or failed PaymentRequiredResponse validation: missing x402Version/error/accepts[], no accepts[] entry matching the client network, or an already-expired nonce (extra.expiresAtMs in the past).',
+            'The 402 body was not JSON or failed PaymentRequiredResponse validation: wrong x402Version, empty accepts[], no accepts[] entry for scheme "exact", bad maxAmountRequired/payTo/nonce, or an already-expired invoice (extra.expiresAtMs in the past). An entry that matches the scheme but not your network raises NETWORK_MISMATCH instead.',
             'The gateway returned a malformed/expired challenge — investigate the server; do not pay.',
           ],
           [
@@ -474,7 +552,7 @@ export default function Page() {
           [
             <M key="iamt">INVALID_AMOUNT</M>,
             '400',
-            'A CSPR/motes string failed to parse (e.g. maxPriceMotes, an amount, a transfer id) — raised by parseMotes / csprToMotes in @agentgate/shared. Also surfaces from the CLI (a malformed --price) and config (BUYER_BUDGET_CSPR).',
+            'A CSPR/motes string failed to parse (e.g. maxPriceMotes, an amount, a transfer id) — raised by parseMotes / csprToMotes in @agentgate/shared. Also surfaces from the CLI (a malformed --price); a malformed BUYER_BUDGET_CSPR surfaces as CONFIG_INVALID instead.',
             'Pass a non-negative decimal CSPR string with at most 9 decimal places (or an integer motes string).',
           ],
           [
@@ -578,6 +656,18 @@ export default function Page() {
             'Pass a positive integer id (ids are 1-based).',
           ],
           [
+            <M key="csnf">SERVICE_NOT_FOUND</M>,
+            '404',
+            'status / pause / resume named a service id that does not exist on-chain.',
+            'Run agentgate list to see registered ids (ids are 1-based).',
+          ],
+          [
+            <M key="cna">not_authorized</M>,
+            '403',
+            "pause / resume was signed with a key that is not the service's on-chain owner.",
+            'Sign with the owner key — mock: MOCK_SELLER_ACCOUNT, live: the --pem / SELLER_SIGNER_PEM_PATH key used at registration.',
+          ],
+          [
             <M key="iu2">INVALID_URL</M>,
             '400',
             'A URL (upstream or gateway/dashboard base) was not a valid http(s) URL, or a base URL carried a query string / fragment.',
@@ -611,7 +701,7 @@ export default function Page() {
             <M key="sm">SIGNER_MISSING</M>,
             '400',
             'No seller signer: mock mode without MOCK_SELLER_ACCOUNT, or live mode without SELLER_SIGNER_PEM_PATH.',
-            'Mock: export MOCK_SELLER_ACCOUNT from `agentgate demo-accounts`. Live: set SELLER_SIGNER_PEM_PATH.',
+            'Mock: export MOCK_SELLER_ACCOUNT from `agentgate demo-accounts`. Live: pass --pem <path> (or set SELLER_SIGNER_PEM_PATH).',
           ],
           [
             <M key="mo">MOCK_ONLY</M>,
@@ -630,6 +720,59 @@ export default function Page() {
             '502',
             'The devnet faucet could not be reached, or it answered non-2xx / a malformed balance.',
             'Confirm the devnet is running and reachable at DEVNET_URL.',
+          ],
+        ]}
+      />
+
+      {/* ════════════════════════════ INTERNAL / MOCK ════════════════════════════ */}
+      <H2 id="internal">Internal &amp; mock-devnet codes</H2>
+      <P>
+        Codes you should not meet in normal operation — programming errors, boot-time guards, and
+        the mock-mode devnet transport. One line each for completeness:
+      </P>
+
+      <DocTable
+        head={['Code', 'HTTP', 'Meaning']}
+        rows={[
+          [
+            <M key="ivp">INVALID_PAYMENT</M>,
+            '402',
+            'The exported decodeXPayment / decodeXPaymentResponse helpers rejected a malformed header. Inside the gateway this is caught and re-surfaced as invalid_payment_header.',
+          ],
+          [
+            <M key="sun">SIGNER_UNSUPPORTED</M>,
+            '400',
+            "wrap's self-service gateway mapping needs a pem signer — pass --pem <path> (mock mode maps via the admin-token path instead).",
+          ],
+          [
+            <M key="bde">BAD_DEPS</M>,
+            '500',
+            'createApp() was called without { config, chain } — a programming error, not an env issue.',
+          ],
+          [
+            <M key="lfa">LISTEN_FAILED</M>,
+            '500',
+            'The gateway/devnet port could not be bound (already in use, or no permission).',
+          ],
+          [
+            <M key="ufi">UPSTREAMS_FILE_INVALID</M>,
+            '500',
+            'The persisted upstream-map JSON file (data/upstreams.json) is corrupt — fix or delete it; the gateway refuses to boot on it.',
+          ],
+          [
+            <M key="dlr">DEVNET_LIVE_REFUSED</M>,
+            '500',
+            'The mock devnet was started with AGENTGATE_MODE=live — it is the mock chain and refuses to stand in for a real backend.',
+          ],
+          [
+            <M key="mkg">invalid_public_key / invalid_devnet_url</M>,
+            '400 / 500',
+            'Mock chain client input guards: an empty publicKey argument, or a malformed / non-http(s) DEVNET_URL.',
+          ],
+          [
+            <M key="mkt">devnet_timeout / devnet_unreachable / devnet_error</M>,
+            '504 / 502',
+            "The mock chain client's devnet request timed out (504), failed at the transport layer (502), or the devnet answered non-2xx (devnet_error re-throws the devnet's own status). Start the devnet with npm run dev.",
           ],
         ]}
       />

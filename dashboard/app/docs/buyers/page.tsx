@@ -18,7 +18,7 @@ import {
 export const metadata = {
   title: 'Build an agent',
   description:
-    'Build a buying agent that discovers services on-chain, handles the HTTP 402, pays with a native CSPR transfer carrying the nonce, and retries with proof — via the bundled LLM agent, the client SDK, or plain curl.',
+    'Build a buying agent that discovers services on-chain, handles the HTTP 402, pays with a native CSPR transfer carrying the nonce, and retries with proof — via the bundled LLM agent or the client SDK.',
   alternates: { canonical: '/docs/buyers' },
 };
 
@@ -39,6 +39,10 @@ const SDK_EXAMPLE = [
   '  maxPriceMotes: "5000000000", // 5 CSPR cap — invoices above this throw PRICE_EXCEEDED',
   '});',
   '',
+  '// Discover services from the on-chain registry, pick one.',
+  'const services = await chain.listServices();',
+  'const service = services[0]; // or find by id / name',
+  '',
   '// One call does the whole 402 -> pay -> retry-with-proof dance.',
   'const res = await client.fetchPaid(service.endpointUrl);',
   '',
@@ -52,7 +56,7 @@ const AGENT_OUTPUT = [
   'STEP 1 · CATALOG (mock)',
   '  2 service(s) on-chain · budget 1 CSPR',
   '  id  name                        price         tier      score',
-  '  1   RWA FX & Gold Oracle        0.5 CSPR      trusted   12/12',
+  '  1   RWA FX & Gold Oracle        0.5 CSPR      reliable  12/12',
   '  2   Weather Now                 2 CSPR        new       0/0',
   '',
   'STEP 2 · DECISION (mock-llm)',
@@ -80,7 +84,7 @@ export default function Page() {
   return (
     <>
       <DocHeader
-        kicker="BUYER GUIDE"
+        kicker="FOR BUYERS"
         title="Build an agent"
         lede="A buyer agent discovers paid services on-chain, decides what to buy under a hard budget, pays per call in native CSPR, consumes the data, and collects an on-chain attestation receipt — all without an API key."
       />
@@ -108,8 +112,10 @@ export default function Page() {
             body: (
               <>
                 Hands the task plus the catalog to the LLM, which returns{' '}
-                <M>{'{ serviceId, reason }'}</M>. A choice that is unknown or points at an{' '}
-                <M>inactive</M> service is rejected with <M>LLM_BAD_CHOICE</M>.
+                <M>{'{ serviceId, reason }'}</M>. The Anthropic driver retries once on an id
+                outside the catalog (then <M>LLM_BAD_RESPONSE</M>); a choice that still reaches
+                the loop unknown, or that points at an <M>inactive</M> service, is rejected with{' '}
+                <M>LLM_BAD_CHOICE</M>.
               </>
             ),
           },
@@ -168,6 +174,12 @@ export default function Page() {
         The repo ships a runnable agent wired to <M>loadConfig()</M> and{' '}
         <M>createChainClient()</M>. Pass a natural-language task and an optional budget:
       </P>
+      <Callout tone="info" title="PREREQUISITE">
+        The agent needs a running mock stack and an exported buyer signer. Run{' '}
+        <M>npm run dev:seed</M> from the <DocLink href="/docs/quickstart">Quickstart</DocLink>{' '}
+        first — it seeds a service and prints the <M>MOCK_BUYER_ACCOUNT</M> export line to paste
+        into your shell. Without it the agent exits <M>1</M> with <M>NO_SIGNER</M>.
+      </Callout>
       <CommandBlock
         wrap
         text={'npm run agent -- --task "Get today\'s USD/IDR rate and gold price, summarize for a treasury report" --budget 1'}
@@ -200,7 +212,7 @@ export default function Page() {
         ]}
       />
       <P>Expected console output (mock mode, abbreviated):</P>
-      <CodeBlock label="six decision blocks" code={AGENT_OUTPUT} />
+      <CodeBlock label="six decision blocks (illustrative catalog)" code={AGENT_OUTPUT} />
       <Callout tone="info" title="EXIT CODES">
         <M>0</M> on success — including an intentional budget or price refusal. <M>1</M> for an
         unhandled error (the <M>[CODE] message</M> is printed to stderr). <M>2</M> for invalid
@@ -238,6 +250,11 @@ export default function Page() {
           },
         ]}
       />
+      <Callout tone="warn" title="LIVE NETWORK MINIMUM">
+        Casper rejects native transfers below <M>2.5 CSPR</M> on live networks. On{' '}
+        <M>casper-test</M> a 0.5 CSPR invoice is still settled with a 2.5 CSPR transfer — set{' '}
+        <M>--budget</M> for live runs accordingly. Mock mode has no minimum.
+      </Callout>
       <P>
         Both refusals are non-fatal: the agent prints the reason, returns <M>paid: false</M> /{' '}
         <M>spentMotes: &apos;0&apos;</M>, and the process exits <M>0</M>. Nothing is charged.
@@ -266,7 +283,7 @@ export default function Page() {
               <M>ANTHROPIC_API_KEY</M> unset
             </span>,
             <M key="b2">MockLlm</M>,
-            'Deterministic, offline. Picks the cheapest active service matching task keywords; ties broken by higher trust tier, then lowest id. No network calls.',
+            'Deterministic, offline. Picks the cheapest active service matching task keywords; ties broken by higher trust tier, then lowest id. Falls back to the cheapest active service when nothing matches the keywords. No network calls.',
           ],
         ]}
       />
@@ -291,7 +308,73 @@ export default function Page() {
         <M>settlement</M>). A
         first response that is not a 402 passes straight through with <M>paid: false</M>. For every
         option, field and pending-retry detail, see the{' '}
-        <DocLink href="/docs/sdk">Client SDK reference</DocLink>.
+        <DocLink href="/docs/sdk">Client SDK reference</DocLink>. For the raw HTTP exchange
+        (curl-level 402 → transfer → <M>X-PAYMENT</M>), see{' '}
+        <DocLink href="/docs/protocol">How it works</DocLink>.
+      </P>
+
+      <H2 id="plain-curl">Plain curl (no SDK)</H2>
+      <P>
+        The whole exchange is plain HTTP, so any client works — the SDK is a convenience, not a
+        requirement. Here is the full loop against the live hosted gateway (service <M>#1</M>,
+        0.5 CSPR per call on Casper Testnet). First, request without payment and a real invoice
+        comes back:
+      </P>
+      <CodeBlock
+        label="1 — the 402 challenge"
+        code={'curl -sS https://gateway.example.org/svc/1'}
+      />
+      <CodeBlock
+        label="response (abbreviated) — keep payTo and extra.nonce"
+        code={[
+          '{',
+          '  "x402Version": 1,',
+          '  "accepts": [{',
+          '    "maxAmountRequired": "500000000",',
+          '    "payTo": "account-hash-19ff…b5f0",',
+          '    "extra": { "nonce": "1542202979977604", "expiresAtMs": … }',
+          '  }]',
+          '}',
+        ].join('\n')}
+      />
+      <P>
+        Second, pay: send a native CSPR transfer to <M>payTo</M> with{' '}
+        <M>transfer_id = extra.nonce</M>, for at least <M>maxAmountRequired</M> and never below
+        the 2.5 CSPR network minimum (here: 2.5 CSPR, since the 0.5 CSPR price is under the
+        floor). Any signer works — <M>casper-client</M>, Casper Wallet, or the SDK:
+      </P>
+      <CodeBlock
+        label="2 — pay with casper-client (amount in motes; 0.1 CSPR gas)"
+        code={[
+          'casper-client transfer \\',
+          '  --node-address https://node.testnet.casper.network/rpc \\',
+          '  --chain-name casper-test \\',
+          '  --secret-key ./key.pem \\',
+          '  --amount 2500000000 \\',
+          '  --target-account <payTo from the 402> \\',
+          '  --transfer-id <extra.nonce from the 402> \\',
+          '  --payment-amount 100000000',
+        ].join('\n')}
+      />
+      <P>
+        Third, retry the same request with the <M>X-PAYMENT</M> header — a base64-encoded JSON
+        proof carrying the transfer&apos;s deploy hash and the nonce. If the transfer is still
+        settling, the gateway answers <M>402 settlement_pending</M> with <M>Retry-After</M> —
+        just retry; the invoice stays valid until <M>expiresAtMs</M>:
+      </P>
+      <CodeBlock
+        label="3 — redeem the proof"
+        code={[
+          "PROOF=$(printf '%s' '{\"x402Version\":1,\"scheme\":\"exact\",\"network\":\"casper-test\",",
+          '  \"payload\":{\"transaction\":\"<deploy-hash>\",\"transferId\":\"<nonce>\"}}\' | base64 -w0)',
+          '',
+          'curl -sS https://gateway.example.org/svc/1 -H "X-PAYMENT: $PROOF"',
+        ].join('\n')}
+      />
+      <P>
+        Every header and status code is specified in the{' '}
+        <DocLink href="/docs/api">HTTP API reference</DocLink>; the wire-level verification rules
+        live in <DocLink href="/docs/protocol#verification">How it works</DocLink>.
       </P>
 
       <H2 id="safety">Safety</H2>
@@ -313,8 +396,9 @@ export default function Page() {
         The client refuses to pay unless the <M>PaymentRequiredResponse</M> offers an{' '}
         <M>accepts[]</M> entry matching <M>chain.network</M> (<M>NETWORK_MISMATCH</M>). You never
         sign a transfer on one chain for a paywall expecting another. The invoice is also fully
-        validated — exact version, future <M>expiresAtMs</M>, a positive-integer{' '}
-        <M>nonce</M> below 2^53 (the <M>transfer_id</M>),{' '}
+        validated — exact version, future <M>expiresAtMs</M>, a <M>nonce</M> that fits in a u64
+        (the <M>transfer_id</M> — the gateway itself issues nonces below 2^53 so they survive
+        JSON parsing),{' '}
         <M>account-hash</M> target — or it is rejected as <M>BAD_INVOICE</M> before any payment.
       </P>
       <H3 id="prompt-injection">Prompt-injection containment</H3>
@@ -353,8 +437,8 @@ export default function Page() {
           ],
           [
             <M key="e4">NO_SERVICES</M>,
-            'Registry is empty (or no active services).',
-            'Thrown at the catalog stage; exit 1.',
+            'Registry is empty (catalog stage), or MockLlm finds no active service to pick (decision stage).',
+            'Thrown; exit 1.',
           ],
         ]}
       />

@@ -46,7 +46,7 @@ export default function ArchitecturePage() {
               maps its upstream URL on the gateway.
             </>,
             <>
-              <M>chain</M> (register / setActive) and the gateway (owner-signed self-service
+              <M>chain</M> (registerService / setActive) and the gateway (owner-signed self-service
               upstream mapping)
             </>,
           ],
@@ -137,8 +137,10 @@ export default function ArchitecturePage() {
           [
             <M key="c">contracts</M>,
             <>
-              The on-chain registry: <M>AgentGateRegistry</M> (Rust/Odra) holding services, scores,
-              and attestations. The live <M>ChainClient</M> reads from and writes to it.
+              The on-chain contracts: <M>AgentGateRegistry</M> (Rust/Odra) holding services, scores,
+              and attestations — read and written by the live <M>ChainClient</M> — plus{' '}
+              <M>SpendGuard</M>, an x402 spend-firewall escrow that is implemented and unit-tested
+              but not yet wired into the runtime.
             </>,
             <>
               the Casper network; read/written by <M>LiveCasperClient</M>
@@ -209,7 +211,7 @@ export default function ArchitecturePage() {
               a mock signer carrying only a public-key string (no key material)
             </>,
             <>
-              a PEM private key loaded from <M>gateSignerPemPath</M> / the wallet PEM
+              a PEM private key loaded from <M>GATE_SIGNER_PEM_PATH</M> / the wallet PEM
             </>,
           ],
           [
@@ -232,8 +234,8 @@ export default function ArchitecturePage() {
         <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> to that value (along with <M>CSPR_CLOUD_API_KEY</M>{' '}
         and signer PEM paths) to run live mode end-to-end. <M>NOT_DEPLOYED</M> (HTTP 503) is a
         fallback thrown only when <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> is unset — for example, on
-        a fresh checkout with no <M>.env</M>. Several CSPR.cloud response shapes and the Odra
-        state-key derivation carry <M>⚠️ verify-against-deployed-contract</M> notes in the source.
+        a fresh checkout with no <M>.env</M>. The live read path (CSPR.cloud response shapes and
+        the Odra state-key derivation) has been exercised end-to-end against the deployed contract.
         See{' '}
         <DocLink href="/docs/contract">Smart contracts</DocLink>.
       </Callout>
@@ -251,7 +253,8 @@ export default function ArchitecturePage() {
             body: (
               <>
                 The CLI calls <M>chain.registerService</M> (name, price in motes, payment target,
-                attestor), getting back a <M>serviceId</M>. It then maps the private upstream URL to
+                and the attestor — the gateway key allowed to record attestations), getting back a{' '}
+                <M>serviceId</M>. It then maps the private upstream URL to
                 that id on the gateway. In live mode this is a self-service, owner-signed{' '}
                 <M>POST /services/:id/map</M> — the seller signs an ownership challenge with the
                 service owner key, so no admin token is needed; a legacy token-guarded{' '}
@@ -264,7 +267,7 @@ export default function ArchitecturePage() {
             title: 'Buyer discovers',
             body: (
               <>
-                A buying agent reads the catalog through <M>chain.listServices</M> /{' '}
+                A buyer agent reads the catalog through <M>chain.listServices</M> /{' '}
                 <M>getScore</M> (or the dashboard) and picks a service by price and trust tier. It
                 only ever learns the public gateway URL (<M>/svc/:id</M>), never the upstream.
               </>
@@ -309,9 +312,12 @@ export default function ArchitecturePage() {
             body: (
               <>
                 After responding, the gateway fires a non-blocking{' '}
-                <M>chain.recordAttestation</M> (success := upstream 2xx), retried once on failure.
-                The attestation updates the on-chain score, which the trust tier and the dashboard
-                read back.
+                <M>chain.recordAttestation</M> (success := upstream 2xx), retrying with exponential
+                backoff (default 4 total attempts). It is skipped when the upstream never produced a
+                response (gateway-level timeout or unreachable — the seller&apos;s outage is not a
+                service outcome) and when the payer is the service owner or payout account, so
+                self-paid calls never earn trust. The attestation updates the on-chain score, which
+                the trust tier and the dashboard read back.
               </>
             ),
           },
@@ -348,13 +354,14 @@ export default function ArchitecturePage() {
               A JSON file on the gateway host (default <M>data/upstreams.json</M> under the
               middleware package; overridable via <M>upstreamsFile</M>).
             </>,
-            'The operator. Loaded at boot (re-applying the SSRF guard) and flushed on shutdown.',
+            'The operator. Loaded at boot (re-applying the SSRF guard); every add/remove is persisted atomically at write time, and graceful shutdown waits for queued writes to settle.',
           ],
           [
             'Invoices (nonce → invoice)',
             <>
-              In memory in the gateway process — the default <M>MemoryInvoiceStore</M> with a TTL
-              sweep (a custom <M>InvoiceStore</M> can be injected).
+              In the gateway process — the default <M>MemoryInvoiceStore</M> with a TTL sweep. Set{' '}
+              <M>INVOICE_STORE_PATH</M> to a JSON file path to switch to <M>FileInvoiceStore</M> so
+              issued invoices survive a restart (a custom <M>InvoiceStore</M> can also be injected).
             </>,
             'The gateway. Single-use: a nonce is burned on first successful verify.',
           ],
@@ -363,15 +370,18 @@ export default function ArchitecturePage() {
       <P>
         The split matters: the chain is the source of truth for what a service is and how trustworthy
         it is; the upstream map is the one secret the gateway holds (the real backend URL, which is
-        never exposed in any response); and invoices are short-lived, single-use, and never need to
-        outlive the process.
+        never exposed in any response); and invoices are short-lived and single-use — in-memory by
+        default, file-backed via <M>INVOICE_STORE_PATH</M> when a restart must not orphan an
+        already-paid nonce.
       </P>
 
       <H2 id="mock-vs-live">Mock vs live backends</H2>
       <P>
         The same code path runs in both modes — only the constructed <M>ChainClient</M> differs.{' '}
-        <M>mock</M> is the default and is fully offline: it boots the in-memory devnet, accepts the
-        default admin token, and leaves the SSRF guard off so localhost demos work. <M>live</M>{' '}
+        <M>mock</M> is the default and is fully offline: the dev/demo scripts boot the in-memory
+        devnet alongside the gateway (a standalone gateway points at one via <M>DEVNET_URL</M>,
+        default <M>http://localhost:4030</M>), it accepts the default admin token, and leaves the
+        SSRF guard off so localhost demos work. <M>live</M>{' '}
         targets Casper Testnet through casper-js-sdk and CSPR.cloud, refuses the default admin token,
         turns the SSRF guard on, and requires real signing keys.
       </P>
@@ -434,7 +444,7 @@ export default function ArchitecturePage() {
 
       <NextLinks
         links={[
-          { href: '/docs/security', label: 'Next: Security model' },
+          { href: '/docs/security', label: 'Security model' },
           { href: '/docs/contract', label: 'Smart contracts' },
         ]}
       />

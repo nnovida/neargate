@@ -27,8 +27,37 @@ export default function Page() {
       <DocHeader
         kicker="GET STARTED"
         title="Quickstart"
-        lede="Go from clone to a working payment loop in about a minute. Everything here runs in mock mode against an in-process devnet — no keys, no network, no chain access required."
+        lede="Go from clone to a working payment loop in about a minute. After a ten-second live probe, everything here runs in mock mode against an in-process devnet — no keys, no network, no chain access required."
       />
+
+      <H2 id="see-it-live">See it live in 10 seconds</H2>
+      <P>
+        Before installing anything: the hosted gateway is running against Casper Testnet right
+        now. Ask it for service <M>#1</M> and a real 402 invoice comes back — a fresh{' '}
+        <M>nonce</M>, the on-chain price, and the seller&apos;s payment account:
+      </P>
+      <CodeBlock label="no install required" code={'curl -sS https://gateway.example.org/svc/1'} />
+      <CodeBlock
+        label="response (abbreviated)"
+        code={[
+          '{',
+          '  "x402Version": 1,',
+          '  "error": "X-PAYMENT header is required",',
+          '  "accepts": [{',
+          '    "scheme": "exact", "network": "casper-test",',
+          '    "maxAmountRequired": "500000000",',
+          '    "payTo": "account-hash-19ff…b5f0",',
+          '    "extra": { "nonce": "1542202979977604", "serviceId": 1, … }',
+          '  }]',
+          '}',
+        ].join('\n')}
+      />
+      <P>
+        Paying that invoice and redeeming the proof is the{' '}
+        <DocLink href="/docs/buyers#plain-curl">three-step curl flow</DocLink>. The rest of this
+        page runs the same loop fully offline instead — an in-process mock chain, no keys and no
+        faucet needed.
+      </P>
 
       <H2 id="prerequisites">Prerequisites</H2>
       <P>
@@ -42,7 +71,7 @@ export default function Page() {
           [
             <M key="n">Node.js</M>,
             '≥ 22',
-            'Enforced by the root package.json engines field. The monorepo uses npm workspaces, so a single install at the root covers every package plus the dashboard.',
+            'Declared in the root package.json engines field (npm warns on older Node). The monorepo uses npm workspaces, so a single install at the root covers every package plus the dashboard.',
           ],
           [
             'npm',
@@ -76,10 +105,21 @@ export default function Page() {
       <H2 id="offline-demo">60-second offline demo</H2>
       <P>
         The fastest proof the whole system works end to end. Install once, then run the one-shot
-        demo. It exits <M>0</M> after printing both real on-chain transaction hashes.
+        demo. It exits <M>0</M> after printing the loop&apos;s two transaction hashes — the payment
+        deploy and the attestation — recorded on the in-process mock chain.
       </P>
       <StepFlow
         steps={[
+          {
+            title: 'Get the code',
+            body: (
+              <>
+                Clone the public repo and enter it. The full layout and requirements live in{' '}
+                <DocLink href="/docs/installation">Installation</DocLink>.
+              </>
+            ),
+            code: 'git clone https://example.invalid/AgentGate.git agentgate\ncd agentgate',
+          },
           {
             title: 'Install the workspace',
             body: <>One install at the repo root resolves every workspace package and the dashboard.</>,
@@ -89,7 +129,8 @@ export default function Page() {
             title: 'Run the loop',
             body: (
               <>
-                Boots devnet + oracle (static fixture) + middleware <em>in-process</em>, creates
+                Boots devnet + oracle (static fixture) + middleware (the HTTP 402 paywall gateway){' '}
+                <em>in-process</em>, creates
                 faucet-funded buyer and seller accounts, wraps the oracle as service #1 at 0.5
                 CSPR, runs the buyer agent once with the deterministic <M>MockLlm</M>, records the
                 attestation on-chain, prints both tx hashes and exits 0.
@@ -99,15 +140,18 @@ export default function Page() {
           },
         ]}
       />
-      <P>The full loop — register, 402, pay, serve, attest, score — prints like this:</P>
+      <P>
+        The full loop — register, 402 (HTTP Payment Required), pay, serve, attest, score — prints
+        like this:
+      </P>
       <CodeBlock
         label="npm run demo (abbreviated)"
-        code={"════════════════════════════════════════════════════════════════════════\n  AGENTGATE DEMO — register → 402 → pay → serve → attest → score\n════════════════════════════════════════════════════════════════════════\n\nstack up: devnet :4030 · oracle :4010 (static fixture) · middleware :4021\n\nseller: 01a1b2c3d4e5f6… (1000.0 CSPR)\nbuyer:  01f9e8d7c6b5a4… (1000.0 CSPR)\n\nwrapped service #1 at http://127.0.0.1:4021/svc/1 (register tx 0123456789ab…)\n\n════════════════════════════════════════════════════════════════════════\n  DEMO COMPLETE in 1.2s — full loop verified on the mock chain\n════════════════════════════════════════════════════════════════════════\n  payment deploy hash : <full_payment_deploy_hash>\n  attestation tx hash : <full_attestation_tx_hash>\n  amount paid         : 0.5 CSPR\n  final score         : 1/1 (success/total)\n  service public URL  : http://127.0.0.1:4021/svc/1\n  dashboard           : http://localhost:3000/services/1  (start it with `npm run dev:dashboard`)\n════════════════════════════════════════════════════════════════════════"}
+        code={"════════════════════════════════════════════════════════════════════════\n  AGENTGATE DEMO — register → 402 → pay → serve → attest → score\n════════════════════════════════════════════════════════════════════════\n\nstack up: devnet :4030 · oracle :4010 (static fixture) · middleware :4021\n\nseller: 01a1b2c3d4e5f6a7b8… (1000 CSPR)\nbuyer:  01f9e8d7c6b5a4d3c2… (1000 CSPR)\n\nwrapped service #1 at http://127.0.0.1:4021/svc/1 (register tx 0123456789abcdef…)\n\n════════════════════════════════════════════════════════════════════════\n  DEMO COMPLETE in 1.2s — full loop verified on the mock chain\n════════════════════════════════════════════════════════════════════════\n  payment deploy hash : <full_payment_deploy_hash>\n  attestation tx hash : <full_attestation_tx_hash>\n  amount paid         : 0.5 CSPR\n  final score         : 1/1 (success/total)\n  service public URL  : http://127.0.0.1:4021/svc/1\n  dashboard           : http://localhost:3000/services/1  (start it with `npm run dev:dashboard`)\n════════════════════════════════════════════════════════════════════════"}
       />
       <Callout tone="ok" title="The proof is in two hashes">
         The <strong className="text-white">payment deploy hash</strong> and the{' '}
-        <strong className="text-white">attestation tx hash</strong> are the two real on-chain
-        transactions of the loop — the buyer&apos;s native CSPR transfer and the gateway&apos;s{' '}
+        <strong className="text-white">attestation tx hash</strong> are the loop&apos;s two
+        transactions on the mock chain — the buyer&apos;s native CSPR transfer and the gateway&apos;s{' '}
         <M>record_attestation</M> call. <M>1/1 (success/total)</M> is the trust score that results.
         That is the entire product in four lines, and the script exits 0.
       </Callout>
@@ -160,9 +204,9 @@ export default function Page() {
       />
       <Callout tone="warn" title="Port note: 3000 may shift to 3001">
         The dashboard runs on port 3000 by default (next dev; set the <M>PORT</M> env var to change it — <M>DASHBOARD_PORT</M> only controls the link the CLI prints). If 3000 is already taken
-        Next.js silently moves to the next free port — typically <M>http://localhost:3001</M>.
-        Always open the URL printed in the <M>dev:dashboard</M> terminal rather than hard-coding
-        3000.
+        Next.js automatically moves to the next free port — typically <M>http://localhost:3001</M> —
+        and prints the new URL at startup. Always open the URL printed in the{' '}
+        <M>dev:dashboard</M> terminal rather than hard-coding 3000.
       </Callout>
       <P>
         Once open, the dashboard polls the running stack every 5 seconds: the{' '}
@@ -174,9 +218,10 @@ export default function Page() {
 
       <H2 id="manual-wrap">Your first manual wrap</H2>
       <P>
-        Now drive each side of the marketplace by hand. Start an <em>empty</em> stack (no seeding),
-        export the demo accounts it prints, wrap an API as a seller, then run the buyer agent
-        against it.
+        Now drive each side of the marketplace by hand. First stop the seeded stack from the
+        previous section (Ctrl+C) — both stacks bind the same ports — then start an{' '}
+        <em>empty</em> stack (no seeding), export the demo accounts it prints, wrap an API as a
+        seller, then run the buyer agent against it.
       </P>
       <H3 id="manual-stack">Start an empty stack and export accounts</H3>
       <CommandBlock text="npm run dev" />
@@ -198,13 +243,18 @@ export default function Page() {
         wrap
         text={'npm run agentgate -- wrap http://localhost:4010/feed --price 0.5 --name "RWA FX & Gold Oracle" --mode mock'}
       />
+      <Callout tone="warn" title="Use the command above, not the terminal's">
+        The next-steps block that <M>npm run dev</M> prints omits <M>--mode mock</M>, so pasted
+        into a fresh shell it fails with <M>SIGNER_MISSING</M> — the CLI defaults to live mode and
+        asks for a PEM key. The command above passes <M>--mode mock</M> explicitly.
+      </Callout>
       <P>
         This registers the service on-chain (name, gateway URL, price in motes, payment target,
         attestor) <em>and</em> maps the upstream URL on the gateway over the authenticated admin
         API. On success it prints the service id, the public <M>/svc/&lt;id&gt;</M> endpoint, a
         dashboard link and the register tx hash. Every flag is documented in{' '}
         <DocLink href="/docs/sellers">Wrap an API</DocLink> and{' '}
-        <DocLink href="/docs/cli">CLI → wrap</DocLink>.
+        <DocLink href="/docs/cli#wrap">CLI → wrap</DocLink>.
       </P>
       <H3 id="manual-agent">Run the buyer agent (buyer side)</H3>
       <CommandBlock

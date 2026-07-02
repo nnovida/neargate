@@ -24,7 +24,7 @@ export default function SecurityPage() {
   return (
     <>
       <DocHeader
-        kicker="docs / security"
+        kicker="CONCEPTS"
         title="Security model"
         lede="AgentGate is a payment gateway that moves real CSPR and proxies traffic to seller-supplied URLs, so security is not a feature — it is the contract. This page documents the threats the codebase actually defends against and the exact mechanisms that do it, file by file."
       />
@@ -39,8 +39,8 @@ export default function SecurityPage() {
 
       <H2 id="ssrf">SSRF protection</H2>
       <P>
-        The gateway makes outbound HTTP requests to URLs that a <em>seller</em> controls (the
-        on-chain <M>endpointUrl</M> / the mapped <M>upstreamUrl</M>). Without guards, a seller
+        The gateway makes outbound HTTP requests to a URL the <em>seller</em> controls: the mapped{' '}
+        <M>upstreamUrl</M>. Without guards, a seller
         could point a service at <M>http://169.254.169.254/</M> (cloud metadata),{' '}
         <M>http://127.0.0.1</M>, or an RFC1918 address and turn the gateway into a Server-Side Request
         Forgery proxy into the operator&apos;s internal network. AgentGate blocks this at two
@@ -53,7 +53,7 @@ export default function SecurityPage() {
       <P>
         When an upstream is mapped — whether via the self-service{' '}
         <M>POST /services/:id/map</M> (owner-signed) or the admin{' '}
-        <M>POST /admin/services</M> — the middleware runs{' '}
+        <M>POST /admin/services</M> — the gateway runs{' '}
         <M>validateUpstreamUrl(upstreamUrl, &#123; rejectPrivateHosts &#125;)</M> (a thin wrapper over{' '}
         <M>validateHttpUrl</M>). It enforces: a parseable URL no longer than{' '}
         <M>2048</M> characters (<M>MAX_URL_LENGTH</M>); a protocol of exactly <M>http:</M> or{' '}
@@ -70,7 +70,7 @@ export default function SecurityPage() {
         dotted-decimal — so the literal-IP checks below catch decimal/hex/octal bypass attempts.
       </Callout>
 
-      <H3 id="ssrf-rebind">Layer 2 — fetch-time re-resolution (DNS rebinding / TOCTOU)</H3>
+      <H3 id="ssrf-rebind">Layer 2 — fetch-time re-resolution and IP pinning (DNS rebinding / TOCTOU)</H3>
       <P>
         A hostname that was public at registration can later be re-pointed at a private address. To
         defeat this rebinding / time-of-check-to-time-of-use gap, the live-mode paywall calls{' '}
@@ -82,11 +82,14 @@ export default function SecurityPage() {
         <M>503 service_unavailable</M> <em>before any payment is charged</em> and logs{' '}
         <M>upstream_host_forbidden</M>.
       </P>
-      <Callout tone="warn" title="Residual rebinding race">
-        Node&apos;s global <M>fetch</M> resolves DNS again internally after this check, so a
-        sub-millisecond re-resolution race remains. Closing it fully needs connection-level IP pinning
-        (a custom undici dispatcher) — that is not yet implemented. The current check still closes the
-        practical &quot;rebind after registration&quot; attack.
+      <Callout tone="ok" title="Rebinding TOCTOU closed by connection-level IP pinning">
+        Node&apos;s global <M>fetch</M> would normally re-resolve DNS after this check, reopening a
+        sub-millisecond race. In live mode the proxy therefore <strong>pins</strong> the outbound
+        connection: <M>resolvePinnedIp(host)</M> vets a single public IP (refusing if{' '}
+        <strong>any</strong> resolved address is private) and a custom undici dispatcher connects to
+        exactly that IP, so a rebind between check and connect has no effect. If the dispatcher
+        cannot be constructed, the proxy falls back to the request-time re-resolution guard above;
+        mock mode skips pinning so localhost demo upstreams work.
       </Callout>
 
       <H3 id="ssrf-blocklist">What counts as a private host</H3>
@@ -109,9 +112,17 @@ export default function SecurityPage() {
           ],
           [<M key="a">IPv4</M>, <M key="b">172.16.0.0/12</M>, 'RFC1918 private.'],
           [<M key="a">IPv4</M>, <M key="b">192.168.0.0/16</M>, 'RFC1918 private.'],
-          [<M key="a">IPv4</M>, <M key="b">192.0.0.0/24, 192.0.2.0/24</M>, 'IETF special-use / documentation.'],
-          [<M key="a">IPv4</M>, <M key="b">198.18.0.0, 198.19.0.0</M>, 'Benchmarking range.'],
-          [<M key="a">IPv4</M>, <M key="b">224.0.0.0+</M>, 'Multicast, reserved, broadcast.'],
+          [
+            <M key="a">IPv4</M>,
+            <M key="b">192.0.0.0/16</M>,
+            'IETF special-use (192.0.0.0/24) + documentation (192.0.2.0/24) — implemented as a conservative /16 over-block, so some public 192.0.x.x space is also refused.',
+          ],
+          [<M key="a">IPv4</M>, <M key="b">198.18.0.0/15</M>, 'Benchmarking range.'],
+          [
+            <M key="a">IPv4</M>,
+            <M key="b">224.0.0.0/3</M>,
+            'Multicast, reserved, broadcast (224.0.0.0 and above).',
+          ],
           [<M key="a">IPv6</M>, <M key="b">::, ::1</M>, 'Unspecified and loopback.'],
           [<M key="a">IPv6</M>, <M key="b">fc00::/7</M>, 'Unique-local (fc/fd prefixes).'],
           [<M key="a">IPv6</M>, <M key="b">fe80::/10</M>, 'Link-local.'],
@@ -124,15 +135,16 @@ export default function SecurityPage() {
       />
       <Callout tone="info" title="Private hosts are allowed in mock mode by design">
         The SSRF guard only rejects private hosts when <M>rejectPrivateHosts</M> is true, which the
-        middleware sets to <M>config.mode === &apos;live&apos;</M>. In <M>mock</M> mode private hosts
+        gateway sets to <M>config.mode === &apos;live&apos;</M>. In <M>mock</M> mode private hosts
         are allowed so you can map a service at <M>http://localhost:PORT</M> for local demos. Private
         hosts are <strong>only</strong> blocked in live mode.
       </Callout>
 
       <H3 id="ssrf-buyer">The buyer client guards the seller endpoint too</H3>
       <P>
-        SSRF is symmetric: a buyer agent fetches a URL that came from seller-controlled on-chain data,
-        so the client in <M>@agentgate/client</M> applies the same guard before it spends money. In{' '}
+        SSRF is symmetric: a buyer agent fetches the on-chain <M>endpointUrl</M> — the
+        seller-published gateway URL, still seller-controlled on-chain data — so the client in{' '}
+        <M>@agentgate/client</M> applies the same guard before it spends money. In{' '}
         <M>fetchPaid</M> it runs <M>validateHttpUrl(url, &#123; rejectPrivateHosts &#125;)</M> and, when
         guarding, <M>await resolvedHostIsPublic(...)</M>. The default for{' '}
         <M>rejectPrivateHosts</M> is <M>chain.network !== &apos;mock&apos;</M> — on by default off-mock.
@@ -189,8 +201,8 @@ export default function SecurityPage() {
       <P>
         Each 402 challenge issues a fresh random nonce and persists an invoice record. When a buyer
         retries with proof, the gateway looks up the invoice, rejects it if{' '}
-        <M>invoice.used</M> (<M>invoice_used</M>), if it has expired (<M>invoice_expired</M>), or if its{' '}
-        <M>serviceId</M> does not match (<M>unknown_nonce</M>). Critically, after the on-chain transfer
+        <M>invoice.used</M> (<M>invoice_used</M>), if it has expired (<M>invoice_expired</M>), or if
+        the nonce is unknown or bound to a different service (<M>unknown_nonce</M>). Critically, after the on-chain transfer
         verifies, the nonce is burned with <M>invoices.markUsed(nonce)</M>{' '}
         <strong>before</strong> proxying to the upstream — so the nonce is single-use even if the
         upstream call later fails, and the atomic mark-used means exactly one of several concurrent
@@ -214,15 +226,23 @@ export default function SecurityPage() {
         <M>NETWORK_MISMATCH</M>, so the agent never pays on a different network than the one it signs
         for. And the agent&apos;s budget cap is bound to the approved price: if{' '}
         <M>maxPriceMotes</M> is set and the invoice price exceeds it, <M>fetchPaid</M> throws{' '}
-        <M>PRICE_EXCEEDED</M> (HTTP <M>402</M>) <em>before</em> signing any transfer. The whole invoice
-        is also strictly validated by <M>parsePaymentRequired</M> (x402 V1:{' '}
-        <M>x402Version:1</M>, finds an <M>accepts[]</M> entry matching the chain network,{' '}
-        <M>payTo</M> must match <M>account-hash-&lt;64 hex&gt;</M>, the nonce must be a decimal
-        string (the gateway issues nonces{' '}
-        <M>&le; 2^53&minus;2</M>, capped below <M>Number.MAX_SAFE_INTEGER</M> so CSPR.cloud&apos;s
-        float64 transfer-id round-trips on verification), <M>extra.expiresAtMs</M> must be in the
-        future) — anything off throws{' '}
-        <M>BAD_INVOICE</M>.
+        <M>PRICE_EXCEEDED</M> (HTTP <M>402</M>) <em>before</em> signing any transfer. The whole
+        invoice is also strictly validated by <M>parsePaymentRequired</M>: it must be x402 V1
+        (<M>x402Version: 1</M>) with an <M>accepts[]</M> entry matching the chain network;{' '}
+        <M>payTo</M> must match <M>account-hash-&lt;64 hex&gt;</M>; and <M>extra.expiresAtMs</M>{' '}
+        must be in the future. The nonce must be a decimal string — the gateway itself issues nonces{' '}
+        <M>&le; 2^53&minus;2</M>, below <M>Number.MAX_SAFE_INTEGER</M>, so CSPR.cloud&apos;s float64
+        transfer-id round-trips on verification. Anything off throws <M>BAD_INVOICE</M>.
+      </P>
+      <H3 id="payment-self">Self-payment (wash-trading) guard</H3>
+      <P>
+        A seller could inflate their own trust score by paying for their own service. After
+        verification the gateway runs <M>isSelfPayment(payerFrom, service)</M>, comparing the
+        verified payer against the service&apos;s <M>owner</M> and <M>paymentTarget</M>{' '}
+        (case-insensitive, any <M>account-hash-</M> prefix stripped). A self-paid call is still
+        served — the payment is real — but <strong>no attestation is recorded</strong>, so it never
+        feeds the trust score; the gateway logs <M>attestation_skipped</M> with reason{' '}
+        <M>self_payment</M>.
       </P>
 
       <H2 id="keys">Key handling and secret redaction</H2>
@@ -249,8 +269,7 @@ export default function SecurityPage() {
         code={
           'logger.info("startup", { adminToken: "s3cr3t-admin-token-value" });\n' +
           '// stdout:\n' +
-          '{"ts":"...","level":"info","name":"middleware","msg":"startup",\n' +
-          ' "adminToken":"s3…[redacted:24]"}'
+          '{"ts":"...","level":"info","name":"middleware","msg":"startup","adminToken":"s3…[redacted:24]"}'
         }
       />
       <Callout tone="info" title="Use HTTPS for the live gateway">
@@ -261,7 +280,7 @@ export default function SecurityPage() {
 
       <H2 id="rate-limit">Rate limiting and the reverse proxy</H2>
       <P>
-        The middleware mounts <M>helmet()</M> for hardened response headers, disables the{' '}
+        The gateway mounts <M>helmet()</M> for hardened response headers, disables the{' '}
         <M>x-powered-by</M> banner, and applies three per-IP rate limits via{' '}
         <M>express-rate-limit</M> over a 60-second window:
       </P>
@@ -287,6 +306,14 @@ export default function SecurityPage() {
         in <strong>constant time</strong> (<M>safeEqual</M> hashes both sides with SHA-256 first so
         lengths never short-circuit the comparison), defeating timing side-channels on the token.
         CORS is intentionally off: the gateway is a server-to-server API, not called from browsers.
+      </P>
+      <P>
+        Self-service mapping needs no bearer token — authentication is an owner signature over a
+        canonical message binding <M>network</M>, <M>serviceId</M>, <M>upstreamUrl</M> and a
+        timestamp. Requests outside the freshness window are refused with <M>401 stale_request</M>,
+        a bad signature gets <M>401 invalid_signature</M>, a signer whose account-hash is not the
+        on-chain owner gets <M>403 not_service_owner</M>, and a per-service monotonic timestamp
+        rejects replays with <M>409 replayed</M>.
       </P>
       <Callout tone="warn" title="TRUST_PROXY must equal the real hop count">
         Rate limiting keys off <M>req.ip</M>. Behind a reverse proxy you must set{' '}
@@ -338,12 +365,31 @@ export default function SecurityPage() {
             <span key="c">Default <M>30000</M> ms; bounds how long a proxied call may hang.</span>,
           ],
           [
+            <span key="a">Proxied body cap</span>,
+            <M key="b">1 MiB</M>,
+            <span key="c">
+              Both directions (<M>MAX_PROXY_BODY_BYTES</M>): an oversized forwarded request body
+              fails with <M>502 upstream_request_too_large</M>, an oversized upstream response with{' '}
+              <M>502 upstream_response_too_large</M>.
+            </span>,
+          ],
+          [
+            <span key="a">Header forwarding</span>,
+            <span key="b">whitelist</span>,
+            <span key="c">
+              Only <M>accept</M>, <M>accept-language</M> and <M>user-agent</M> are forwarded;
+              cookies, <M>Authorization</M>, <M>X-PAYMENT</M> and hop-by-hop headers never reach the
+              upstream.
+            </span>,
+          ],
+          [
             <span key="a">Redirect following</span>,
             <span key="b">live: off</span>,
             <span key="c">
-              The proxy follows redirects only off-mock-disabled — <M>followRedirects</M> is{' '}
-              <M>config.mode !== &apos;live&apos;</M>, so a live upstream cannot 30x the gateway into a
-              new (possibly internal) host.
+              Redirects are followed only in mock mode (<M>followRedirects</M> ={' '}
+              <M>config.mode !== &apos;live&apos;</M>). In live mode the 3xx status passes through{' '}
+              <strong>without</strong> the <M>Location</M> header, so an upstream cannot 30x the
+              gateway into a new (possibly internal) host.
             </span>,
           ],
         ]}

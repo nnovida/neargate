@@ -23,14 +23,16 @@ export default function Page() {
   return (
     <>
       <DocHeader
-        kicker="OVERVIEW"
+        kicker="GET STARTED"
         title="AgentGate Docs"
-        lede="Stripe for AI agents on Casper. Wrap any HTTP API behind an HTTP 402 paywall, register and score it on-chain, and let buying agents pay per call in native CSPR — no accounts, no API keys, no subscriptions."
+        lede="Stripe for AI agents on Casper. Wrap any HTTP API behind an HTTP 402 paywall, register and score it on-chain, and let buying agents pay per call in native CSPR — no accounts, no API keys, no subscriptions. This page gives you the mental model, then routes you by role — seller, buyer, or gateway operator — to the right guide."
       />
 
       <H2 id="what-is-agentgate">What AgentGate is</H2>
       <P>
-        AgentGate is an x402-style payment gateway for machine-to-machine APIs. A seller puts any
+        AgentGate is an <DocLink href="/docs/protocol">x402</DocLink>-style payment gateway — x402
+        is the open convention for settling HTTP <M>402 Payment Required</M> challenges with
+        on-chain payments — for machine-to-machine APIs. A seller puts any
         HTTP endpoint behind a <M>402 Payment Required</M> paywall and registers it in an on-chain
         Casper registry. A buying agent discovers that service, receives a machine-readable invoice,
         settles it on-chain, then retries with cryptographic proof of payment — and the gateway
@@ -63,7 +65,9 @@ export default function Page() {
         Settlement is a plain native CSPR transfer whose <M>transfer_id</M> equals the invoice nonce
         — the &ldquo;Plan B&rdquo; scheme. It is not a CEP-18 token transfer and it does not call any
         vault contract. The gateway never custodies funds; payment goes straight from the buyer to
-        the seller&apos;s account.
+        the seller&apos;s account. Note Casper enforces a network minimum of <M>2.5 CSPR</M> on
+        native transfers — if a service is priced below that, the buyer must send{' '}
+        <M>max(price, 2.5 CSPR)</M>; the gateway accepts any amount at or above the invoice price.
       </Callout>
 
       <H2 id="when-to-use">When to use AgentGate</H2>
@@ -121,9 +125,13 @@ export default function Page() {
       </P>
       <H3 id="role-operator">Operator — runs the gateway</H3>
       <P>
-        An operator runs the middleware (the 402 reverse proxy + admin API) and, in live mode, the
-        chain plumbing. The operator sets the admin token, the SSRF policy on upstream URLs, and the
-        chain backend, and is responsible for deploying the registry contract before going live. See{' '}
+        An operator runs the gateway (the 402 reverse proxy + admin API — the{' '}
+        <M>@agentgate/middleware</M> package) and, in live mode, the chain plumbing. The operator
+        sets the admin token, the SSRF policy on upstream URLs, and the chain backend, and points{' '}
+        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> at a deployed <M>AgentGateRegistry</M> before going
+        live — on Casper Testnet the contract is already deployed, so most operators just set the
+        hash (deploying your own registry is covered in{' '}
+        <DocLink href="/docs/contract">Smart contracts</DocLink>). See{' '}
         <DocLink href="/docs/deployment">Deploy to production</DocLink>.
       </P>
 
@@ -146,7 +154,7 @@ export default function Page() {
           ],
           [
             'Registry',
-            'Devnet mirrors the Odra contract rules in memory',
+            'Devnet mirrors the registry contract rules (written in Odra, Casper’s Rust framework) in memory',
             <span key="l">
               Deployed <M>AgentGateRegistry</M> contract
             </span>,
@@ -191,7 +199,7 @@ export default function Page() {
           {
             href: '/docs/installation',
             title: 'Installation',
-            desc: 'Node ≥ 22 prerequisites, npm install, the monorepo package layout, and the dev scripts that boot the devnet, oracle, and middleware.',
+            desc: 'Node ≥ 22 prerequisites, npm install, the monorepo package layout, and the dev scripts that boot the devnet, the sample oracle upstream (an FX & gold price API used in the demo), and the gateway.',
           },
         ]}
       />
@@ -234,7 +242,7 @@ export default function Page() {
           {
             href: '/docs/deployment',
             title: 'Deploy to production',
-            desc: 'Host the dashboard, middleware, and oracle; configure live-mode guardrails; and set REGISTRY_CONTRACT_PACKAGE_HASH to connect to the live AgentGateRegistry on Casper Testnet.',
+            desc: 'Host the dashboard, gateway, and oracle; configure live-mode guardrails; and set REGISTRY_CONTRACT_PACKAGE_HASH to connect to the live AgentGateRegistry on Casper Testnet.',
           },
         ]}
       />
@@ -266,7 +274,7 @@ export default function Page() {
           {
             href: '/docs/api',
             title: 'HTTP API',
-            desc: 'Every surface: the middleware paywall and admin API, the oracle feed, the mock devnet routes, and the dashboard /api endpoints.',
+            desc: 'Both surfaces: the gateway — health probes, the /svc/:id paywall proxy, self-service mapping and the admin API — plus the dashboard’s read-only /api routes.',
           },
           {
             href: '/docs/configuration',
@@ -291,7 +299,7 @@ export default function Page() {
         ]}
       />
 
-      <NextLinks links={[{ href: '/docs/quickstart', label: 'Next: Quickstart' }]} />
+      <NextLinks links={[{ href: '/docs/quickstart', label: 'Quickstart' }]} />
     </>
   );
 }

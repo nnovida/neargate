@@ -25,7 +25,7 @@ export default function Page() {
   return (
     <>
       <DocHeader
-        kicker="REFERENCE"
+        kicker="FOR SELLERS"
         title="CLI"
         lede="The agentgate CLI publishes services, inspects the on-chain catalog, toggles a service you own, and mints faucet-funded demo accounts."
       />
@@ -47,8 +47,9 @@ export default function Page() {
         <DocLink href="#list">list</DocLink>, <DocLink href="#status">status</DocLink>,{' '}
         <DocLink href="#pause">pause</DocLink>, <DocLink href="#resume">resume</DocLink> and{' '}
         <DocLink href="#demo-accounts">demo-accounts</DocLink>. Every command exits{' '}
-        <M>0</M> on success and <M>1</M> on error; failures print to stderr as{' '}
-        <M>error: &lt;CODE&gt;: &lt;message&gt;</M>.
+        <M>0</M> on success and <M>1</M> on error; AgentGate failures print to stderr as{' '}
+        <M>error: &lt;CODE&gt;: &lt;message&gt;</M> (usage mistakes are reported by the
+        argument parser without a code).
       </P>
 
       {/* ───────────────────────────── environment ───────────────────────────── */}
@@ -139,8 +140,10 @@ export default function Page() {
             default: '3000',
             desc: (
               <>
-                Feeds the printed dashboard detail link in <M>wrap</M> output
-                (<M>http://localhost:&lt;DASHBOARD_PORT&gt;/services/&lt;id&gt;</M>).
+                Feeds the dashboard detail link printed by <M>wrap</M> in <M>mock</M> mode
+                (<M>http://localhost:&lt;DASHBOARD_PORT&gt;/services/&lt;id&gt;</M>); <M>live</M>{' '}
+                mode links to the hosted{' '}
+                <M>https://agentgate.example.org/services/&lt;id&gt;</M>.
               </>
             ),
           },
@@ -169,11 +172,16 @@ export default function Page() {
         head={['Flag', 'Overrides', 'Default', 'Used by']}
         rows={[
           [<M key="f1">--mode {'<mock|live>'}</M>, <M key="e1">AGENTGATE_MODE</M>, <M key="d1">live</M>, 'all commands'],
-          [<M key="f2">--node-url {'<url>'}</M>, <M key="e2">CASPER_NODE_URL</M>, 'Casper Testnet', 'all commands'],
+          [
+            <M key="f2">--node-url {'<url>'}</M>,
+            <M key="e2">CASPER_NODE_URL</M>,
+            <M key="d2">https://node.testnet.casper.network/rpc</M>,
+            'all commands',
+          ],
           [
             <M key="f3">--registry {'<hash>'}</M>,
             <M key="e3">REGISTRY_CONTRACT_PACKAGE_HASH</M>,
-            'the deployed package hash',
+            <span key="d3"><M>hash-10f92725…</M> (the deployed package)</span>,
             'all commands',
           ],
           [
@@ -232,7 +240,7 @@ export default function Page() {
             <M key="p">--price {'<cspr>'}</M>,
             'yes',
             '—',
-            'Price per call in CSPR (e.g. 0.5), up to 9 decimal places. A malformed value (non-numeric or >9 dp) fails with INVALID_AMOUNT; a non-positive value fails with INVALID_PRICE. Stored as motes on-chain.',
+            'Price per call in CSPR (e.g. 0.5), up to 9 decimal places. A malformed value (non-numeric, negative, or >9 dp) fails with INVALID_AMOUNT; a price of 0 fails with INVALID_PRICE. Stored as motes on-chain.',
           ],
           [<M key="n">--name {'<name>'}</M>, 'yes', '—', 'Service name. Non-empty, no control characters, ≤ 128 chars.'],
           [
@@ -281,7 +289,7 @@ export default function Page() {
         code={[
           'service id:      1',
           'public endpoint: https://gateway.example.org/svc/1',
-          'dashboard:       http://localhost:3000/services/1',
+          'dashboard:       https://agentgate.example.org/services/1',
           'register tx:     <txHash>',
         ].join('\n')}
       />
@@ -295,10 +303,14 @@ export default function Page() {
           code={'note: gateway upstream mapping FAILED — see the warning above for the retry curl.'}
         />
         <P>
-          The printed retry hint depends on the path: live (<M>--pem</M>) wrap re-runs the
-          owner-signed mapping to <M>&lt;gateway&gt;/services/&lt;id&gt;/map</M> (no secret);
-          mock or self-hosted-admin wrap prints a curl referencing <M>$AGENTGATE_ADMIN_TOKEN</M>.
-          Until the mapping exists, the <M>/svc/&lt;id&gt;</M> endpoint will 404.
+          The printed retry hint depends on the path: mock or self-hosted-admin wrap prints a
+          runnable curl referencing <M>$AGENTGATE_ADMIN_TOKEN</M>; live (<M>--pem</M>) wrap
+          prints no curl (the note&apos;s wording is shared with the admin path) — the mapping
+          must be re-created by re-POSTing a fresh owner-signed challenge to{' '}
+          <M>&lt;gateway&gt;/services/&lt;id&gt;/map</M>; see{' '}
+          <DocLink href="/docs/sellers#ts-admin-map-failed">recovering a failed mapping</DocLink>.
+          Do not re-run <M>wrap</M> — it registers a duplicate service. Until the mapping
+          exists, the <M>/svc/&lt;id&gt;</M> endpoint will 404.
         </P>
       </Callout>
       <H3 id="wrap-signer">Signer it reads</H3>
@@ -313,11 +325,13 @@ export default function Page() {
       <H2 id="list">list</H2>
       <P>
         List the on-chain service catalog joined with scores and trust tiers, in the order the
-        chain returns it. Takes no arguments and no options.
+        chain returns it. Takes no arguments and no command-specific options; the shared{' '}
+        <DocLink href="#config-flags">config flags</DocLink> (<M>--mode</M>, <M>--node-url</M>,{' '}
+        <M>--registry</M>) still apply.
       </P>
       <CommandBlock text="npx @neargate/cli list" />
       <CodeBlock
-        label="output"
+        label="output (illustrative — your table shows the live catalog)"
         code={[
           'ID  NAME                  PRICE     TIER      SCORE  ACTIVE  ENDPOINT',
           '1   Gold Spot Feed        0.5 CSPR  reliable  9/10   yes     http://localhost:4021/svc/1',
@@ -363,19 +377,23 @@ export default function Page() {
         ]}
       />
       <CodeBlock
-        label="output — default (no key)"
+        label="output — default, no key (illustrative)"
         code={[
           'service:        #1 Gold Spot Feed',
           'description:    USD spot gold with confidence',
           'endpoint:       http://localhost:4021/svc/1',
           'price:          0.5 CSPR',
           'payment target: account-hash-<64hex>',
-          'owner:          01<publicKeyHex>',
-          'attestor:       01<publicKeyHex>',
+          'owner:          account-hash-<64hex>',
+          'attestor:       account-hash-<64hex>',
           'trust:          reliable (9/10 calls ok)',
           'attestations:   (set CSPR_CLOUD_API_KEY or pass --api-key to view history)',
         ].join('\n')}
       />
+      <P>
+        In <M>mock</M> mode <M>owner</M> and <M>attestor</M> print as public-key hex; the live
+        contract stores addresses, so live mode prints <M>account-hash-…</M> for both.
+      </P>
       <P>
         The record, score and trust tier always print with no keys. Attestation history is the one
         part that needs a <DocLink href="#config-flags">CSPR.cloud key</DocLink>: without{' '}
@@ -498,9 +516,11 @@ export default function Page() {
       <DocTable
         head={['Code', 'Status', 'Command(s)', 'Cause']}
         rows={[
+          [<M key="c0">CONFIG_INVALID</M>, '500', 'all commands', 'A config value failed validation before the command ran — e.g. --mode is neither mock nor live, or a port/URL env var is malformed.'],
+          [<M key="c15">INVALID_AMOUNT</M>, '400', 'wrap', '--price is not a plain decimal (non-numeric, negative, exponent, or more than 9 decimal places).'],
           [<M key="c1">INVALID_PRICE</M>, '400', 'wrap', 'Price is not greater than 0 CSPR.'],
           [<M key="c2">INVALID_INPUT</M>, '400', 'wrap', 'Empty/blank name, or text with control characters or over the length limit.'],
-          [<M key="c3">INVALID_URL</M>, '400', 'wrap', 'upstreamUrl / gateway is not a valid http(s) URL (or carries a query/fragment).'],
+          [<M key="c3">INVALID_URL</M>, '400', 'wrap', 'upstreamUrl or gateway is not a valid http(s) URL; gateway additionally must not carry a query string or fragment (upstreamUrl may).'],
           [<M key="c4">INSECURE_URL</M>, '400', 'wrap', 'Live mode + non-localhost gateway over http:// (the signed mapping request must not travel in cleartext).'],
           [<M key="c5">INVALID_ACCOUNT_HASH</M>, '400', 'wrap', '--payment-target is not account-hash-<64 hex>.'],
           [<M key="c6">INVALID_PUBLIC_KEY</M>, '400', 'wrap', '--attestor is not a valid Casper public key hex.'],
@@ -508,7 +528,7 @@ export default function Page() {
           [<M key="c8">INVALID_SERVICE_ID</M>, '400', 'status / pause / resume', 'Service id is not a positive integer.'],
           [<M key="c9">SERVICE_NOT_FOUND</M>, '404', 'status / pause / resume', 'No on-chain record for that id.'],
           [<M key="c10">not_authorized</M>, '403', 'pause / resume', 'Signing key is not the service owner.'],
-          [<M key="c11">MOCK_ONLY</M>, '400', 'demo-accounts', 'Run in live mode (set AGENTGATE_MODE=mock).'],
+          [<M key="c11">MOCK_ONLY</M>, '400', 'demo-accounts', 'Invoked while the mode is live — pass --mode mock (or set AGENTGATE_MODE=mock).'],
           [<M key="c12">FAUCET_UNREACHABLE</M>, '502', 'demo-accounts', 'Cannot reach the devnet faucet (devnet not running).'],
           [<M key="c13">FAUCET_FAILED</M>, '502', 'demo-accounts', 'Faucet returned non-200, non-JSON, or a malformed balanceMotes.'],
           [<M key="c14">GATEWAY_TIMEOUT</M>, '504', 'demo-accounts', 'Faucet request timed out.'],

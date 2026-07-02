@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { DocsSidebar, DocsTopNav, OnThisPage } from '@/components/docs-nav';
+import { DocsPager } from '@/components/docs-pager';
 import { DocsSearch } from '@/components/docs-search';
 
 /* Server shell for the docs section: a sticky grouped sidebar on desktop, a
@@ -23,7 +24,10 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
         <div className="mb-8 lg:hidden">
           <DocsTopNav />
         </div>
-        <article className="mx-auto max-w-3xl pb-10">{children}</article>
+        <article className="mx-auto max-w-3xl">{children}</article>
+        <div className="pb-10">
+          <DocsPager />
+        </div>
       </div>
       <aside className="hidden w-52 shrink-0 xl:block">
         <div className="sticky top-24 max-h-[calc(100vh-7rem)] overflow-y-auto pb-8">
