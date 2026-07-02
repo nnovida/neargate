@@ -18,7 +18,7 @@ import {
 export const metadata = {
   title: 'Build an agent',
   description:
-    'Build a buying agent that discovers services on-chain, handles the HTTP 402, pays with a native CSPR transfer carrying the nonce, and retries with proof — via the bundled LLM agent or the client SDK.',
+    'Build a buying agent that discovers services on-chain, handles the HTTP 402, pays with a native CSPR transfer carrying the nonce, and retries with proof — via the one-command agentgate buy, the bundled LLM agent, the client SDK, or plain curl.',
   alternates: { canonical: '/docs/buyers' },
 };
 
@@ -319,7 +319,7 @@ export default function Page() {
         the response body to stdout (pipeable), with the payment receipt on stderr — see the{' '}
         <DocLink href="/docs/cli#buy">buy reference</DocLink> for flags:
       </P>
-      <CommandBlock wrap text="npx @neargate/cli buy 1 --pem ./buyer.pem --max 5" />
+      <CommandBlock wrap text="npx @neargate/cli buy 1 --pem ./buyer.pem --max 5 --gateway https://gateway.example.org" />
       <P>
         But the exchange is plain HTTP, so any client works — the CLI and SDK are conveniences,
         not requirements. Here is the same loop by hand against the live hosted gateway

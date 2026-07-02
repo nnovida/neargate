@@ -166,7 +166,7 @@ export default function Page() {
       <H3 id="config-flags">Config flags</H3>
       <P>
         Each of these overrides the matching environment variable (<M>flag &gt; env &gt; default</M>).{' '}
-        <M>--mode</M>, <M>--node-url</M> and <M>--registry</M> are accepted by all six commands; the
+        <M>--mode</M>, <M>--node-url</M> and <M>--registry</M> are accepted by all seven commands; the
         signer and key flags are read only by the commands that need them.
       </P>
       <DocTable
@@ -414,7 +414,7 @@ export default function Page() {
         gateway invoices the amount that actually settles.
       </P>
       <H3 id="buy-example">Example</H3>
-      <CommandBlock wrap text="npx @neargate/cli buy 1 --pem ./buyer.pem --max 5" />
+      <CommandBlock wrap text="npx @neargate/cli buy 1 --pem ./buyer.pem --max 5 --gateway https://gateway.example.org" />
       <CodeBlock
         label="stderr (payment metadata) — the response body arrives on stdout"
         code={[

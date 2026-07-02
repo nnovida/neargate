@@ -119,8 +119,9 @@ export default function Page() {
       <P>
         A buyer writes an agent that discovers services in the on-chain catalog, calls{' '}
         <M>/svc/:id</M>, handles the <M>402</M>, pays with a native CSPR transfer carrying the nonce,
-        and retries with proof headers. You can do this with the bundled LLM buyer agent, the client
-        SDK&apos;s <M>fetchPaid</M> helper, or plain <M>curl</M>. See{' '}
+        and retries with proof headers. You can do this with one command (<M>npx @neargate/cli
+        buy</M>), the bundled LLM buyer agent, the client SDK&apos;s <M>fetchPaid</M> helper, or
+        plain <M>curl</M>. See{' '}
         <DocLink href="/docs/buyers">Build an agent</DocLink>.
       </P>
       <H3 id="role-operator">Operator — runs the gateway</H3>
@@ -226,7 +227,7 @@ export default function Page() {
           {
             href: '/docs/buyers',
             title: 'Build an agent',
-            desc: 'Discover services on-chain, parse the 402, pay with a native CSPR transfer, and retry with proof — via the buyer agent, the client SDK, or plain curl.',
+            desc: 'Discover services on-chain, parse the 402, pay with a native CSPR transfer, and retry with proof — via the one-command buy CLI, the LLM buyer agent, the client SDK, or plain curl.',
           },
           {
             href: '/docs/sdk',

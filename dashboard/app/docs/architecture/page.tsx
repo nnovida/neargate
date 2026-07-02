@@ -41,13 +41,13 @@ export default function ArchitecturePage() {
           [
             <M key="c">packages/cli</M>,
             <>
-              The <M>agentgate</M> seller CLI: <M>wrap</M>, <M>list</M>, <M>status</M>,{' '}
+              The <M>agentgate</M> CLI: <M>wrap</M>, <M>buy</M>, <M>list</M>, <M>status</M>,{' '}
               <M>pause</M>, <M>resume</M>, <M>demo-accounts</M>. Registers a service on-chain and
-              maps its upstream URL on the gateway.
+              maps its upstream URL on the gateway (seller side); pays 402 invoices (buyer side).
             </>,
             <>
-              <M>chain</M> (registerService / setActive) and the gateway (owner-signed self-service
-              upstream mapping)
+              <M>chain</M> (registerService / setActive), <M>client</M> (fetchPaid, for{' '}
+              <M>buy</M>) and the gateway (owner-signed self-service upstream mapping)
             </>,
           ],
           [

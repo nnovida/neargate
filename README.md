@@ -108,6 +108,7 @@ npm run dev               # empty stack: devnet :4030 + oracle :4010 + middlewar
 # paste the printed MOCK_BUYER_ACCOUNT / MOCK_SELLER_ACCOUNT export lines, then:
 npm run agentgate -- wrap http://localhost:4010/feed --price 0.5 --name "RWA FX & Gold Oracle"
 npm run agent -- --task "Get today's USD/IDR rate and gold price, summarize for a treasury report"
+npm run agentgate -- buy 1 --mode mock    # or skip the agent: pay once, print the data
 ```
 
 Set `ANTHROPIC_API_KEY` to let the buyer agent use Claude instead of the MockLlm.
@@ -131,6 +132,7 @@ services** in live mode require `CSPR_CLOUD_API_KEY` and a non-default `AGENTGAT
 at all; only `status` attestation history needs `CSPR_CLOUD_API_KEY`. Live `wrap` needs **no**
 admin token — it maps the upstream by signing an ownership challenge with your `--pem` key
 (verified against the on-chain `owner`); the admin token is only the legacy/self-hosted path.
+Live `buy` needs only a funded buyer key (`--pem` or `BUYER_SIGNER_PEM_PATH`).
 Every value can also be passed as a flag (`--mode`, `--node-url`, `--registry`, `--pem`,
 `--api-key`, `--admin-token`; flag > env > default).
 

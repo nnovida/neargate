@@ -535,7 +535,7 @@ export default function Page() {
             <M key="px">PRICE_EXCEEDED</M>,
             '402',
             "The invoice priceMotes exceeds the caller's maxPriceMotes cap. No payment is sent.",
-            'Raise maxPriceMotes if the price is acceptable, or skip the service. (The buyer agent treats this as a budget refusal.)',
+            'Raise maxPriceMotes — or agentgate buy --max — if the price is acceptable, or skip the service. (The buyer agent treats this as a budget refusal.)',
           ],
           [
             <M key="bi">BAD_INVOICE</M>,
@@ -652,14 +652,20 @@ export default function Page() {
           [
             <M key="isi">INVALID_SERVICE_ID</M>,
             '400',
-            'A service id argument (status / pause / resume) was not a positive integer.',
+            'A service id argument (buy / status / pause / resume) was not a positive integer.',
             'Pass a positive integer id (ids are 1-based).',
           ],
           [
             <M key="csnf">SERVICE_NOT_FOUND</M>,
             '404',
-            'status / pause / resume named a service id that does not exist on-chain.',
+            'buy / status / pause / resume named a service id that does not exist on-chain.',
             'Run agentgate list to see registered ids (ids are 1-based).',
+          ],
+          [
+            <M key="csi">SERVICE_INACTIVE</M>,
+            '403',
+            'buy refused to pay: the service is paused by its owner. Checked before any payment — the gateway would answer 403 service_inactive anyway.',
+            'Pick an active service from agentgate list, or resume it if you own it.',
           ],
           [
             <M key="cna">not_authorized</M>,

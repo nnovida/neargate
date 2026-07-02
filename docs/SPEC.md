@@ -27,7 +27,7 @@ agentgate/
 │   ├── client/        # @agentgate/client   — agent-side pay helper (parse 402 → pay → retry)
 │   ├── oracle/        # @agentgate/oracle   — RWA feed: USD/IDR + gold spot + confidence
 │   ├── buyer-agent/   # @agentgate/buyer-agent — LLM decision loop demo agent
-│   └── cli/           # @agentgate/cli      — `agentgate wrap|list|status`
+│   └── cli/           # @agentgate/cli      — `agentgate wrap|buy|list|status|pause|resume|demo-accounts`
 ├── dashboard/         # @agentgate/dashboard — Next.js 14 App Router + Tailwind (also the landing page)
 ├── e2e/               # loop.test.ts — full mock-mode loop, in-process servers
 └── scripts/

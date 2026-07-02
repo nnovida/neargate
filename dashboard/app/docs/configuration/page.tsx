@@ -269,8 +269,8 @@ export default function ConfigurationPage() {
             <span key="d">
               <M>&apos;&apos;</M> (empty)
             </span>,
-            'yes (for the buyer agent)',
-            'Path to the PEM key the buyer agent uses to sign its CSPR payment transfers in live mode.',
+            'yes (for the buyer agent / agentgate buy)',
+            'Path to the PEM key the buyer agent and agentgate buy use to sign CSPR payment transfers in live mode (buy also takes it as --pem).',
           ],
           [
             <M key="v">SELLER_SIGNER_PEM_PATH</M>,
@@ -537,7 +537,7 @@ export default function ConfigurationPage() {
           'CASPER_NETWORK=casper-test\n' +
           'REGISTRY_CONTRACT_PACKAGE_HASH=\n' +
           'GATE_SIGNER_PEM_PATH=                   # middleware/attestor key\n' +
-          'BUYER_SIGNER_PEM_PATH=                  # buyer agent key\n' +
+          'BUYER_SIGNER_PEM_PATH=                  # buyer key — agent + agentgate buy\n' +
           'SELLER_SIGNER_PEM_PATH=                 # CLI / seller key\n' +
           '# --- LLM ---\n' +
           'ANTHROPIC_API_KEY=\n' +

@@ -53,7 +53,8 @@ export default function Page() {
         ].join('\n')}
       />
       <P>
-        Paying that invoice and redeeming the proof is the{' '}
+        Paying that invoice and redeeming the proof is one command —{' '}
+        <M>npx @neargate/cli buy 1 --pem key.pem</M> — or the{' '}
         <DocLink href="/docs/buyers#plain-curl">three-step curl flow</DocLink>. The rest of this
         page runs the same loop fully offline instead — an in-process mock chain, no keys and no
         faucet needed.

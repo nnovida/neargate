@@ -79,7 +79,7 @@ graph LR
 | `@agentgate/client` | agent-side `fetchPaid`: parse 402 → pay → retry with proof | — |
 | `@agentgate/oracle` | demo RWA service: USD/IDR + gold spot with multi-source confidence | 4010 |
 | `@agentgate/buyer-agent` | LLM decision loop (AnthropicLlm or deterministic MockLlm) | — |
-| `@agentgate/cli` | `agentgate wrap|list|status|demo-accounts` | — |
+| `@agentgate/cli` | `agentgate wrap|buy|list|status|pause|resume|demo-accounts` | — |
 | `dashboard/` | Next.js 14 landing + catalog/detail/activity with live polling | 3000 |
 | `contracts/agentgate-registry` | Odra (Rust) registry: services, scores, capped attestations, events | — |
 
