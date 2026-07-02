@@ -7,6 +7,7 @@ export {
   type WrapServiceResult,
 } from './wrap';
 export { listServices, type ServiceListing } from './list';
+export { buyService, type BuyServiceOpts, type BuyServiceResult } from './buy';
 export {
   setServiceActive,
   type SetServiceActiveOpts,

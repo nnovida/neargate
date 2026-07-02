@@ -57,7 +57,7 @@ export const DOC_GROUPS: DocGroup[] = [
       {
         href: '/docs/cli',
         label: 'CLI',
-        keywords: ['wrap', 'list', 'status', 'pause', 'resume', 'demo-accounts', '--pem', '--price', '--gateway', '--mode', 'command', 'flags'],
+        keywords: ['wrap', 'buy', 'list', 'status', 'pause', 'resume', 'demo-accounts', '--pem', '--price', '--max', '--gateway', '--mode', 'command', 'flags'],
       },
     ],
   },
@@ -68,7 +68,7 @@ export const DOC_GROUPS: DocGroup[] = [
       {
         href: '/docs/buyers',
         label: 'Build an agent',
-        keywords: ['agent', 'fetchPaid', 'budget', 'discover', 'pay', 'retry', 'curl', 'llm', 'claude', 'anthropic', 'task'],
+        keywords: ['agent', 'buy', 'fetchPaid', 'budget', 'discover', 'pay', 'retry', 'curl', 'llm', 'claude', 'anthropic', 'task'],
       },
       {
         href: '/docs/sdk',

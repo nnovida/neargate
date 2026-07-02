@@ -6,7 +6,7 @@ export default defineConfig({
   target: 'node22',
   platform: 'node',
   // Inline the private workspace packages so the published artifact is self-contained.
-  noExternal: ['@agentgate/shared', '@agentgate/chain'],
+  noExternal: ['@agentgate/shared', '@agentgate/chain', '@agentgate/client'],
   // Real npm packages stay external (declared in dependencies).
   external: ['casper-js-sdk', 'commander', '@noble/hashes', '@ethersproject/bignumber'],
   clean: true,

@@ -22,6 +22,13 @@ on the line besides the args is your funded wallet key:
 npx @neargate/cli wrap https://api.example.com/data --price 0.5 --name "My Data API" --pem ./key.pem
 ```
 
+Buy one call to any listed service the same way — the CLI pays the 402 invoice and prints
+the data (body → stdout, payment receipt → stderr):
+
+```bash
+npx @neargate/cli buy 1 --pem ./buyer.pem --max 5
+```
+
 `wrap` registers on-chain (signed by `--pem`) and maps your upstream on the gateway by
 signing an ownership challenge — no shared admin token. `--gateway` defaults to the hosted
 gateway; pass it to target a local/self-hosted one.
@@ -138,7 +145,7 @@ packages/
   client/        agent-side fetchPaid (parse 402 → pay → retry)
   oracle/        demo RWA feed: USD/IDR + gold spot + confidence            :4010
   buyer-agent/   LLM decision loop (AnthropicLlm / MockLlm)
-  cli/           agentgate wrap | list | status | pause | resume | demo-accounts
+  cli/           agentgate wrap | buy | list | status | pause | resume | demo-accounts
 dashboard/       Next.js 16 landing + catalog + live activity + docs        :3000
 contracts/       AgentGateRegistry (Rust/Odra) — registry, scores, attestations
 e2e/             full-loop test, in-process servers on port 0

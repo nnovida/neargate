@@ -16,6 +16,23 @@ export default function Page() {
         lede="Notable changes to AgentGate — the CLI, gateway, smart contracts and docs — newest first."
       />
 
+      <H2 id="2026-07-02-buy">2026-07-02 — CLI v0.1.2: `agentgate buy`</H2>
+      <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-mut">
+        <li>
+          <strong className="text-white">New command: <M>buy</M>.</strong> One command runs the
+          whole buyer exchange — fetch the <M>402</M> invoice, pay it with a native CSPR
+          transfer (<M>transfer_id</M> = nonce), retry with the <M>X-PAYMENT</M> proof — and
+          prints the response body to stdout with the payment receipt on stderr.{' '}
+          <M>--max</M> caps what it may pay; unknown/paused services and over-cap invoices are
+          refused before any payment. See <DocLink href="/docs/cli#buy">the buy reference</DocLink>.
+        </li>
+        <li>
+          The buyer signer is <M>MOCK_BUYER_ACCOUNT</M> (mock) or <M>--pem</M> /{' '}
+          <M>BUYER_SIGNER_PEM_PATH</M> (live) — for <M>buy</M>, <M>--pem</M> means the buyer
+          key, not the seller key.
+        </li>
+      </ul>
+
       <H2 id="2026-07-02">2026-07-02 — CLI v0.1.1</H2>
       <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-mut">
         <li>

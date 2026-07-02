@@ -1,6 +1,6 @@
 {
   "name": "@neargate/cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Wrap any HTTP API into a paid x402 service on Casper — HTTP 402 micropayments in native CSPR with on-chain discovery and reputation.",
   "type": "module",
   "bin": { "agentgate": "./dist/bin.js" },
@@ -35,6 +35,7 @@
   },
   "devDependencies": {
     "@agentgate/chain": "*",
+    "@agentgate/client": "*",
     "@agentgate/shared": "*",
     "tsup": "^8.3.0",
     "@types/node": "^22.0.0"

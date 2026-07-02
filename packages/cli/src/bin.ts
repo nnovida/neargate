@@ -11,6 +11,7 @@ import {
   type AgentGateConfig,
   type AnySigner,
 } from '@agentgate/shared';
+import { buyService } from './buy';
 import { createDemoAccounts } from './demo-accounts';
 import { listServices } from './list';
 import { setServiceActive } from './pause';
@@ -47,6 +48,30 @@ function sellerSigner(config: AgentGateConfig): AnySigner {
     );
   }
   return { kind: 'pem', pemPath: config.sellerSignerPemPath };
+}
+
+/** Buyer signer per mode: mock → MOCK_BUYER_ACCOUNT, live → --pem | BUYER_SIGNER_PEM_PATH. */
+function buyerSigner(config: AgentGateConfig, pemFlag?: string): AnySigner {
+  if (config.mode === 'mock') {
+    if (config.mockBuyerAccount === '') {
+      throw new AgentGateError(
+        'SIGNER_MISSING',
+        'mock mode needs MOCK_BUYER_ACCOUNT — run `agentgate demo-accounts` and paste the printed export lines first',
+        400,
+      );
+    }
+    return { kind: 'mock', publicKey: config.mockBuyerAccount };
+  }
+  const pemPath =
+    pemFlag !== undefined && pemFlag.trim() !== '' ? pemFlag : config.buyerSignerPemPath;
+  if (pemPath === '') {
+    throw new AgentGateError(
+      'SIGNER_MISSING',
+      'live mode needs a buyer key — pass --pem <path> or set BUYER_SIGNER_PEM_PATH',
+      400,
+    );
+  }
+  return { kind: 'pem', pemPath };
 }
 
 /** Plain monospace table: pads every column to its widest cell. */
@@ -171,6 +196,75 @@ withConfigFlags(
     ]);
     console.log(renderTable(['ID', 'NAME', 'PRICE', 'TIER', 'SCORE', 'ACTIVE', 'ENDPOINT'], rows));
   });
+
+interface BuyCmdOpts extends CliConfigFlags {
+  max?: string;
+  method: string;
+  body?: string;
+  gateway?: string;
+}
+
+withConfigFlags(
+  program
+    .command('buy')
+    .description(
+      'Buy one call to a service: pay its 402 invoice with a native CSPR transfer and print the response (body → stdout, payment details → stderr)',
+    )
+    .argument('<id>', 'service id (see `agentgate list`)')
+    .option('--max <cspr>', 'refuse invoices priced above this many CSPR')
+    .option('--method <method>', 'HTTP method for the paid request', 'GET')
+    .option('--body <json>', 'JSON request body to send with the paid request')
+    .option('--gateway <url>', "gateway base URL (default: the service's on-chain endpoint)")
+    .option('--pem <path>', 'buyer signer PEM path (live mode; or set BUYER_SIGNER_PEM_PATH)'),
+).action(async (idRaw: string, opts: BuyCmdOpts) => {
+  // Service ids are 1-based, matching status/pause/resume.
+  if (!/^\d+$/.test(idRaw.trim()) || Number(idRaw.trim()) < 1) {
+    throw new AgentGateError(
+      'INVALID_SERVICE_ID',
+      `service id must be a positive integer, got ${JSON.stringify(idRaw)}`,
+      400,
+    );
+  }
+  // The shared --pem flag means the SELLER key in cliConfig; for buy it is the
+  // buyer key, so keep it out of the config env and hand it to buyerSigner.
+  const config = cliConfig({ ...opts, pem: undefined });
+  const chain = createChainClient(config);
+  const signer = buyerSigner(config, opts.pem);
+  const { service, url, result } = await buyService({
+    chain,
+    signer,
+    id: Number(idRaw.trim()),
+    method: opts.method,
+    ...(opts.max !== undefined ? { maxCspr: opts.max } : {}),
+    ...(opts.body !== undefined ? { body: opts.body } : {}),
+    ...(opts.gateway !== undefined ? { gateway: opts.gateway } : {}),
+  });
+
+  // Payment metadata → stderr so the response body on stdout stays pipeable.
+  console.error(`service:  #${service.id} ${service.name}`);
+  console.error(`url:      ${url}`);
+  if (result.paid) {
+    console.error(`paid:     ${formatCspr(result.priceMotes ?? service.priceMotes)}`);
+    console.error(`payment:  ${result.deployHash}`);
+    if (config.mode === 'live' && config.casperNetwork === 'casper-test') {
+      console.error(`explorer: https://testnet.cspr.live/transaction/${result.deployHash}`);
+    }
+    if (result.settlement !== undefined) {
+      const payer = result.settlement.payer !== undefined ? `  (payer ${result.settlement.payer})` : '';
+      console.error(`settled:  ${result.settlement.success ? 'ok' : 'FAILED'}${payer}`);
+    }
+    if (result.status === 402) {
+      console.error(
+        'warning:  payment sent but the gateway still answered 402 — see the body for the error code',
+      );
+    }
+  } else {
+    console.error('paid:     no — the endpoint answered without requiring payment');
+  }
+  console.error(`status:   ${result.status}`);
+  const body = result.body;
+  console.log(typeof body === 'string' ? body : JSON.stringify(body, null, 2));
+});
 
 withConfigFlags(
   program

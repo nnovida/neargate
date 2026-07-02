@@ -21,6 +21,16 @@ npx @neargate/cli wrap https://api.example.com/gold --price 0.5 --name "Gold Spo
 
 It signs the on-chain registration with `--pem`, then maps your upstream on the gateway by **signing an ownership challenge with the same key** — no shared admin token. `--gateway` defaults to the hosted gateway; pass it to target a local or self-hosted one. (`--pem` is irreducible: registering on-chain is a signed, gas-paying transaction.)
 
+## Buy a call (writes)
+
+`buy` runs the whole x402 exchange for you: fetch the `402` invoice, pay it with a **native CSPR transfer carrying the invoice nonce as `transfer_id`**, retry with the `X-PAYMENT` proof, and print the result — response body on **stdout** (pipeable), payment receipt on **stderr**:
+
+```bash
+npx @neargate/cli buy 1 --pem ./buyer.pem --max 5
+```
+
+`--max` is a budget cap: any invoice priced above it is refused (`PRICE_EXCEEDED`) before a single mote moves. Unknown or paused services fail fast before any payment.
+
 ## Flags & environment
 
 Every config value can be given as a flag **or** an env var; precedence is **flag > env var > built-in default**.
@@ -30,8 +40,9 @@ Every config value can be given as a flag **or** an env var; precedence is **fla
 | `--mode <mock\|live>` | `AGENTGATE_MODE` | all (CLI defaults to `live`) |
 | `--node-url <url>` | `CASPER_NODE_URL` | all (defaults to Testnet) |
 | `--registry <hash>` | `REGISTRY_CONTRACT_PACKAGE_HASH` | all (defaults to the deployed registry) |
-| `--gateway <url>` | — | wrap (defaults to the hosted gateway in live) |
-| `--pem <path>` | `SELLER_SIGNER_PEM_PATH` | wrap / pause / resume (live) — your wallet key |
+| `--gateway <url>` | — | wrap (defaults to the hosted gateway in live) · buy (defaults to the service's on-chain endpoint) |
+| `--pem <path>` | `SELLER_SIGNER_PEM_PATH` (wrap/pause/resume) · `BUYER_SIGNER_PEM_PATH` (buy) | live writes — your wallet key |
+| `--max <cspr>` | — | buy: refuse invoices priced above this many CSPR |
 | `--api-key <key>` | `CSPR_CLOUD_API_KEY` | `status` attestation history only |
 | `--admin-token <token>` | `AGENTGATE_ADMIN_TOKEN` | mock / self-hosted-admin mapping only |
 
@@ -44,6 +55,7 @@ On an invalid value the CLI fails fast with a clear one-line message (e.g. `erro
 - `list` — list on-chain services (zero-config)
 - `status <id>` — service detail + reputation (zero-config; `--api-key` adds attestation history)
 - `wrap <url> --price <CSPR> --name <name>` — register + put a 402 paywall in front of an API
+- `buy <id> --pem <key>` — pay a service's 402 invoice and print the response (`--max` caps the price)
 - `pause <id>` / `resume <id>` — toggle a service you own
 
 ## Notes

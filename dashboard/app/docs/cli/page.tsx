@@ -43,9 +43,10 @@ export default function Page() {
       <CommandBlock text="agentgate <command> [args] [options]" />
       <P>
         The entry point is <M>packages/cli/src/bin.ts</M> (a <M>commander</M> program named{' '}
-        <M>agentgate</M>). There are six commands: <DocLink href="#wrap">wrap</DocLink>,{' '}
-        <DocLink href="#list">list</DocLink>, <DocLink href="#status">status</DocLink>,{' '}
-        <DocLink href="#pause">pause</DocLink>, <DocLink href="#resume">resume</DocLink> and{' '}
+        <M>agentgate</M>). There are seven commands: <DocLink href="#wrap">wrap</DocLink>,{' '}
+        <DocLink href="#buy">buy</DocLink>, <DocLink href="#list">list</DocLink>,{' '}
+        <DocLink href="#status">status</DocLink>, <DocLink href="#pause">pause</DocLink>,{' '}
+        <DocLink href="#resume">resume</DocLink> and{' '}
         <DocLink href="#demo-accounts">demo-accounts</DocLink>. Every command exits{' '}
         <M>0</M> on success and <M>1</M> on error; AgentGate failures print to stderr as{' '}
         <M>error: &lt;CODE&gt;: &lt;message&gt;</M> (usage mistakes are reported by the
@@ -353,6 +354,87 @@ export default function Page() {
         &ge; 90% success ratio; <M>trusted</M> at 25+ calls with a &ge; 95% success ratio.
         Malformed scores stay <M>new</M>.
       </Callout>
+
+      {/* ───────────────────────────── buy ───────────────────────────── */}
+      <H2 id="buy">buy</H2>
+      <P>
+        Buy one call to a service: run the full x402 exchange — request, receive the{' '}
+        <M>402</M> invoice, pay it with a native CSPR transfer carrying the nonce as{' '}
+        <M>transfer_id</M>, retry with the <M>X-PAYMENT</M> proof — and print the result. The
+        response body goes to <strong className="text-white">stdout</strong> (pipeable);
+        payment metadata (service, price, payment hash, settlement, status) goes to{' '}
+        <strong className="text-white">stderr</strong>. No contract call is involved, and no
+        new deployment is needed — payment is a plain native transfer.
+      </P>
+      <CommandBlock
+        wrap
+        text="npx @neargate/cli buy <id> --pem <path> [--max <cspr>] [--method <m>] [--body <json>] [--gateway <url>]"
+      />
+      <DocTable
+        head={['Flag / arg', 'Required', 'Default', 'Meaning']}
+        rows={[
+          [
+            <M key="i">{'<id>'}</M>,
+            'yes',
+            '—',
+            'Positional. Service id (1-based, as shown by `agentgate list`).',
+          ],
+          [
+            <M key="m">--max {'<cspr>'}</M>,
+            'no',
+            'unlimited',
+            'Budget cap: refuse to pay any invoice priced above this many CSPR. Checked twice — against the on-chain price before any HTTP, and against the 402 invoice before paying (PRICE_EXCEEDED).',
+          ],
+          [
+            <M key="me">--method {'<m>'}</M>,
+            'no',
+            <M key="med">GET</M>,
+            'HTTP method for the paid request.',
+          ],
+          [
+            <M key="b">--body {'<json>'}</M>,
+            'no',
+            '—',
+            'JSON request body, sent with content-type application/json on both legs. Validated up front (INVALID_INPUT) — the gateway rejects non-JSON bodies before charging.',
+          ],
+          [
+            <M key="g">--gateway {'<url>'}</M>,
+            'no',
+            "the service's on-chain endpoint",
+            'Gateway base URL override; the paid request goes to <base>/svc/<id>.',
+          ],
+        ]}
+      />
+      <P>
+        Fail-fast guards run <em>before</em> any payment: unknown service (
+        <M>SERVICE_NOT_FOUND</M>), paused service (<M>SERVICE_INACTIVE</M>), price above{' '}
+        <M>--max</M> (<M>PRICE_EXCEEDED</M>), malformed body (<M>INVALID_INPUT</M>). Casper
+        native transfers have a ~2.5 CSPR network minimum, so the transfer sent is the
+        invoice&apos;s <M>maxAmountRequired</M> — for services priced below the floor the
+        gateway invoices the amount that actually settles.
+      </P>
+      <H3 id="buy-example">Example</H3>
+      <CommandBlock wrap text="npx @neargate/cli buy 1 --pem ./buyer.pem --max 5" />
+      <CodeBlock
+        label="stderr (payment metadata) — the response body arrives on stdout"
+        code={[
+          'service:  #1 RWA FX & Gold Oracle',
+          'url:      https://gateway.example.org/svc/1',
+          'paid:     0.5 CSPR',
+          'payment:  <deployHash>',
+          'explorer: https://testnet.cspr.live/transaction/<deployHash>',
+          'settled:  ok  (payer account-hash-…)',
+          'status:   200',
+        ].join('\n')}
+      />
+      <H3 id="buy-signer">Signer it reads</H3>
+      <P>
+        The buyer signer is resolved per mode: <M>MOCK_BUYER_ACCOUNT</M> in mock mode (run{' '}
+        <DocLink href="#demo-accounts">demo-accounts</DocLink> first), and{' '}
+        <M>--pem</M> or <M>BUYER_SIGNER_PEM_PATH</M> in live mode. Note that for <M>buy</M>{' '}
+        the <M>--pem</M> flag means the <em>buyer</em> key — it does not touch{' '}
+        <M>SELLER_SIGNER_PEM_PATH</M>.
+      </P>
 
       {/* ───────────────────────────── status ───────────────────────────── */}
       <H2 id="status">status</H2>

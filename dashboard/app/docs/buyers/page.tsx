@@ -313,12 +313,18 @@ export default function Page() {
         <DocLink href="/docs/protocol">How it works</DocLink>.
       </P>
 
-      <H2 id="plain-curl">Plain curl (no SDK)</H2>
+      <H2 id="plain-curl">One command — or plain curl (no SDK)</H2>
       <P>
-        The whole exchange is plain HTTP, so any client works — the SDK is a convenience, not a
-        requirement. Here is the full loop against the live hosted gateway (service <M>#1</M>,
-        0.5 CSPR per call on Casper Testnet). First, request without payment and a real invoice
-        comes back:
+        The fastest buyer path is the CLI: it runs the whole exchange below for you and prints
+        the response body to stdout (pipeable), with the payment receipt on stderr — see the{' '}
+        <DocLink href="/docs/cli#buy">buy reference</DocLink> for flags:
+      </P>
+      <CommandBlock wrap text="npx @neargate/cli buy 1 --pem ./buyer.pem --max 5" />
+      <P>
+        But the exchange is plain HTTP, so any client works — the CLI and SDK are conveniences,
+        not requirements. Here is the same loop by hand against the live hosted gateway
+        (service <M>#1</M>, 0.5 CSPR per call on Casper Testnet). First, request without
+        payment and a real invoice comes back:
       </P>
       <CodeBlock
         label="1 — the 402 challenge"
