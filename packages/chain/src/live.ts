@@ -841,10 +841,15 @@ export class LiveCasperClient implements ChainClient {
         true,
       );
       const d = deploy?.data;
-      if (!d) return { ok: false, reason: 'not_found' };
-      // ⚠️ verify against deployed contract — pending detection via block_hash/error fields.
-      if (!d.block_hash && !d.error_message) return { ok: false, reason: 'pending' };
-      return { ok: false, reason: 'not_found' };
+      // Empty /transfers against a valid, unexpired invoice the buyer just paid
+      // is almost always CSPR.cloud indexing lag, not a bad payment — the
+      // transfer records can trail the deploy's own finality by several seconds.
+      // Treat every "can't confirm the transfer yet" state as still-settling
+      // (retryable) so the buyer's client keeps polling; only an explicit
+      // on-chain failure is a hard not_found. A genuinely bogus hash simply
+      // exhausts the client's bounded retries with the same final outcome.
+      if (d?.error_message) return { ok: false, reason: 'not_found' };
+      return { ok: false, reason: 'pending' };
     }
 
     const expectedTarget = normalizeAccountHashHex(q.expectedTarget);
