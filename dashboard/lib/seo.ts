@@ -2,10 +2,12 @@ import type { Metadata } from 'next';
 
 /**
  * Production origin for absolute URLs (canonical, OpenGraph, sitemap, robots).
- * Set NEXT_PUBLIC_SITE_URL to the real docs domain before deploy; the
- * placeholder keeps builds and metadata valid until then.
+ * Defaults to the hosted dashboard; set NEXT_PUBLIC_SITE_URL to override for
+ * a self-hosted deployment.
  */
-export const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://agentgate.example').replace(
+export const SITE_URL = (
+  process.env.NEXT_PUBLIC_SITE_URL ?? 'https://agentgate.example.org'
+).replace(
   /\/+$/,
   '',
 );

@@ -20,7 +20,13 @@ module.exports = {
       args: 'run dev:live',
       interpreter: 'none',
       autorestart: true,
-      env: { NODE_ENV: 'production', PATH: `${NODE_BIN}:${process.env.PATH || ''}` },
+      env: {
+        NODE_ENV: 'production',
+        PATH: `${NODE_BIN}:${process.env.PATH || ''}`,
+        // Persist issued invoices across restarts (FileInvoiceStore, F2) —
+        // a buyer who paid on-chain is not lost if the gateway bounces.
+        INVOICE_STORE_PATH: `${REPO}/data/gateway-invoices.json`,
+      },
     },
     {
       name: 'agentgate-dashboard',

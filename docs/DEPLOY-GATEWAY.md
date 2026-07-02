@@ -22,6 +22,7 @@ attestations.
 | `GATE_SIGNER_PEM_PATH` | attestor key the gateway signs `record_attestation` with (funded) |
 | `AGENTGATE_ADMIN_TOKEN` | a strong unique token (the shipped default is refused in live) — only guards the legacy `/admin/services`; self-service mapping does not use it |
 | `TRUST_PROXY=1` | when behind exactly one platform proxy (Railway/Fly/Cloudflare), so rate-limit keys off the real client IP |
+| `INVOICE_STORE_PATH` | JSON file for the `FileInvoiceStore` — issued invoices survive a gateway restart, so a buyer who already paid on-chain can still redeem (finding F2). Unset = in-memory only |
 
 ## Run it
 

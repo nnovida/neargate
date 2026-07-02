@@ -1,9 +1,12 @@
 # AgentGate
 
+[![ci](https://example.invalid/AgentGate/actions/workflows/ci.yml/badge.svg)](https://example.invalid/AgentGate/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@neargate/cli.svg)](https://www.npmjs.com/package/@neargate/cli)
 [![license](https://img.shields.io/npm/l/@neargate/cli.svg)](LICENSE)
 
 **Live now:** CLI on npm → `npx @neargate/cli` · dashboard [agentgate.example.org](https://agentgate.example.org) · gateway [gateway.example.org](https://gateway.example.org) · registry deployed on Casper Testnet.
+
+[![AgentGate dashboard — live catalog of on-chain registered services](docs/assets/dashboard.png)](https://agentgate.example.org)
 
 **Stripe for AI agents on Casper.** Read the live on-chain service catalog with zero setup —
 no config, no keys:
@@ -69,6 +72,10 @@ npm run demo     # full loop: register → 402 → pay → serve → attest → 
 The demo boots a mock chain + oracle + gateway in-process, wraps the oracle at
 0.5 CSPR, runs the LLM buyer agent (deterministic MockLlm — no API key needed), and
 prints the **payment deploy hash**, the **attestation tx hash**, and the final score.
+
+> **Ports:** the demo binds `:4030` (devnet), `:4010` (oracle) and `:4021` (gateway). If one
+> is taken (`EADDRINUSE`), override:
+> `DEVNET_PORT=14030 ORACLE_PORT=14010 MIDDLEWARE_PORT=14021 npm run demo`
 
 ### See it in the dashboard (one command)
 
@@ -148,10 +155,11 @@ scripts/         dev.ts (stack) · demo.ts (one-shot scripted demo)
 | `npm run agentgate -- …` | the `agentgate` CLI |
 | `npm run agent -- --task "…"` | run the buyer agent once |
 | `npm run typecheck` | `tsc --noEmit` in every package + dashboard + root scripts/e2e |
-| `npm test` | vitest: all package units + the e2e loop (323 tests) |
+| `npm test` | vitest: all package units + the e2e loop (341 tests) |
 | `npm run build` | dashboard `next build` |
 
-Contract tests: `cd contracts/agentgate-registry && cargo odra test` (20 OdraVM tests).
+Contract tests: `cd contracts/agentgate-registry && cargo odra test` (20 OdraVM tests),
+plus `contracts/spend-guard` (25 tests via `cargo test`).
 
 ## Deployed addresses (Casper Testnet)
 
@@ -188,6 +196,12 @@ The CLI is published to npm as [`@neargate/cli`](https://www.npmjs.com/package/@
 
 Testnet Plan B (native transfer + `transfer_id`) → mainnet → x402 Facilitator (Plan A)
 → CSPR.cloud streaming → MCP server for agent frameworks.
+
+## Hackathon
+
+Built solo by its author for the
+[Casper Agentic Buildathon 2026](https://dorahacks.io/hackathon/casper-agentic-buildathon)
+(Casper Innovation Track — Agentic AI × DeFi/RWA on Casper).
 
 ## License
 

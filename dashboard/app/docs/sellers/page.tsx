@@ -228,9 +228,9 @@ export default function Page() {
       <P>On success the CLI prints the service id, public endpoint, dashboard link and tx hash:</P>
       <CodeBlock
         code={[
-          'service id:      7',
-          'public endpoint: https://gateway.example.org/svc/7',
-          'dashboard:       http://localhost:3000/services/7',
+          'service id:      1',
+          'public endpoint: https://gateway.example.org/svc/1',
+          'dashboard:       https://agentgate.example.org/services/1',
           'register tx:     <txHash>',
         ].join('\n')}
       />

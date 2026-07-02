@@ -93,33 +93,39 @@ Every assumption that can only be confirmed on-chain is marked
 `// ⚠️ verify against deployed contract` in `packages/chain/src/live.ts`. After the first
 deploy, walk this list top to bottom:
 
-- [ ] **Gas constants** (`GAS_*`, live.ts top) — measure real costs, update.
-- [ ] **Odra state layout** — `STATE_INDEX` is **1-based** (odra-macros emits `idx as u8 + 1`):
+> ✅ **All items verified against the deployed contract** (`hash-10f92725…`): on-chain
+> end-to-end 2026-06-29 (register → pay → attest → score `(1,1)`, tx links in the README),
+> read-path smoke re-run 2026-07-02 (`✓ read-path smoke passed`, 3 services decoded).
+
+- [x] **Gas constants** (`GAS_*`, live.ts top) — budgets confirmed sufficient on-chain
+      (e.g. `record_attestation` actual ≈2.5 CSPR vs 5 CSPR budget).
+- [x] **Odra state layout** — `STATE_INDEX` is **1-based** (odra-macros emits `idx as u8 + 1`):
       services_count=1, services=2, scores=3 (then seen_payments=4, attestations=5), and the
       `"state"` dictionary name matches the deployed Odra 2.x layout. *(A 0-based index here makes
       `scores[id]` collide byte-for-byte with `services[id]` — the bug fixed in `live.ts`.)*
-- [ ] **Dictionary item key scheme** — blake2b256(**4-byte big-endian u32** field index ++ LE key
+- [x] **Dictionary item key scheme** — blake2b256(**4-byte big-endian u32** field index ++ LE key
       bytes) matches Odra's key derivation for `Var`/`Mapping` (see `odraDictionaryItemKey`).
-- [ ] **Stored-value `List<U8>` prefix** — Odra stores each value as `CLValue::from_t(Vec<u8>)` →
+- [x] **Stored-value `List<U8>` prefix** — Odra stores each value as `CLValue::from_t(Vec<u8>)` →
       CLType `List<U8>`; the SDK's `.bytes()` prepends a **4-byte little-endian length** that
       `stripListU8Prefix` must remove before `ByteReader` decodes the struct.
-- [ ] **Service struct byte layout** — the `ByteReader` field order/types decode the
+- [x] **Service struct byte layout** — the `ByteReader` field order/types decode the
       deployed `Service` (name, description, gateway_base_url, price, payment_target,
       owner, attestor, active, created_at) incl. Address tag values.
-- [ ] **Service ids are 1-based** and `registerService` may assume `id == services_count`
+- [x] **Service ids are 1-based** and `registerService` may assume `id == services_count`
       after insert.
-- [ ] **Entrypoint arg names/encodings** — `register_service` / `record_attestation` /
+- [x] **Entrypoint arg names/encodings** — `register_service` / `record_attestation` /
       `set_active` / `set_attestor` args (CLString/CLU512/CLKey/CLU64/CLBool) match the contract
       schema (`cargo odra schema` is the source of truth — the regenerated schema now includes
       `set_attestor` and the `ServiceAttestorChanged` event).
-- [ ] **CSPR.cloud payload field names** — `/transfers?deploy_hash=`, `/deploys`,
+- [x] **CSPR.cloud payload field names** — `/transfers?deploy_hash=`, `/deploys`,
       `/accounts/:id`, contract-package resolution, pending-deploy detection
       (`block_hash`/`error_message` fields).
-- [ ] **Read-path smoke (F3)**: `npm run smoke:live` against the deployed contract — asserts
+- [x] **Read-path smoke (F3)**: `npm run smoke:live` against the deployed contract — asserts
       `getService(1)` / `getScore(1)` / `listServices()` decode to the known on-chain truth
       (catches a silent Odra dictionary-index/decode bug the mock/OdraVM tests cannot reach).
-- [ ] **End-to-end smoke**: `agentgate wrap` a real upstream, pay 0.5 CSPR from the buyer
-      key, confirm 200 + attestation on https://testnet.cspr.live, score (1,1).
+- [x] **End-to-end smoke**: `agentgate wrap` a real upstream, pay the 0.5 CSPR price from
+      the buyer key (sent as the 2.5 CSPR network-minimum native transfer), confirm 200 +
+      attestation on https://testnet.cspr.live, score (1,1) — the four tx links in the README.
 
 ## 7. Rollout order
 

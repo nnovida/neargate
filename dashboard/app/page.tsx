@@ -117,10 +117,9 @@ export default function Home() {
             live activity
           </Link>
           <a
-            href="https://github.com/agentgate"
+            href="https://example.invalid/AgentGate"
             target="_blank"
             rel="noopener noreferrer"
-            title="Placeholder link pre-launch"
             className="px-2 py-2.5 font-mono text-xs uppercase tracking-[0.18em] text-mut transition-colors hover:text-accent"
           >
             github ↗
