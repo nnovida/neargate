@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { createChainClient } from '@agentgate/chain';
 import {
   AgentGateError,
+  DEFAULT_DASHBOARD_URL,
   DEFAULT_GATEWAY_URL,
   formatCspr,
   isAgentGateError,
@@ -124,7 +125,10 @@ withConfigFlags(
       gateway,
       paymentTarget: opts.paymentTarget,
       attestor: opts.attestor,
-      dashboardBaseUrl: `http://localhost:${config.dashboardPort}`,
+      dashboardBaseUrl:
+        config.mode === 'live'
+          ? DEFAULT_DASHBOARD_URL
+          : `http://localhost:${config.dashboardPort}`,
       chain,
       signer,
       adminToken: config.adminToken,

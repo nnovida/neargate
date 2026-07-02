@@ -17,6 +17,12 @@ export const DEFAULT_REGISTRY_PACKAGE_HASH =
  */
 export const DEFAULT_GATEWAY_URL = 'https://gateway.example.org';
 
+/**
+ * Default hosted dashboard the CLI links to in live mode when printing the
+ * service detail URL; mock mode links to http://localhost:<DASHBOARD_PORT>.
+ */
+export const DEFAULT_DASHBOARD_URL = 'https://agentgate.example.org';
+
 export interface AgentGateConfig {
   mode: AgentGateMode;
   // ports
