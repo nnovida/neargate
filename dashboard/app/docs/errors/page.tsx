@@ -636,7 +636,7 @@ export default function Page() {
       <H2 id="cli">CLI errors</H2>
       <P>
         Thrown by the <M>agentgate</M> CLI (<M>packages/cli/src/*</M>) during input validation and
-        the wrap/demo flows. The bin prints them as <M>error: &lt;CODE&gt;: &lt;message&gt;</M> and
+        the wrap/buy/demo flows. The bin prints them as <M>error: &lt;CODE&gt;: &lt;message&gt;</M> and
         exits <M>1</M>.
       </P>
 
@@ -646,8 +646,8 @@ export default function Page() {
           [
             <M key="ii">INVALID_INPUT</M>,
             '400',
-            'A required on-chain text field was empty/blank, contained control characters, or exceeded its max length (name ≤ 128, description ≤ 512).',
-            'Provide printable, bounded text for --name / --description.',
+            'A required on-chain text field was empty/blank, contained control characters, or exceeded its max length (name ≤ 128, description ≤ 512) — or buy was given a --body that is not valid JSON.',
+            'Provide printable, bounded text for --name / --description; pass valid JSON to buy --body.',
           ],
           [
             <M key="isi">INVALID_SERVICE_ID</M>,
@@ -706,8 +706,8 @@ export default function Page() {
           [
             <M key="sm">SIGNER_MISSING</M>,
             '400',
-            'No seller signer: mock mode without MOCK_SELLER_ACCOUNT, or live mode without SELLER_SIGNER_PEM_PATH.',
-            'Mock: export MOCK_SELLER_ACCOUNT from `agentgate demo-accounts`. Live: pass --pem <path> (or set SELLER_SIGNER_PEM_PATH).',
+            'No signer for the command. Seller commands: mock mode without MOCK_SELLER_ACCOUNT, or live mode without SELLER_SIGNER_PEM_PATH. buy: mock mode without MOCK_BUYER_ACCOUNT, or live mode without --pem / BUYER_SIGNER_PEM_PATH.',
+            'Mock: export the accounts printed by `agentgate demo-accounts`. Live: pass --pem <path> (seller commands read SELLER_SIGNER_PEM_PATH; buy reads BUYER_SIGNER_PEM_PATH).',
           ],
           [
             <M key="mo">MOCK_ONLY</M>,

@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/docs/cli' },
   title: 'CLI',
   description:
-    'Reference for the agentgate CLI: wrap, list, status, pause, resume and demo-accounts. Every flag, argument, default and example output, verified against packages/cli/src/bin.ts.',
+    'Reference for the agentgate CLI: wrap, buy, list, status, pause, resume and demo-accounts. Every flag, argument, default and example output, verified against packages/cli/src/bin.ts.',
 };
 
 export default function Page() {
@@ -27,7 +27,7 @@ export default function Page() {
       <DocHeader
         kicker="FOR SELLERS"
         title="CLI"
-        lede="The agentgate CLI publishes services, inspects the on-chain catalog, toggles a service you own, and mints faucet-funded demo accounts."
+        lede="The agentgate CLI publishes services, buys one paid call to any of them, inspects the on-chain catalog, toggles a service you own, and mints faucet-funded demo accounts."
       />
 
       {/* ───────────────────────────── invocation ───────────────────────────── */}
@@ -189,7 +189,7 @@ export default function Page() {
             <M key="f4">--pem {'<path>'}</M>,
             <M key="e4">SELLER_SIGNER_PEM_PATH</M>,
             <M key="d4">(none)</M>,
-            'wrap, pause, resume (live writes)',
+            'wrap, pause, resume (live writes); for buy it means the buyer key (env: BUYER_SIGNER_PEM_PATH)',
           ],
           [
             <M key="f5">--admin-token {'<token>'}</M>,
@@ -403,15 +403,21 @@ export default function Page() {
             "the service's on-chain endpoint",
             'Gateway base URL override; the paid request goes to <base>/svc/<id>.',
           ],
+          [
+            <M key="pm">--pem {'<path>'}</M>,
+            'live mode',
+            <M key="pmd">BUYER_SIGNER_PEM_PATH</M>,
+            'Buyer signer PEM path. For buy, --pem means the buyer key — SELLER_SIGNER_PEM_PATH is never read.',
+          ],
         ]}
       />
       <P>
         Fail-fast guards run <em>before</em> any payment: unknown service (
         <M>SERVICE_NOT_FOUND</M>), paused service (<M>SERVICE_INACTIVE</M>), price above{' '}
-        <M>--max</M> (<M>PRICE_EXCEEDED</M>), malformed body (<M>INVALID_INPUT</M>). Casper
-        native transfers have a ~2.5 CSPR network minimum, so the transfer sent is the
-        invoice&apos;s <M>maxAmountRequired</M> — for services priced below the floor the
-        gateway invoices the amount that actually settles.
+        <M>--max</M> (<M>PRICE_EXCEEDED</M>), malformed body (<M>INVALID_INPUT</M>).{' '}
+        <M>buy</M> pays exactly the invoice&apos;s <M>maxAmountRequired</M> and never overpays;
+        Casper&apos;s ~2.5 CSPR native-transfer floor therefore means invoices below it cannot
+        settle on this rail — target services priced ≥ 2.5 CSPR.
       </P>
       <H3 id="buy-example">Example</H3>
       <CommandBlock wrap text="npx @neargate/cli buy 1 --pem ./buyer.pem --max 5 --gateway https://gateway.example.org" />
@@ -420,7 +426,7 @@ export default function Page() {
         code={[
           'service:  #1 RWA FX & Gold Oracle',
           'url:      https://gateway.example.org/svc/1',
-          'paid:     0.5 CSPR',
+          'paid:     2.5 CSPR',
           'payment:  <deployHash>',
           'explorer: https://testnet.cspr.live/transaction/<deployHash>',
           'settled:  ok  (payer account-hash-…)',
@@ -601,14 +607,16 @@ export default function Page() {
           [<M key="c0">CONFIG_INVALID</M>, '500', 'all commands', 'A config value failed validation before the command ran — e.g. --mode is neither mock nor live, or a port/URL env var is malformed.'],
           [<M key="c15">INVALID_AMOUNT</M>, '400', 'wrap', '--price is not a plain decimal (non-numeric, negative, exponent, or more than 9 decimal places).'],
           [<M key="c1">INVALID_PRICE</M>, '400', 'wrap', 'Price is not greater than 0 CSPR.'],
-          [<M key="c2">INVALID_INPUT</M>, '400', 'wrap', 'Empty/blank name, or text with control characters or over the length limit.'],
+          [<M key="c2">INVALID_INPUT</M>, '400', 'wrap / buy', 'wrap: empty/blank name, or text with control characters or over the length limit. buy: --body is not valid JSON.'],
           [<M key="c3">INVALID_URL</M>, '400', 'wrap', 'upstreamUrl or gateway is not a valid http(s) URL; gateway additionally must not carry a query string or fragment (upstreamUrl may).'],
           [<M key="c4">INSECURE_URL</M>, '400', 'wrap', 'Live mode + non-localhost gateway over http:// (the signed mapping request must not travel in cleartext).'],
           [<M key="c5">INVALID_ACCOUNT_HASH</M>, '400', 'wrap', '--payment-target is not account-hash-<64 hex>.'],
           [<M key="c6">INVALID_PUBLIC_KEY</M>, '400', 'wrap', '--attestor is not a valid Casper public key hex.'],
-          [<M key="c7">SIGNER_MISSING</M>, '400', 'wrap / pause / resume', 'Mock mode missing MOCK_SELLER_ACCOUNT, or live mode missing SELLER_SIGNER_PEM_PATH.'],
-          [<M key="c8">INVALID_SERVICE_ID</M>, '400', 'status / pause / resume', 'Service id is not a positive integer.'],
-          [<M key="c9">SERVICE_NOT_FOUND</M>, '404', 'status / pause / resume', 'No on-chain record for that id.'],
+          [<M key="c7">SIGNER_MISSING</M>, '400', 'wrap / buy / pause / resume', 'Seller commands: missing MOCK_SELLER_ACCOUNT (mock) or SELLER_SIGNER_PEM_PATH (live). buy: missing MOCK_BUYER_ACCOUNT (mock) or --pem / BUYER_SIGNER_PEM_PATH (live).'],
+          [<M key="c8">INVALID_SERVICE_ID</M>, '400', 'buy / status / pause / resume', 'Service id is not a positive integer.'],
+          [<M key="c9">SERVICE_NOT_FOUND</M>, '404', 'buy / status / pause / resume', 'No on-chain record for that id.'],
+          [<M key="c16">SERVICE_INACTIVE</M>, '403', 'buy', 'The service is paused by its owner — refused before any payment.'],
+          [<M key="c17">PRICE_EXCEEDED</M>, '402', 'buy', 'The on-chain price or the 402 invoice exceeds --max. No payment is sent.'],
           [<M key="c10">not_authorized</M>, '403', 'pause / resume', 'Signing key is not the service owner.'],
           [<M key="c11">MOCK_ONLY</M>, '400', 'demo-accounts', 'Invoked while the mode is live — pass --mode mock (or set AGENTGATE_MODE=mock).'],
           [<M key="c12">FAUCET_UNREACHABLE</M>, '502', 'demo-accounts', 'Cannot reach the devnet faucet (devnet not running).'],

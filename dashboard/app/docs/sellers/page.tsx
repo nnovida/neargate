@@ -381,11 +381,11 @@ export default function Page() {
         sent directly to your <M>paymentTarget</M> — the gateway never holds or forwards funds, it
         only verifies the transfer happened on-chain before proxying.
       </P>
-      <Callout tone="info" title="2.5 CSPR network floor">
-        Casper rejects native transfers under 2.5 CSPR, so buyers always send{' '}
-        <M>max(price, 2.5 CSPR)</M>. A <M>--price</M> below 2.5 does not lower what buyers
-        actually transfer — it only lowers the minimum amount the gateway verifies before
-        proxying.
+      <Callout tone="warn" title="Price at ≥ 2.5 CSPR (network floor)">
+        Casper rejects native transfers under 2.5 CSPR. The gateway accepts any amount at or
+        above your price, but the bundled buyers (<M>agentgate buy</M>, the SDK, the LLM agent)
+        pay <em>exactly</em> the invoice — a <M>--price</M> below 2.5 makes your service
+        unpayable for them; only a manual buyer that deliberately overpays can settle it.
       </Callout>
       <P>
         <M>paymentTarget</M> defaults to the account hash derived from your signer, so by default

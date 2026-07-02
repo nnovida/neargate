@@ -86,8 +86,8 @@ export default function Page() {
                 The buyer client validates the response (<M>parsePaymentRequired</M> — selects
                 the <M>accepts[]</M> entry matching the chain network and <M>scheme:"exact"</M>),
                 refuses prices above its cap (<M>PRICE_EXCEEDED</M>), then sends a native CSPR
-                transfer of at least <M>maxAmountRequired</M> motes — never below the 2.5 CSPR
-                network minimum (see{' '}
+                transfer of exactly <M>maxAmountRequired</M> motes — so sub-2.5-CSPR invoices
+                cannot settle on this rail (see{' '}
                 <DocLink href="/docs/protocol#payment">Payment</DocLink>) — to <M>payTo</M> with{' '}
                 <M>transfer_id = extra.nonce</M>. The transfer&apos;s deploy hash becomes the
                 payment proof.
@@ -381,9 +381,10 @@ export default function Page() {
       <Callout tone="warn" title="Network minimum: 2.5 CSPR per native transfer">
         Casper rejects native transfers below 2.5 CSPR (<M>2500000000</M> motes) at submit.
         Verification only requires <M>amount ≥ maxAmountRequired</M> — overpayment is accepted —
-        so for a service priced below 2.5 CSPR the buyer must send{' '}
-        <M>max(maxAmountRequired, 2500000000)</M> motes. Sellers should simply price services at
-        ≥ 2.5 CSPR.
+        but the bundled buyers (<M>agentgate buy</M>, the SDK&apos;s <M>fetchPaid</M>, the LLM
+        agent) pay <em>exactly</em> the invoiced amount, so a service priced below 2.5 CSPR can
+        only be settled by a manual buyer that deliberately overpays. Price services at ≥ 2.5
+        CSPR.
       </Callout>
       <DocTable
         head={['Header', 'Direction', 'Carries']}

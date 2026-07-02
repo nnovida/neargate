@@ -48,7 +48,7 @@ graph LR
         MW[middleware :4021<br/>402 paywall + admin API]
     end
     subgraph sellers
-        CLI[cli<br/>wrap / list / status] --> MW
+        CLI[cli<br/>wrap / buy / list / status] --> MW
         OR[oracle :4010<br/>USD/IDR + XAU/USD feed]
     end
     subgraph chain layer

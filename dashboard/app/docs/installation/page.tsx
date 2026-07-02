@@ -157,7 +157,7 @@ export default function InstallationPage() {
             <M key="n">@neargate/cli</M>,
             <span key="d">
               The <M>agentgate</M> CLI (published on npm — <M>npx @neargate/cli</M>):{' '}
-              <M>wrap</M>, <M>list</M>, <M>status</M>, <M>pause</M>, <M>resume</M>,{' '}
+              <M>wrap</M>, <M>buy</M>, <M>list</M>, <M>status</M>, <M>pause</M>, <M>resume</M>,{' '}
               <M>demo-accounts</M>.
             </span>,
           ],

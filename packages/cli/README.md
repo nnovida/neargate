@@ -57,6 +57,7 @@ On an invalid value the CLI fails fast with a clear one-line message (e.g. `erro
 - `wrap <url> --price <CSPR> --name <name>` — register + put a 402 paywall in front of an API
 - `buy <id> --pem <key>` — pay a service's 402 invoice and print the response (`--max` caps the price)
 - `pause <id>` / `resume <id>` — toggle a service you own
+- `demo-accounts` — mint faucet-funded buyer/seller accounts on the mock devnet (mock mode only)
 
 ## Notes
 

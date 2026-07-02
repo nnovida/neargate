@@ -115,7 +115,7 @@ Set `ANTHROPIC_API_KEY` to let the buyer agent use Claude instead of the MockLlm
 
 ## Mode matrix
 
-`AGENTGATE_MODE=mock|live` (default `mock`) selects the chain backend behind the
+`AGENTGATE_MODE=mock|live` (default `mock` for the repo stack; the published CLI defaults to `live`) selects the chain backend behind the
 `ChainClient` seam — everything above it is identical:
 
 | | `mock` | `live` (Casper Testnet) |

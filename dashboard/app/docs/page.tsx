@@ -66,8 +66,8 @@ export default function Page() {
         — the &ldquo;Plan B&rdquo; scheme. It is not a CEP-18 token transfer and it does not call any
         vault contract. The gateway never custodies funds; payment goes straight from the buyer to
         the seller&apos;s account. Note Casper enforces a network minimum of <M>2.5 CSPR</M> on
-        native transfers — if a service is priced below that, the buyer must send{' '}
-        <M>max(price, 2.5 CSPR)</M>; the gateway accepts any amount at or above the invoice price.
+        native transfers; the gateway accepts any amount at or above the invoice price, but the
+        bundled buyers pay exactly the invoice — so sellers should price at ≥ 2.5 CSPR.
       </Callout>
 
       <H2 id="when-to-use">When to use AgentGate</H2>
@@ -216,7 +216,7 @@ export default function Page() {
           {
             href: '/docs/cli',
             title: 'CLI',
-            desc: 'agentgate wrap, list, status, pause, resume, and demo-accounts — flags, environment, output, and exit codes.',
+            desc: 'agentgate wrap, buy, list, status, pause, resume, and demo-accounts — flags, environment, output, and exit codes.',
           },
         ]}
       />
