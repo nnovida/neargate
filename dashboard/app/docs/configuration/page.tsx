@@ -251,7 +251,7 @@ export default function ConfigurationPage() {
               call while it stays empty (the registry itself is live on Testnet). The published CLI
               overlays the deployed hash{' '}
               <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M> as its own
-              built-in default, so <M>npx @neargate/cli list</M> / <M>status</M> read live Testnet
+              built-in default, so <M>npx @neargate/cli@latest list</M> / <M>status</M> read live Testnet
               with zero config; set this only to point at a different deploy. See{' '}
               <DocLink href="/docs/contract">Smart contract</DocLink>.
             </span>,

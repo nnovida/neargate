@@ -2,16 +2,16 @@ import Link from 'next/link';
 import { StatsStrip } from '@/components/stats-strip';
 import { CommandBlock } from '@/components/copy';
 
-const LIST_CMD = 'npx @neargate/cli list';
+const LIST_CMD = 'npx @neargate/cli@latest list';
 const WRAP_CMD =
-  'npx @neargate/cli wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --pem ./key.pem';
+  'npx @neargate/cli@latest wrap https://api.example.com/gold --price 2.5 --name "Gold Spot Feed" --pem ./key.pem';
 
 const STEPS = [
   {
     n: '01',
     title: 'Wrap',
     body: 'One command registers your API on the Casper registry contract and drops a 402 paywall in front of it. No billing code, no accounts, no keys to issue.',
-    code: 'npx @neargate/cli wrap <url> --price 0.5 --pem ./key.pem',
+    code: 'npx @neargate/cli@latest wrap <url> --price 2.5 --pem ./key.pem',
   },
   {
     n: '02',

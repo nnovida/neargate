@@ -319,7 +319,7 @@ export default function Page() {
         the response body to stdout (pipeable), with the payment receipt on stderr — see the{' '}
         <DocLink href="/docs/cli#buy">buy reference</DocLink> for flags:
       </P>
-      <CommandBlock wrap text="npx @neargate/cli buy 5 --pem ./buyer.pem --max 3" />
+      <CommandBlock wrap text="npx @neargate/cli@latest buy 5 --pem ./buyer.pem --max 3" />
       <P>
         But the exchange is plain HTTP, so any client works — the CLI and SDK are conveniences,
         not requirements. Here is the same loop by hand against the live hosted gateway

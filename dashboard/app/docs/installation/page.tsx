@@ -87,7 +87,7 @@ export default function InstallationPage() {
         Sellers who only need the <M>agentgate</M> CLI can skip the clone entirely — the published
         CLI targets Casper Testnet and the hosted gateway by default.
       </P>
-      <CommandBlock prompt={null} text="npx @neargate/cli list" />
+      <CommandBlock prompt={null} text="npx @neargate/cli@latest list" />
       <P>Or install globally:</P>
       <CommandBlock prompt={null} text={'npm install -g @neargate/cli\nagentgate list'} />
       <P>
