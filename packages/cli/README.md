@@ -26,7 +26,7 @@ It signs the on-chain registration with `--pem`, then maps your upstream on the 
 `buy` runs the whole x402 exchange for you: fetch the `402` invoice, pay it with a **native CSPR transfer carrying the invoice nonce as `transfer_id`**, retry with the `X-PAYMENT` proof, and print the result — response body on **stdout** (pipeable), payment receipt on **stderr**:
 
 ```bash
-npx @neargate/cli buy 1 --pem ./buyer.pem --max 5
+npx @neargate/cli buy 5 --pem ./buyer.pem --max 5
 ```
 
 `--max` is a budget cap: any invoice priced above it is refused (`PRICE_EXCEEDED`) before a single mote moves. Unknown or paused services fail fast before any payment.
