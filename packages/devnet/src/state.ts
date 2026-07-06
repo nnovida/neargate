@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { AgentGateError, formatCspr } from '@agentgate/shared';
+import { AgentGateError, formatCspr, stripTrailingSlashes } from '@agentgate/shared';
 import type {
   ActivityEvent,
   AttestationRecord,
@@ -94,10 +94,6 @@ interface InternalService {
 
 function err(httpStatus: number, code: string, message: string): AgentGateError {
   return new AgentGateError(code, message, httpStatus);
-}
-
-function stripTrailingSlashes(url: string): string {
-  return url.replace(/\/+$/, '');
 }
 
 /**

@@ -3,6 +3,7 @@ import {
   AgentGateError,
   compareMotes,
   csprToMotes,
+  stripTrailingSlashes,
   type AnySigner,
   type ChainClient,
   type Motes,
@@ -90,7 +91,7 @@ export async function buyService(opts: BuyServiceOpts): Promise<BuyServiceResult
 
   const url =
     opts.gateway !== undefined
-      ? `${opts.gateway.replace(/\/+$/, '')}/svc/${id}`
+      ? `${stripTrailingSlashes(opts.gateway)}/svc/${id}`
       : service.endpointUrl;
 
   const client = createAgentGateClient({

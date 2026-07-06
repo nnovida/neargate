@@ -30,14 +30,15 @@ function makeFakeFetch(opts: {
   const calls = new Map<string, number>();
   const fetchImpl: FetchLike = (url) => {
     calls.set(url, (calls.get(url) ?? 0) + 1);
-    if (url.includes('open.er-api.com')) {
+    const host = new URL(url).hostname;
+    if (host === 'open.er-api.com') {
       if (opts.failErApi) return Promise.reject(new Error('ECONNREFUSED'));
       const rates: Record<string, number> = {};
       if (opts.erApiIdr !== undefined) rates['IDR'] = opts.erApiIdr;
       if (opts.erApiXau !== undefined) rates['XAU'] = opts.erApiXau;
       return jsonResponse({ result: 'success', base_code: 'USD', rates });
     }
-    if (url.includes('cdn.jsdelivr.net')) {
+    if (host === 'cdn.jsdelivr.net') {
       if (opts.failCurrencyApi) return Promise.reject(new Error('ETIMEDOUT'));
       const usd: Record<string, number> = {};
       if (opts.currencyApiIdr !== undefined) usd['idr'] = opts.currencyApiIdr;

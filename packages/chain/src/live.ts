@@ -16,7 +16,7 @@ import {
   RpcClient,
   AccountHash,
 } from './sdk';
-import { AgentGateError } from '@agentgate/shared';
+import { AgentGateError, stripTrailingSlashes } from '@agentgate/shared';
 import type {
   ActivityEvent,
   AgentGateConfig,
@@ -378,7 +378,7 @@ export class LiveCasperClient implements ChainClient {
   constructor(config: AgentGateConfig) {
     this.cfg = config;
     this.network = config.casperNetwork;
-    this.cloudBase = config.csprCloudApiUrl.replace(/\/+$/, '');
+    this.cloudBase = stripTrailingSlashes(config.csprCloudApiUrl);
     this.rpc = new RpcClient(new HttpHandler(config.casperNodeUrl));
   }
 
@@ -650,7 +650,7 @@ export class LiveCasperClient implements ChainClient {
       const reader = new ByteReader(bytes);
       const name = reader.string();
       const description = reader.string();
-      const gatewayBaseUrl = reader.string().replace(/\/+$/, '');
+      const gatewayBaseUrl = stripTrailingSlashes(reader.string());
       const priceMotes = reader.u512().toString();
       const paymentTarget = reader.address();
       const owner = reader.address();
@@ -945,7 +945,7 @@ export class LiveCasperClient implements ChainClient {
       name: CLValue.newCLString(input.name),
       description: CLValue.newCLString(input.description),
       // SPEC §9 final decision: endpointUrl carries the GATEWAY BASE url on input.
-      gateway_base_url: CLValue.newCLString(input.endpointUrl.replace(/\/+$/, '')),
+      gateway_base_url: CLValue.newCLString(stripTrailingSlashes(input.endpointUrl)),
       price: CLValue.newCLUInt512(BigNumber.from(input.priceMotes)),
       payment_target: this.accountKey(input.paymentTarget),
       attestor: attestorKey,

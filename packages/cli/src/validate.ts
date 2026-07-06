@@ -1,5 +1,5 @@
 import type { AgentGateMode } from '@agentgate/shared';
-import { AgentGateError } from '@agentgate/shared';
+import { AgentGateError, stripTrailingSlashes } from '@agentgate/shared';
 
 /** `account-hash-` + 64 hex chars (SPEC §2 ServiceRecord.paymentTarget). */
 const ACCOUNT_HASH_RE = /^account-hash-[0-9a-fA-F]{64}$/;
@@ -114,7 +114,7 @@ export function normalizeBaseUrl(
       `${label} must use https:// in live mode for non-localhost hosts (the admin token is sent there in cleartext over http), got ${parsed.protocol.replace(/:$/, '')}://${parsed.hostname}`,
     );
   }
-  return value.trim().replace(/\/+$/, '');
+  return stripTrailingSlashes(value.trim());
 }
 
 /** Validates an `account-hash-<64 hex>` string and returns it trimmed. */

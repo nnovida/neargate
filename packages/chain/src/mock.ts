@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { AgentGateError } from '@agentgate/shared';
+import { AgentGateError, stripTrailingSlashes } from '@agentgate/shared';
 import type {
   ActivityEvent,
   AnySigner,
@@ -84,7 +84,7 @@ export class MockChainHttpClient implements ChainClient {
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       throw new AgentGateError('invalid_devnet_url', 'DEVNET_URL must be http(s)', 500);
     }
-    this.baseUrl = devnetUrl.replace(/\/+$/, '');
+    this.baseUrl = stripTrailingSlashes(devnetUrl);
   }
 
   private async request<T>(
