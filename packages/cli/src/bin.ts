@@ -6,6 +6,7 @@ import {
   DEFAULT_DASHBOARD_URL,
   DEFAULT_GATEWAY_URL,
   formatCspr,
+  formatToken,
   isAgentGateError,
   loadConfig,
   type AgentGateConfig,
@@ -248,7 +249,13 @@ withConfigFlags(
   console.error(`service:  #${service.id} ${service.name}`);
   console.error(`url:      ${url}`);
   if (result.paid) {
-    console.error(`paid:     ${formatCspr(result.priceMotes ?? service.priceMotes)}`);
+    console.error(
+      `paid:     ${
+        result.facilitator
+          ? formatToken(result.facilitator.amount, result.facilitator.decimals, result.facilitator.symbol)
+          : formatCspr(result.priceMotes ?? service.priceMotes)
+      }`,
+    );
     console.error(`payment:  ${result.deployHash}`);
     if (config.mode === 'live' && config.casperNetwork === 'casper-test') {
       console.error(`explorer: https://testnet.cspr.live/transaction/${result.deployHash}`);

@@ -4,6 +4,8 @@ import {
   compareMotes,
   csprToMotes,
   formatCspr,
+  formatToken,
+  formatUnits,
   motesToCspr,
   parseMotes,
   AgentGateError,
@@ -112,5 +114,25 @@ describe('formatCspr', () => {
     expect(formatCspr('500000000')).toBe('0.5 CSPR');
     expect(formatCspr('1000000000')).toBe('1 CSPR');
     expect(formatCspr('0')).toBe('0 CSPR');
+  });
+});
+
+describe('formatUnits / formatToken (facilitator CEP-18 amounts)', () => {
+  it('formatUnits trims trailing zeros at arbitrary decimals', () => {
+    expect(formatUnits('100000000', 9)).toBe('0.1');
+    expect(formatUnits('2500000000', 9)).toBe('2.5');
+    expect(formatUnits('1000000', 6)).toBe('1'); // 1.000000 → 1
+    expect(formatUnits('1500000', 6)).toBe('1.5');
+    expect(formatUnits('42', 0)).toBe('42'); // 0-decimals token
+    expect(formatUnits('0', 9)).toBe('0');
+  });
+
+  it('formatToken appends the symbol', () => {
+    expect(formatToken('100000000', 9, 'AGXUSD')).toBe('0.1 AGXUSD');
+    expect(formatToken('2500000000', 9, 'AGXUSD')).toBe('2.5 AGXUSD');
+  });
+
+  it('formatUnits rejects a non-integer atomic string', () => {
+    expect(() => formatUnits('0.5', 9)).toThrow(AgentGateError);
   });
 });

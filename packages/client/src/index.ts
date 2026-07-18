@@ -27,6 +27,12 @@ export interface PayAndFetchResult {
   settlement?: SettlementResponse;
   deployHash?: string;
   priceMotes?: Motes;
+  /**
+   * Set on the facilitator (x402 v2) rail: the CEP-18 token payment — atomic
+   * `amount`, token `symbol`/`decimals`, and the `asset` package hash. Lets
+   * callers display the real token charge instead of the on-chain CSPR nominal.
+   */
+  facilitator?: { amount: string; symbol: string; decimals: number; asset: string };
 }
 
 export interface AgentGateClientOpts {
@@ -385,6 +391,12 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
       throw new AgentGateError('SIGNER_MISSING', 'facilitator rail requires a live pem key (mock signer not supported)', 400);
     }
     const reqs = parseV2PaymentRequired(body, chain.network);
+    const facilitator = {
+      amount: reqs.amount,
+      symbol: reqs.extra.symbol,
+      decimals: reqs.extra.decimals,
+      asset: reqs.asset,
+    };
     logger?.info('fetchPaid: received v2 facilitator requirements', {
       url, asset: reqs.asset, amount: reqs.amount, network: reqs.network,
     });
@@ -411,6 +423,7 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
           paid: true,
           settlement: res.settlement,
           deployHash: res.settlement?.transaction,
+          facilitator,
         };
       }
       if (res.retryAfterMs === undefined || pendingRetries >= MAX_PENDING_RETRIES) {
@@ -421,6 +434,7 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
           paid: false,
           settlement: res.settlement,
           deployHash: res.settlement?.transaction,
+          facilitator,
         };
       }
       pendingRetries += 1;

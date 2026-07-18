@@ -461,6 +461,8 @@ describe('createAgentGateClient · fetchPaid · facilitator (x402 v2) rail', () 
     expect(res.status).toBe(200);
     expect(res.deployHash).toBe(DEPLOY_HASH);
     expect(res.settlement?.transaction).toBe(DEPLOY_HASH);
+    // the token payment info is surfaced so callers show the real charge, not CSPR
+    expect(res.facilitator).toEqual({ amount: '100000000', symbol: 'TUSD', decimals: 9, asset: 'f'.repeat(64) });
     // the paid retry carried PAYMENT-SIGNATURE, never the native X-PAYMENT
     const retryHeaders = new Headers(calls[1]?.init?.headers);
     expect(retryHeaders.get('payment-signature')).toBeTruthy();

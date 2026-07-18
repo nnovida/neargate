@@ -75,3 +75,24 @@ export function compareMotes(a: Motes, b: Motes): -1 | 0 | 1 {
 export function formatCspr(m: Motes): string {
   return `${motesToCspr(m)} CSPR`;
 }
+
+/**
+ * Format an atomic token amount for a token with `decimals` places, trimming
+ * trailing zeros — e.g. formatUnits("100000000", 9) === "0.1". Generalizes
+ * motesToCspr to any decimal precision (used by the CEP-18 facilitator rail).
+ */
+export function formatUnits(atomic: string, decimals: number): string {
+  const v = parseMotes(atomic); // reuse the non-negative-integer-string guard
+  if (!Number.isInteger(decimals) || decimals <= 0) return v.toString();
+  const base = 10n ** BigInt(decimals);
+  const whole = v / base;
+  const frac = v % base;
+  if (frac === 0n) return whole.toString();
+  const fracStr = frac.toString().padStart(decimals, '0').replace(/0+$/, '');
+  return `${whole.toString()}.${fracStr}`;
+}
+
+/** Human-readable token amount, e.g. formatToken("100000000", 9, "AGXUSD") === "0.1 AGXUSD". */
+export function formatToken(atomic: string, decimals: number, symbol: string): string {
+  return `${formatUnits(atomic, decimals)} ${symbol}`;
+}

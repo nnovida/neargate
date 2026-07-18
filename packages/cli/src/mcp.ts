@@ -6,6 +6,7 @@ import { parsePaymentRequired } from '@agentgate/client';
 import {
   AgentGateError,
   formatCspr,
+  formatToken,
   isAgentGateError,
   trustTier,
   type AnySigner,
@@ -201,7 +202,9 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
           url,
           paid: result.paid,
           status: result.status,
-          price: formatCspr(result.priceMotes ?? service.priceMotes),
+          price: result.facilitator
+            ? formatToken(result.facilitator.amount, result.facilitator.decimals, result.facilitator.symbol)
+            : formatCspr(result.priceMotes ?? service.priceMotes),
           deployHash: result.deployHash,
           settlement: result.settlement,
           body: result.body,
