@@ -31,6 +31,20 @@ npx @neargate/cli buy 5 --pem ./buyer.pem --max 5
 
 `--max` is a budget cap: any invoice priced above it is refused (`PRICE_EXCEEDED`) before a single mote moves. Unknown or paused services fail fast before any payment.
 
+## Use from any MCP agent
+
+`mcp` serves AgentGate as a Model Context Protocol **stdio server**, so any MCP-capable agent (Claude Desktop, a custom client, an MCP-aware framework) gets AgentGate as native tools — discover, inspect, and pay services:
+
+```bash
+npx @neargate/cli mcp
+```
+
+Tools: `agentgate_list_services`, `agentgate_get_service`, `agentgate_get_invoice` (read-only, no key) and `agentgate_buy` (pays a 402 invoice in native CSPR from the buyer key, capped by `maxCspr`). Wire it into Claude Desktop's `claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "agentgate": { "command": "npx", "args": ["-y", "@neargate/cli", "mcp"] } } }
+```
+
 ## Flags & environment
 
 Every config value can be given as a flag **or** an env var; precedence is **flag > env var > built-in default**.
@@ -56,6 +70,7 @@ On an invalid value the CLI fails fast with a clear one-line message (e.g. `erro
 - `status <id>` — service detail + reputation (zero-config; `--api-key` adds attestation history)
 - `wrap <url> --price <CSPR> --name <name>` — register + put a 402 paywall in front of an API
 - `buy <id> --pem <key>` — pay a service's 402 invoice and print the response (`--max` caps the price)
+- `mcp` — serve AgentGate as an MCP stdio server (agent tools: list / inspect / buy)
 - `pause <id>` / `resume <id>` — toggle a service you own
 - `demo-accounts` — mint faucet-funded buyer/seller accounts on the mock devnet (mock mode only)
 
