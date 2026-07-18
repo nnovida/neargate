@@ -17,6 +17,7 @@ import { listServices } from './list';
 import { setServiceActive } from './pause';
 import { serviceStatus, STATUS_ATTESTATION_LIMIT } from './status';
 import { wrapService } from './wrap';
+import { startAgentGateMcpServer } from './mcp';
 import { resolveCliEnv, type CliConfigFlags } from './cli-env';
 
 interface WrapCmdOpts extends CliConfigFlags {
@@ -383,6 +384,27 @@ withConfigFlags(
       console.log(line);
     }
   });
+
+withConfigFlags(
+  program
+    .command('mcp')
+    .description(
+      'Serve AgentGate as an MCP (Model Context Protocol) stdio server — any MCP-capable agent gets AgentGate discover/inspect/buy tools (run via `npx @neargate/cli mcp`)',
+    )
+    .option(
+      '--pem <path>',
+      'buyer signer PEM path for the agentgate_buy tool (live mode; or set BUYER_SIGNER_PEM_PATH)',
+    ),
+).action(async (opts: CliConfigFlags) => {
+  // stdio is the MCP JSON-RPC channel — never write to stdout here. The server
+  // stays alive until the client closes stdin.
+  const config = cliConfig(opts);
+  const chain = createChainClient(config);
+  await startAgentGateMcpServer({
+    chain,
+    signerProvider: () => buyerSigner(config, opts.pem),
+  });
+});
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   const msg = isAgentGateError(err)
