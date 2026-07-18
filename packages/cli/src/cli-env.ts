@@ -8,6 +8,7 @@ export interface CliConfigFlags {
   pem?: string;
   apiKey?: string;
   adminToken?: string;
+  keyAlgo?: string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -43,5 +44,6 @@ export function resolveCliEnv(flags: CliConfigFlags, env: Env = process.env): En
   set('SELLER_SIGNER_PEM_PATH', pick(flags.pem, env.SELLER_SIGNER_PEM_PATH));
   set('CSPR_CLOUD_API_KEY', pick(flags.apiKey, env.CSPR_CLOUD_API_KEY));
   set('AGENTGATE_ADMIN_TOKEN', pick(flags.adminToken, env.AGENTGATE_ADMIN_TOKEN));
+  set('BUYER_KEY_ALGO', pick(flags.keyAlgo, env.BUYER_KEY_ALGO));
   return overlay;
 }

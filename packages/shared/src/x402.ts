@@ -121,3 +121,69 @@ export function decodeXPaymentResponse(header: string): SettlementResponse {
   if (typeof json['errorReason'] === 'string') out.errorReason = json['errorReason'];
   return out;
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// x402 v2 — the OFFICIAL Casper facilitator rail (CEP-18 + EIP-712).
+//
+// Coexists with the native v1 rail above. A service is EITHER native or
+// facilitator-enabled; both sides discriminate on the top-level `x402Version`
+// (2 → facilitator, 1 → native), never by sniffing fields. The PAYMENT-SIGNATURE
+// header itself is encoded/decoded with @x402/core/http in the client/middleware
+// (spec-compliant); shared only owns the dependency-free types + helpers.
+// ───────────────────────────────────────────────────────────────────────────
+
+export const X402_VERSION_V2 = 2;
+
+/** Header the buyer sends on the paid retry for the facilitator rail. */
+export const HEADER_PAYMENT_SIGNATURE = 'payment-signature';
+
+/** EIP-712 token domain descriptor for a CEP-18 facilitator asset. */
+export interface FacilitatorTokenMeta {
+  name: string;
+  version: string;
+  decimals: number;
+  symbol: string;
+}
+
+/** Per-service facilitator config (from FACILITATOR_SERVICES), keyed by service id. */
+export interface FacilitatorServiceConfig {
+  /** CEP-18 contract package hash (64 hex, no prefix). */
+  asset: string;
+  /** Price per call in the token's atomic units (decimal string). */
+  amount: string;
+  token: FacilitatorTokenMeta;
+}
+
+/** Official x402 v2 PaymentRequirements — the shape @x402/core + the facilitator expect. */
+export interface X402V2Requirements {
+  scheme: string; // 'exact'
+  network: string; // CAIP-2, e.g. 'casper:casper-test'
+  asset: string; // CEP-18 package hash (64 hex)
+  amount: string; // token atomic units
+  payTo: string; // '00' + account-hash (66 hex)
+  resource?: string;
+  maxTimeoutSeconds: number;
+  extra: FacilitatorTokenMeta;
+}
+
+/** The 402 body a facilitator-enabled service returns. */
+export interface X402V2Required {
+  x402Version: 2;
+  error?: string;
+  accepts: X402V2Requirements[];
+}
+
+const ACCOUNT_HASH_RE = /^(?:account-hash-)?[0-9a-f]{64}$/i;
+
+/** casper-test → casper:casper-test (CAIP-2). Idempotent if already CAIP-2. */
+export function toCaip2Network(casperNetwork: string): string {
+  return casperNetwork.includes(':') ? casperNetwork : `casper:${casperNetwork}`;
+}
+
+/** account-hash-<64hex> → 00<64hex> (the 66-hex address the x402 v2 payload uses). */
+export function payToFromAccountHash(paymentTarget: string): string {
+  if (!ACCOUNT_HASH_RE.test(paymentTarget)) {
+    throw new AgentGateError('INVALID_ACCOUNT_HASH', `not an account-hash: ${paymentTarget}`, 400);
+  }
+  return `00${paymentTarget.replace(/^account-hash-/i, '').toLowerCase()}`;
+}

@@ -1,5 +1,6 @@
 import { AgentGateError } from './errors';
 import { csprToMotes } from './money';
+import type { FacilitatorServiceConfig } from './x402';
 
 export type AgentGateMode = 'mock' | 'live';
 
@@ -63,6 +64,11 @@ export interface AgentGateConfig {
   oracleStatic: boolean;
   // buyer agent
   buyerBudgetCspr: string;
+  // official x402 facilitator rail (CEP-18 + EIP-712 via CSPR.cloud facilitator)
+  facilitatorUrl: string;
+  buyerKeyAlgo: 'ed25519' | 'secp256k1';
+  /** Per-service facilitator config keyed by service id (from FACILITATOR_SERVICES). */
+  facilitatorServices: Record<number, FacilitatorServiceConfig>;
 }
 
 type Env = Record<string, string | undefined>;
@@ -114,6 +120,53 @@ function readBool01(env: Env, key: string, fallback: boolean): boolean {
   if (raw === '1' || raw === 'true') return true;
   if (raw === '0' || raw === 'false') return false;
   throw configError(`${key} must be 0/1 (or true/false), got ${JSON.stringify(raw)}`);
+}
+
+/**
+ * Parse the FACILITATOR_SERVICES env map: JSON object keyed by service id, each
+ * `{ asset, amount, token: { name, version, decimals, symbol } }`. Empty → {}.
+ * Throws CONFIG_INVALID on any malformed entry.
+ */
+function parseFacilitatorServices(raw: string): Record<number, FacilitatorServiceConfig> {
+  if (raw === '') return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw configError('FACILITATOR_SERVICES must be valid JSON');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw configError('FACILITATOR_SERVICES must be a JSON object keyed by service id');
+  }
+  const out: Record<number, FacilitatorServiceConfig> = {};
+  for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
+    const id = Number(key);
+    if (!Number.isInteger(id) || id < 1) {
+      throw configError(`FACILITATOR_SERVICES key must be a positive integer service id, got ${JSON.stringify(key)}`);
+    }
+    if (typeof val !== 'object' || val === null) {
+      throw configError(`FACILITATOR_SERVICES[${key}] must be an object`);
+    }
+    const v = val as Record<string, unknown>;
+    const asset = typeof v['asset'] === 'string' ? v['asset'] : '';
+    const amount = typeof v['amount'] === 'string' ? v['amount'] : '';
+    const token = typeof v['token'] === 'object' && v['token'] !== null ? (v['token'] as Record<string, unknown>) : {};
+    if (!/^[0-9a-f]{64}$/i.test(asset)) {
+      throw configError(`FACILITATOR_SERVICES[${key}].asset must be a 64-hex CEP-18 package hash`);
+    }
+    if (!/^\d+$/.test(amount)) {
+      throw configError(`FACILITATOR_SERVICES[${key}].amount must be a decimal atomic-unit string`);
+    }
+    const name = typeof token['name'] === 'string' ? token['name'] : '';
+    const version = typeof token['version'] === 'string' ? token['version'] : '';
+    const decimals = typeof token['decimals'] === 'number' ? token['decimals'] : NaN;
+    const symbol = typeof token['symbol'] === 'string' ? token['symbol'] : '';
+    if (name === '' || version === '' || !Number.isInteger(decimals) || symbol === '') {
+      throw configError(`FACILITATOR_SERVICES[${key}].token must have { name, version, decimals, symbol }`);
+    }
+    out[id] = { asset: asset.toLowerCase(), amount, token: { name, version, decimals, symbol } };
+  }
+  return out;
 }
 
 /**
@@ -187,6 +240,17 @@ export function loadConfig(
   const mockBuyerAccount = readStr(env, 'MOCK_BUYER_ACCOUNT', '');
   const mockSellerAccount = readStr(env, 'MOCK_SELLER_ACCOUNT', '');
 
+  const facilitatorUrl = readUrl(env, 'FACILITATOR_URL', 'https://x402-facilitator.cspr.cloud', [
+    'http:',
+    'https:',
+  ]);
+  const buyerKeyAlgoRaw = readStr(env, 'BUYER_KEY_ALGO', 'secp256k1');
+  if (buyerKeyAlgoRaw !== 'ed25519' && buyerKeyAlgoRaw !== 'secp256k1') {
+    throw configError(`BUYER_KEY_ALGO must be "ed25519" or "secp256k1", got ${JSON.stringify(buyerKeyAlgoRaw)}`);
+  }
+  const buyerKeyAlgo: 'ed25519' | 'secp256k1' = buyerKeyAlgoRaw;
+  const facilitatorServices = parseFacilitatorServices(readStr(env, 'FACILITATOR_SERVICES', ''));
+
   if (mode === 'live') {
     if (requireCloudKey && csprCloudApiKey === '') {
       throw configError('live mode requires CSPR_CLOUD_API_KEY (get one at console.cspr.cloud)');
@@ -224,5 +288,8 @@ export function loadConfig(
     llmModel,
     oracleStatic,
     buyerBudgetCspr,
+    facilitatorUrl,
+    buyerKeyAlgo,
+    facilitatorServices,
   };
 }

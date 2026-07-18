@@ -46,6 +46,9 @@ export function testConfig(overrides: Partial<AgentGateConfig> = {}): AgentGateC
     llmModel: 'claude-sonnet-4-6',
     oracleStatic: false,
     buyerBudgetCspr: '5',
+    facilitatorUrl: 'https://x402-facilitator.cspr.cloud',
+    buyerKeyAlgo: 'secp256k1',
+    facilitatorServices: {},
     ...overrides,
   };
 }
