@@ -33,6 +33,21 @@ npx @neargate/cli buy 5 --pem ./buyer.pem --max 5
 signing an ownership challenge — no shared admin token. `--gateway` defaults to the hosted
 gateway; pass it to target a local/self-hosted one.
 
+Or hand the whole loop to any **MCP-capable agent** (Claude Desktop, a custom client, an
+MCP-aware framework) — one command exposes discover / inspect / pay as native tools:
+
+```bash
+npx @neargate/cli mcp          # a Model Context Protocol stdio server
+```
+
+Tools: `agentgate_list_services`, `agentgate_get_service`, `agentgate_get_invoice` (all
+read-only, no key) and `agentgate_buy` (pays a 402 invoice in native CSPR from the buyer
+key, capped by `maxCspr`). Wire it into Claude Desktop's `claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "agentgate": { "command": "npx", "args": ["-y", "@neargate/cli", "mcp"] } } }
+```
+
 Sellers put a **402 paywall** in front of their API and register it in an on-chain
 registry. Buyer agents discover services from the registry, pay with a **native CSPR
 transfer carrying the invoice nonce as `transfer_id`**, retry with the payment proof, and
@@ -164,7 +179,7 @@ scripts/         dev.ts (stack) · demo.ts (one-shot scripted demo)
 | `npm run agentgate -- …` | the `agentgate` CLI |
 | `npm run agent -- --task "…"` | run the buyer agent once |
 | `npm run typecheck` | `tsc --noEmit` in every package + dashboard + root scripts/e2e |
-| `npm test` | vitest: all package units + the e2e loop (341 tests) |
+| `npm test` | vitest: all package units + the e2e loop (369 tests) |
 | `npm run build` | dashboard `next build` |
 
 Contract tests: `cd contracts/agentgate-registry && cargo odra test` (20 OdraVM tests),
@@ -206,8 +221,9 @@ The CLI is published to npm as [`@neargate/cli`](https://www.npmjs.com/package/@
 
 ## Roadmap
 
-Testnet Plan B (native transfer + `transfer_id`) → mainnet → x402 Facilitator (Plan A)
-→ CSPR.cloud streaming → MCP server for agent frameworks.
+Testnet Plan B (native transfer + `transfer_id`) → **MCP server for agent frameworks (shipped
+— `npx @neargate/cli mcp`)** → mainnet → x402 Facilitator (Plan A) → CSPR.cloud streaming
+→ staking-weighted attestations.
 
 ## Hackathon
 

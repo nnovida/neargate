@@ -339,12 +339,12 @@ export default function InstallationPage() {
       <H3 id="verify-test">Run the test suite</H3>
       <CommandBlock prompt={null} text="npm test" />
       <P>
-        Runs <M>vitest</M> across every package unit suite plus the end-to-end loop — 341 tests.
+        Runs <M>vitest</M> across every package unit suite plus the end-to-end loop — 369 tests.
         A clean install passes all of them.
       </P>
       <CodeBlock
         label="expected (abbreviated)"
-        code={'Test Files  26 passed (26)\n     Tests  341 passed (341)\n  Duration  ...s'}
+        code={'Test Files  30 passed (30)\n     Tests  369 passed (369)\n  Duration  ...s'}
       />
 
       <H3 id="verify-typecheck">Type-check the workspace</H3>
