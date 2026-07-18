@@ -48,6 +48,31 @@ key, capped by `maxCspr`). Wire it into Claude Desktop's `claude_desktop_config.
 { "mcpServers": { "agentgate": { "command": "npx", "args": ["-y", "@neargate/cli", "mcp"] } } }
 ```
 
+### For judges / reviewers — inspect the live MCP in 30s
+
+**Zero setup.** The published CLI defaults to **live Casper Testnet** + the deployed
+registry, and the read tools use the public node RPC — no `.env`, no cspr.cloud key, no
+clone. With Node ≥ 22, from any directory:
+
+```bash
+( printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"judge","version":"0.0.0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"agentgate_list_services","arguments":{}}}' ; \
+  sleep 8 ) | npx -y @neargate/cli@latest mcp 2>/dev/null \
+  | jq -r 'select(.id==2) | .result.content[0].text | fromjson'
+```
+
+Cloned the repo? `scripts/mcp.sh` wraps the same handshake — `list`, `service <id>`, `invoice <id>`:
+
+```bash
+scripts/mcp.sh list
+scripts/mcp.sh invoice 5     # a real HTTP 402 invoice; the nonce changes each call
+```
+
+The Claude Desktop config above already targets live (no `env` block needed). Only
+`agentgate_buy` needs a funded buyer key — every read tool is zero-setup.
+
 Sellers put a **402 paywall** in front of their API and register it in an on-chain
 registry. Buyer agents discover services from the registry, pay with a **native CSPR
 transfer carrying the invoice nonce as `transfer_id`**, retry with the payment proof, and
