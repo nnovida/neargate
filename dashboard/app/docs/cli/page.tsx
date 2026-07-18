@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/docs/cli' },
   title: 'CLI',
   description:
-    'Reference for the agentgate CLI: wrap, buy, list, status, pause, resume and demo-accounts. Every flag, argument, default and example output, verified against packages/cli/src/bin.ts.',
+    'Reference for the agentgate CLI: wrap, buy, list, status, pause, resume, demo-accounts and mcp. Every flag, argument, default and example output, verified against packages/cli/src/bin.ts.',
 };
 
 export default function Page() {
@@ -27,7 +27,7 @@ export default function Page() {
       <DocHeader
         kicker="FOR SELLERS"
         title="CLI"
-        lede="The agentgate CLI publishes services, buys one paid call to any of them, inspects the on-chain catalog, toggles a service you own, and mints faucet-funded demo accounts."
+        lede="The agentgate CLI publishes services, buys one paid call to any of them, inspects the on-chain catalog, toggles a service you own, mints faucet-funded demo accounts, and serves AgentGate as an MCP server for agent frameworks."
       />
 
       {/* ───────────────────────────── invocation ───────────────────────────── */}
@@ -43,11 +43,12 @@ export default function Page() {
       <CommandBlock text="agentgate <command> [args] [options]" />
       <P>
         The entry point is <M>packages/cli/src/bin.ts</M> (a <M>commander</M> program named{' '}
-        <M>agentgate</M>). There are seven commands: <DocLink href="#wrap">wrap</DocLink>,{' '}
+        <M>agentgate</M>). There are eight commands: <DocLink href="#wrap">wrap</DocLink>,{' '}
         <DocLink href="#buy">buy</DocLink>, <DocLink href="#list">list</DocLink>,{' '}
         <DocLink href="#status">status</DocLink>, <DocLink href="#pause">pause</DocLink>,{' '}
-        <DocLink href="#resume">resume</DocLink> and{' '}
-        <DocLink href="#demo-accounts">demo-accounts</DocLink>. Every command exits{' '}
+        <DocLink href="#resume">resume</DocLink>,{' '}
+        <DocLink href="#demo-accounts">demo-accounts</DocLink> and{' '}
+        <DocLink href="#mcp">mcp</DocLink>. Every command exits{' '}
         <M>0</M> on success and <M>1</M> on error; AgentGate failures print to stderr as{' '}
         <M>error: &lt;CODE&gt;: &lt;message&gt;</M> (usage mistakes are reported by the
         argument parser without a code).
@@ -166,7 +167,7 @@ export default function Page() {
       <H3 id="config-flags">Config flags</H3>
       <P>
         Each of these overrides the matching environment variable (<M>flag &gt; env &gt; default</M>).{' '}
-        <M>--mode</M>, <M>--node-url</M> and <M>--registry</M> are accepted by all seven commands; the
+        <M>--mode</M>, <M>--node-url</M> and <M>--registry</M> are accepted by all eight commands; the
         signer and key flags are read only by the commands that need them.
       </P>
       <DocTable
@@ -189,7 +190,7 @@ export default function Page() {
             <M key="f4">--pem {'<path>'}</M>,
             <M key="e4">SELLER_SIGNER_PEM_PATH</M>,
             <M key="d4">(none)</M>,
-            'wrap, pause, resume (live writes); for buy it means the buyer key (env: BUYER_SIGNER_PEM_PATH)',
+            'wrap, pause, resume (live writes); for buy and mcp it means the buyer key (env: BUYER_SIGNER_PEM_PATH)',
           ],
           [
             <M key="f5">--admin-token {'<token>'}</M>,
@@ -594,6 +595,67 @@ export default function Page() {
         running (e.g. <M>npm run dev</M>); otherwise the faucet call fails with{' '}
         <M>FAUCET_UNREACHABLE</M> or, on a hang, <M>GATEWAY_TIMEOUT</M>.
       </P>
+
+      {/* ───────────────────────────── mcp ───────────────────────────── */}
+      <H2 id="mcp">mcp</H2>
+      <P>
+        Serve AgentGate as a <strong className="text-white">Model Context Protocol</strong> stdio
+        server, so any MCP-capable agent (Claude Desktop, a custom client, an MCP-aware framework)
+        gets the discover → inspect → pay loop as native tools. It speaks JSON-RPC over
+        stdin/stdout and stays alive until the client closes the connection.
+      </P>
+      <CommandBlock text="npx @neargate/cli@latest mcp [--pem <path>]" />
+      <P>
+        Four tools are registered. The three read tools need no key and — because the published
+        CLI defaults to live Testnet — work with zero configuration; only <M>agentgate_buy</M>{' '}
+        spends CSPR and needs a buyer signer.
+      </P>
+      <DocTable
+        head={['Tool', 'Arguments', 'What it does']}
+        rows={[
+          [
+            <M key="t1">agentgate_list_services</M>,
+            <M key="a1">—</M>,
+            'Discover the live on-chain catalog: every service with price, trust tier, payment-backed score, active flag and endpoint. Read-only, no key.',
+          ],
+          [
+            <M key="t2">agentgate_get_service</M>,
+            <M key="a2">id</M>,
+            'Full on-chain detail for one service id — price, payment target, owner, attestor, active flag, score and tier. Read-only.',
+          ],
+          [
+            <M key="t3">agentgate_get_invoice</M>,
+            <M key="a3">id</M>,
+            'The machine-readable HTTP 402 invoice (price, nonce, payTo, network) WITHOUT paying, so an agent can decide before it spends. Read-only.',
+          ],
+          [
+            <M key="t4">agentgate_buy</M>,
+            <M key="a4">id (+ maxCspr, method, body)</M>,
+            'Pay the service’s 402 invoice with a native CSPR transfer and return the response body. Spends real CSPR from the buyer key, capped by maxCspr; refuses unknown/paused services and over-cap invoices before any payment.',
+          ],
+        ]}
+      />
+      <P>
+        <M>--pem</M> (or <M>BUYER_SIGNER_PEM_PATH</M>) supplies the <em>buyer</em> signer used only
+        by <M>agentgate_buy</M> — the read tools ignore it, so <M>mcp</M> starts fine with no key.
+        On start the server prints a readiness line to <strong className="text-white">stderr</strong>
+        (v0.1.4); <M>stdout</M> is the JSON-RPC channel, so nothing else is ever written there.
+      </P>
+      <H3 id="mcp-claude-desktop">Claude Desktop</H3>
+      <P>
+        Wire it into <M>claude_desktop_config.json</M>. No <M>env</M> block is needed — the CLI
+        already defaults to live Testnet and the deployed registry:
+      </P>
+      <CodeBlock
+        label="claude_desktop_config.json"
+        code={'{ "mcpServers": { "agentgate": { "command": "npx", "args": ["-y", "@neargate/cli", "mcp"] } } }'}
+      />
+      <Callout tone="info" title="Inspect it in 30s — no MCP client">
+        From any shell you can drive the server directly: the repo ships{' '}
+        <M>scripts/mcp.sh</M> (<M>list</M> / <M>service &lt;id&gt;</M> / <M>invoice &lt;id&gt;</M>),
+        and the README&apos;s &ldquo;For judges / reviewers&rdquo; block has a copy-paste{' '}
+        <M>npx … mcp</M> one-liner that returns the live catalog with zero setup.
+      </Callout>
 
       {/* ───────────────────────────── errors ───────────────────────────── */}
       <H2 id="error-codes">Error codes</H2>

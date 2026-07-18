@@ -120,8 +120,8 @@ export default function Page() {
         A buyer writes an agent that discovers services in the on-chain catalog, calls{' '}
         <M>/svc/:id</M>, handles the <M>402</M>, pays with a native CSPR transfer carrying the nonce,
         and retries with proof headers. You can do this with one command (<M>npx @neargate/cli@latest
-        buy</M>), the bundled LLM buyer agent, the client SDK&apos;s <M>fetchPaid</M> helper, or
-        plain <M>curl</M>. See{' '}
+        buy</M>), an MCP-capable agent via the <DocLink href="/docs/cli#mcp">MCP server</DocLink>, the
+        bundled LLM buyer agent, the client SDK&apos;s <M>fetchPaid</M> helper, or plain <M>curl</M>. See{' '}
         <DocLink href="/docs/buyers">Build an agent</DocLink>.
       </P>
       <H3 id="role-operator">Operator — runs the gateway</H3>
@@ -216,7 +216,7 @@ export default function Page() {
           {
             href: '/docs/cli',
             title: 'CLI',
-            desc: 'agentgate wrap, buy, list, status, pause, resume, and demo-accounts — flags, environment, output, and exit codes.',
+            desc: 'agentgate wrap, buy, list, status, pause, resume, demo-accounts, and the mcp server — flags, environment, output, and exit codes.',
           },
         ]}
       />

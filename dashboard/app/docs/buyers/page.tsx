@@ -18,7 +18,7 @@ import {
 export const metadata = {
   title: 'Build an agent',
   description:
-    'Build a buying agent that discovers services on-chain, handles the HTTP 402, pays with a native CSPR transfer carrying the nonce, and retries with proof — via the one-command agentgate buy, the bundled LLM agent, the client SDK, or plain curl.',
+    'Build a buying agent that discovers services on-chain, handles the HTTP 402, pays with a native CSPR transfer carrying the nonce, and retries with proof — via the one-command agentgate buy, the MCP server, the bundled LLM agent, the client SDK, or plain curl.',
   alternates: { canonical: '/docs/buyers' },
 };
 
@@ -320,6 +320,13 @@ export default function Page() {
         <DocLink href="/docs/cli#buy">buy reference</DocLink> for flags:
       </P>
       <CommandBlock wrap text="npx @neargate/cli@latest buy 5 --pem ./buyer.pem --max 3" />
+      <P>
+        For an <strong className="text-white">MCP-capable agent</strong> (Claude Desktop, a custom
+        client, an MCP-aware framework), run <M>agentgate mcp</M> instead and the same
+        discover → inspect → pay loop arrives as native tools —{' '}
+        <M>agentgate_list_services</M>, <M>agentgate_get_invoice</M> and <M>agentgate_buy</M>. See{' '}
+        <DocLink href="/docs/cli#mcp">the mcp reference</DocLink>.
+      </P>
       <P>
         But the exchange is plain HTTP, so any client works — the CLI and SDK are conveniences,
         not requirements. Here is the same loop by hand against the live hosted gateway

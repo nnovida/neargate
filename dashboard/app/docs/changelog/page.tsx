@@ -16,6 +16,52 @@ export default function Page() {
         lede="Notable changes to AgentGate — the CLI, gateway, smart contracts and docs — newest first."
       />
 
+      <H2 id="2026-07-18-v014">2026-07-18 — CLI v0.1.4</H2>
+      <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-mut">
+        <li>
+          <strong className="text-white">MCP readiness hint.</strong> When the{' '}
+          <M>agentgate mcp</M> server starts it now prints a readiness line to <M>stderr</M> — so
+          an agent harness (or a human) can tell the stdio server is up instead of guessing from
+          silence. <M>stdout</M> stays reserved for the JSON-RPC stream, so the transport is
+          unchanged; running it bare in a terminal no longer looks like a hang.
+        </li>
+      </ul>
+
+      <H2 id="2026-07-18-v013">2026-07-18 — CLI v0.1.3: MCP server</H2>
+      <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-mut">
+        <li>
+          <strong className="text-white">MCP server — <M>agentgate mcp</M>.</strong> AgentGate is
+          now a Model Context Protocol stdio server, so any MCP-capable agent (Claude Desktop, a
+          custom client, an MCP-aware framework) gets AgentGate as native tools:{' '}
+          <M>agentgate_list_services</M>, <M>agentgate_get_service</M>,{' '}
+          <M>agentgate_get_invoice</M> (all read-only, no key) and <M>agentgate_buy</M> (pays a
+          402 invoice in native CSPR from the buyer key, capped by <M>maxCspr</M>). The published
+          CLI defaults to live Testnet, so the read tools work with zero configuration. See{' '}
+          <DocLink href="/docs/cli#mcp">the mcp reference</DocLink>.
+        </li>
+        <li>
+          <strong className="text-white">Durable attestation queue.</strong> A served-and-paid
+          call whose on-chain attestation had not confirmed before a deploy or crash was
+          previously under-counted. Attestations are now persisted and{' '}
+          <strong className="text-white">replayed on boot</strong> — idempotent on-chain via the
+          registry&apos;s seen-payments dedup — so trust scores never silently lose a paid call.
+        </li>
+      </ul>
+
+      <H2 id="2026-07-07">2026-07-07 — Security &amp; community standards</H2>
+      <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-mut">
+        <li>
+          <strong className="text-white">CodeQL clean.</strong> Resolved every CodeQL alert (a
+          ReDoS pattern, a URL-validation check, and workflow permissions) — the repository scans
+          with zero open alerts.
+        </li>
+        <li>
+          <strong className="text-white">Community health.</strong> Added the GitHub
+          community-standards files — <M>CONTRIBUTING.md</M>, <M>CODE_OF_CONDUCT.md</M> and{' '}
+          <M>SECURITY.md</M> — and enabled Dependabot.
+        </li>
+      </ul>
+
       <H2 id="2026-07-02-buy">2026-07-02 — CLI v0.1.2: `agentgate buy`</H2>
       <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-mut">
         <li>
