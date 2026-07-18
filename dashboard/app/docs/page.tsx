@@ -25,7 +25,7 @@ export default function Page() {
       <DocHeader
         kicker="GET STARTED"
         title="AgentGate Docs"
-        lede="Stripe for AI agents on Casper. Wrap any HTTP API behind an HTTP 402 paywall, register and score it on-chain, and let buying agents pay per call in native CSPR — no accounts, no API keys, no subscriptions. This page gives you the mental model, then routes you by role — seller, buyer, or gateway operator — to the right guide."
+        lede="Stripe for AI agents on Casper. Wrap any HTTP API behind an HTTP 402 paywall, register and score it on-chain, and let buying agents pay per call — native CSPR by default, or a CEP-18 token via the official Casper x402 facilitator — with no accounts, no API keys, no subscriptions. This page gives you the mental model, then routes you by role — seller, buyer, or gateway operator — to the right guide."
       />
 
       <H2 id="what-is-agentgate">What AgentGate is</H2>
@@ -61,13 +61,25 @@ export default function Page() {
         nonce so it can never be reused, proxies to the seller&apos;s upstream API, and returns the
         response — then records a success attestation that lifts the service&apos;s trust tier.
       </P>
-      <Callout tone="info" title="PAYMENT IS NATIVE CSPR">
-        Settlement is a plain native CSPR transfer whose <M>transfer_id</M> equals the invoice nonce
-        — the &ldquo;Plan B&rdquo; scheme. It is not a CEP-18 token transfer and it does not call any
-        vault contract. The gateway never custodies funds; payment goes straight from the buyer to
-        the seller&apos;s account. Note Casper enforces a network minimum of <M>2.5 CSPR</M> on
-        native transfers; the gateway accepts any amount at or above the invoice price, but the
-        bundled buyers pay exactly the invoice — so sellers should price at ≥ 2.5 CSPR.
+      <Callout tone="info" title="TWO PAYMENT RAILS: NATIVE CSPR + OFFICIAL FACILITATOR">
+        <P>
+          <strong className="text-white">Native CSPR (default).</strong> Settlement is a plain native
+          CSPR transfer whose <M>transfer_id</M> equals the invoice nonce — the buyer broadcasts it and
+          the gateway verifies it on-chain. It does not call any vault contract; the gateway never
+          custodies funds, and payment goes straight to the seller&apos;s account. Casper enforces a{' '}
+          <M>2.5 CSPR</M> network minimum on live native transfers, so native-rail services should
+          price at ≥ 2.5 CSPR.
+        </P>
+        <P>
+          <strong className="text-white">Official facilitator (opt-in, per service).</strong> A service
+          listed in <M>FACILITATOR_SERVICES</M> instead settles through the official Casper x402{' '}
+          <M>facilitator</M> (CSPR.cloud): a <strong className="text-white">CEP-18</strong> token moved
+          by an <strong className="text-white">EIP-712</strong> authorization (x402 v2,{' '}
+          <M>PAYMENT-SIGNATURE</M> header), with gas sponsored by the facilitator. CEP-18 has no
+          2.5-CSPR floor, so this rail supports true sub-CSPR micropayments. Either way the gateway
+          custodies nothing. See <DocLink href="/docs/deployment">Deploy</DocLink> and the{' '}
+          <DocLink href="/docs/changelog">changelog</DocLink>.
+        </P>
       </Callout>
 
       <H2 id="when-to-use">When to use AgentGate</H2>
@@ -118,8 +130,9 @@ export default function Page() {
       <H3 id="role-buyer">Buyer — builds an agent that consumes a service</H3>
       <P>
         A buyer writes an agent that discovers services in the on-chain catalog, calls{' '}
-        <M>/svc/:id</M>, handles the <M>402</M>, pays with a native CSPR transfer carrying the nonce,
-        and retries with proof headers. You can do this with one command (<M>npx @neargate/cli@latest
+        <M>/svc/:id</M>, handles the <M>402</M>, pays (a native CSPR transfer carrying the nonce, or —
+        on facilitator-enabled services — a CEP-18 EIP-712 authorization), and retries with proof
+        headers. You can do this with one command (<M>npx @neargate/cli@latest
         buy</M>), an MCP-capable agent via the <DocLink href="/docs/cli#mcp">MCP server</DocLink>, the
         bundled LLM buyer agent, the client SDK&apos;s <M>fetchPaid</M> helper, or plain <M>curl</M>. See{' '}
         <DocLink href="/docs/buyers">Build an agent</DocLink>.

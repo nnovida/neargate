@@ -64,8 +64,10 @@ export default function Page() {
         sequential ids (the counter is bumped first, then assigned, so it always equals the latest
         id and id <M>0</M> means &ldquo;absent&rdquo; to every off-chain reader), a{' '}
         <M>seen_*</M> dedup mapping, <M>saturating_*</M> counter math, and a private{' '}
-        <M>load_*</M> helper that reverts when an id is unknown. Money is always native CSPR motes,
-        never CEP-18.
+        <M>load_*</M> helper that reverts when an id is unknown. On-chain money is always native CSPR
+        motes, never CEP-18 — the registry stores prices in motes and records only an opaque payment
+        hash. (The optional x402 facilitator rail settles CEP-18 off-contract; the registry stays
+        rail-agnostic and unchanged.)
       </P>
 
       <H2 id="registry">AgentGateRegistry</H2>

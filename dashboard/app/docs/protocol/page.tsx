@@ -211,8 +211,12 @@ export default function Page() {
         <strong className="text-white">Settlement model:</strong>{' '}
         <M>scheme:"exact"</M> with <M>extra.settlement:"casper-native-transfer"</M> is a
         settled-transfer-proof variant — the buyer broadcasts the native CSPR transfer themselves
-        (using <M>extra.nonce</M> as the <M>transfer_id</M>) and the gateway verifies it. There is
-        no x402 facilitator on Casper testnet.
+        (using <M>extra.nonce</M> as the <M>transfer_id</M>) and the gateway verifies it, so this
+        rail uses no facilitator. AgentGate also speaks the{' '}
+        <strong className="text-white">official Casper x402</strong> (x402 v2, scheme <M>exact</M>) —
+        a <M>CEP-18</M> token settled via an <M>EIP-712</M> authorization through the CSPR.cloud{' '}
+        <M>facilitator</M> — for any service listed in <M>FACILITATOR_SERVICES</M>; see{' '}
+        <DocLink href="/docs/deployment">Deploy</DocLink>.
       </P>
       <PropList
         items={[

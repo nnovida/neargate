@@ -86,7 +86,7 @@ export default function Page() {
       <DocHeader
         kicker="FOR BUYERS"
         title="Build an agent"
-        lede="A buyer agent discovers paid services on-chain, decides what to buy under a hard budget, pays per call in native CSPR, consumes the data, and collects an on-chain attestation receipt — all without an API key."
+        lede="A buyer agent discovers paid services on-chain, decides what to buy under a hard budget, pays per call — native CSPR, or a CEP-18 EIP-712 authorization on facilitator-enabled services — consumes the data, and collects an on-chain attestation receipt, all without an API key."
       />
 
       <H2 id="buyer-loop">The buyer loop</H2>
