@@ -14,8 +14,9 @@ export default function ActivityPage() {
         Activity
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-6 text-mut">
-        A unified live feed of everything AgentGate writes to the chain — service registrations,
-        CSPR payments and reputation attestations. Polled every 5 seconds.
+        The on-chain ledger of everything AgentGate writes to Casper — service registrations, CSPR
+        payments, and reputation attestations — with live totals and per-type filtering, each row
+        linked to its transaction. Polled every 5 seconds.
       </p>
       <div className="mt-10">
         <ActivityFeed />
