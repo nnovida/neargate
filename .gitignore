@@ -14,3 +14,6 @@ coverage/
 *.pem
 *_secret_key.pem
 keys/
+
+# Internal planning docs — kept local, not published
+/AgentGate-PRD-Solo-Build-Plan.md
