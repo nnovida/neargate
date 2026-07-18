@@ -16,6 +16,22 @@ export default function Page() {
         lede="Notable changes to AgentGate — the CLI, gateway, smart contracts and docs — newest first."
       />
 
+      <H2 id="2026-07-18-v016">2026-07-18 — CLI v0.1.6</H2>
+      <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-mut">
+        <li>
+          <strong className="text-white">Facilitator buy shows the token amount.</strong> On the
+          facilitator (x402 v2) rail, <M>agentgate buy</M> and the MCP <M>agentgate_buy</M> tool now
+          print the real CEP-18 charge (e.g. <M>0.1 AGXUSD</M>) instead of the on-chain nominal CSPR
+          price. Adds shared <M>formatUnits</M>/<M>formatToken</M> helpers; native-rail output is
+          unchanged.
+        </li>
+        <li>
+          <strong className="text-white">MCP version.</strong> The <M>agentgate mcp</M> server now
+          advertises its real package version in the initialize handshake instead of a hardcoded{' '}
+          <M>0.1.0</M>.
+        </li>
+      </ul>
+
       <H2 id="2026-07-18-v015">2026-07-18 — CLI v0.1.5: official Casper x402 facilitator rail</H2>
       <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-mut">
         <li>

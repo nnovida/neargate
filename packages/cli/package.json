@@ -1,6 +1,6 @@
 {
   "name": "@neargate/cli",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Wrap any HTTP API into a paid x402 service on Casper — HTTP 402 micropayments in native CSPR with on-chain discovery and reputation.",
   "type": "module",
   "bin": {
