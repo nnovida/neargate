@@ -13,7 +13,10 @@ import {
   type ClientCasperSigner,
 } from '@make-software/casper-x402';
 import { encodePaymentSignatureHeader } from '@x402/core/http';
-import { KeyAlgorithm } from 'casper-js-sdk';
+import { createRequire } from 'node:module';
+// casper-js-sdk is CJS; a static `import { KeyAlgorithm }` crashes at runtime under
+// ESM loaders (tsx / node ESM). Load it loader-agnostically, like @agentgate/chain's sdk shim.
+const { KeyAlgorithm } = createRequire(import.meta.url)('casper-js-sdk') as typeof import('casper-js-sdk');
 
 /** Result of a fetchPaid call (SPEC §6). */
 export interface PayAndFetchResult {

@@ -374,6 +374,18 @@ export default function DeploymentPage() {
             </span>,
           ],
           [
+            <M key="v">FACILITATOR_SERVICES</M>,
+            <span key="d">
+              Optional. A JSON map that opts a service into the{' '}
+              <strong className="text-white">official Casper x402 facilitator rail</strong> (CEP-18 +
+              EIP-712): <M>{'{"<id>":{"asset":"<cep18-pkg-hash>","amount":"<atomic>","token":{"name","version","decimals","symbol"}}}'}</M>.
+              A listed service settles through the CSPR.cloud <M>facilitator</M> (
+              <M>FACILITATOR_URL</M>, default <M>https://x402-facilitator.cspr.cloud</M>, auth reuses{' '}
+              <M>CSPR_CLOUD_API_KEY</M>); unlisted services stay on the native-CSPR rail. Buyers select
+              the signing key algorithm with <M>BUYER_KEY_ALGO</M> (default <M>secp256k1</M>).
+            </span>,
+          ],
+          [
             <M key="v">TRUST_PROXY=1</M>,
             <span key="d">
               Set to the real reverse-proxy hop count (1 behind a single Railway/Vercel proxy) so

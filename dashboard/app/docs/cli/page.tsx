@@ -204,6 +204,12 @@ export default function Page() {
             <M key="d6">(none)</M>,
             'status (attestation history)',
           ],
+          [
+            <M key="f7">--key-algo {'<algo>'}</M>,
+            <M key="e7">BUYER_KEY_ALGO</M>,
+            <M key="d7">secp256k1</M>,
+            'buy / mcp — signing key algorithm (ed25519 | secp256k1) for the facilitator (x402 v2) rail',
+          ],
         ]}
       />
       <Callout tone="warn" title="Secrets on the command line">

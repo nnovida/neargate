@@ -16,6 +16,32 @@ export default function Page() {
         lede="Notable changes to AgentGate — the CLI, gateway, smart contracts and docs — newest first."
       />
 
+      <H2 id="2026-07-18-v015">2026-07-18 — CLI v0.1.5: official Casper x402 facilitator rail</H2>
+      <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-mut">
+        <li>
+          <strong className="text-white">Official x402 rail (opt-in, per service).</strong> AgentGate
+          now also speaks the official Casper x402 stack — <M>CEP-18</M> + <M>EIP-712</M> settled
+          through the CSPR.cloud <M>facilitator</M> — alongside the native-CSPR rail. A service listed
+          in <M>FACILITATOR_SERVICES</M> runs its whole <M>402 → pay → settle → attest</M> loop through
+          the facilitator (x402 v2, <M>PAYMENT-SIGNATURE</M> header); every other service stays on the
+          native rail, byte-unchanged. No contract redeploy — the settle tx hash is recorded as the
+          on-chain attestation.
+        </li>
+        <li>
+          <strong className="text-white">Buyer.</strong> <M>agentgate buy</M> auto-detects a
+          facilitator invoice (by <M>x402Version</M>) and signs an EIP-712 authorization with the buyer
+          key — new <M>--key-algo</M> flag (default <M>secp256k1</M>); the MCP <M>agentgate_buy</M> tool
+          supports it too. CEP-18 has no native-transfer floor, so this unlocks true sub-CSPR
+          micropayments.
+        </li>
+        <li>
+          <strong className="text-white">Gateway.</strong> A facilitator-enabled service verifies and
+          settles via the CSPR.cloud facilitator (gas sponsored by the facilitator), then proxies and
+          attests. Config: <M>FACILITATOR_URL</M>, <M>BUYER_KEY_ALGO</M>, <M>FACILITATOR_SERVICES</M>.
+          Proven end-to-end on Casper Testnet.
+        </li>
+      </ul>
+
       <H2 id="2026-07-18-v014">2026-07-18 — CLI v0.1.4</H2>
       <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-mut">
         <li>
