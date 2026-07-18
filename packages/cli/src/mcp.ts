@@ -213,4 +213,13 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
 export async function startAgentGateMcpServer(deps: McpServerDeps): Promise<void> {
   const server = buildAgentGateMcpServer(deps);
   await server.connect(new StdioServerTransport());
+  // Human-facing hint on STDERR (never stdout — that is the JSON-RPC channel).
+  // Without this, running `agentgate mcp` in a terminal looks like it hangs; it
+  // is in fact a stdio server waiting for an MCP client to speak on stdin.
+  process.stderr.write(
+    'AgentGate MCP server ready on stdio — tools: agentgate_list_services, ' +
+      'agentgate_get_service, agentgate_get_invoice, agentgate_buy.\n' +
+      'It speaks JSON-RPC over stdin/stdout and waits for an MCP client ' +
+      '(e.g. Claude Desktop). No further output here is normal — this is not a hang.\n',
+  );
 }
