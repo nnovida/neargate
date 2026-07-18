@@ -89,7 +89,8 @@ function withConfigFlags(cmd: Command): Command {
   return cmd
     .option('--mode <mode>', 'chain mode: mock | live (published CLI defaults to live)')
     .option('--node-url <url>', 'Casper node RPC URL (default: Casper Testnet)')
-    .option('--registry <hash>', 'AgentGateRegistry package hash (default: the deployed one)');
+    .option('--registry <hash>', 'AgentGateRegistry package hash (default: the deployed one)')
+    .option('--key-algo <algo>', 'buyer key algorithm for the facilitator rail: ed25519 | secp256k1 (default secp256k1)');
 }
 
 /**
@@ -106,6 +107,7 @@ function cliConfig(opts: CliConfigFlags): AgentGateConfig {
       pem: opts.pem,
       apiKey: opts.apiKey,
       adminToken: opts.adminToken,
+      keyAlgo: opts.keyAlgo,
     }),
     { requireCloudKey: false, requireStrongAdminToken: false },
   );
@@ -236,6 +238,7 @@ withConfigFlags(
     signer,
     id: Number(idRaw.trim()),
     method: opts.method,
+    buyerKeyAlgo: config.buyerKeyAlgo,
     ...(opts.max !== undefined ? { maxCspr: opts.max } : {}),
     ...(opts.body !== undefined ? { body: opts.body } : {}),
     ...(opts.gateway !== undefined ? { gateway: opts.gateway } : {}),
@@ -403,6 +406,7 @@ withConfigFlags(
   await startAgentGateMcpServer({
     chain,
     signerProvider: () => buyerSigner(config, opts.pem),
+    buyerKeyAlgo: config.buyerKeyAlgo,
   });
 });
 

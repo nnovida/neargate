@@ -27,6 +27,8 @@ export interface BuyServiceOpts {
   settleDelayMs?: number;
   fetchImpl?: typeof fetch;
   requestTimeoutMs?: number;
+  /** Buyer key algorithm for the facilitator (x402 v2) rail. Default secp256k1. */
+  buyerKeyAlgo?: 'ed25519' | 'secp256k1';
 }
 
 export interface BuyServiceResult {
@@ -101,6 +103,7 @@ export async function buyService(opts: BuyServiceOpts): Promise<BuyServiceResult
     ...(opts.settleDelayMs !== undefined ? { settleDelayMs: opts.settleDelayMs } : {}),
     ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
     ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
+    ...(opts.buyerKeyAlgo !== undefined ? { buyerKeyAlgo: opts.buyerKeyAlgo } : {}),
   });
 
   const init: RequestInit | undefined =

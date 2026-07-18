@@ -210,7 +210,7 @@ describe('createAgentGateClient · fetchPaid', () => {
   const validExtra = validAccept.extra;
 
   it.each([
-    ['wrong x402Version',     { ...validReq, x402Version: 2 }],
+    ['wrong x402Version',     { ...validReq, x402Version: 3 }],
     ['empty accepts',         { ...validReq, accepts: [] }],
     ['missing nonce',         { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, nonce: undefined } }] }],
     ['non-numeric nonce',     { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, nonce: 'abc' } }] }],

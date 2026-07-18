@@ -34,6 +34,8 @@ export interface McpServerDeps {
   signerProvider: () => AnySigner;
   /** Injectable fetch (tests / get_invoice). Defaults to globalThis.fetch. */
   fetchImpl?: typeof fetch;
+  /** Buyer key algorithm for the facilitator (x402 v2) rail used by agentgate_buy. */
+  buyerKeyAlgo?: 'ed25519' | 'secp256k1';
 }
 
 const MCP_NAME = 'agentgate';
@@ -191,6 +193,7 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
           ...(method !== undefined ? { method } : {}),
           ...(body !== undefined ? { body } : {}),
           ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
+          ...(deps.buyerKeyAlgo !== undefined ? { buyerKeyAlgo: deps.buyerKeyAlgo } : {}),
         });
         return {
           id: service.id,

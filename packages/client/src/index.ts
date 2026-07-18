@@ -2,10 +2,18 @@ import type { AnySigner, ChainClient, Logger, Motes } from '@agentgate/shared';
 import { AgentGateError, compareMotes, parseMotes } from '@agentgate/shared';
 import {
   encodeXPayment, decodeXPaymentResponse,
-  X402_VERSION, X402_SCHEME,
+  X402_VERSION, X402_VERSION_V2, X402_SCHEME, toCaip2Network,
   type PaymentRequirements, type PaymentRequiredResponse, type SettlementResponse,
+  type X402V2Requirements,
 } from '@agentgate/shared';
 import { resolvedHostIsPublic, validateHttpUrl } from '@agentgate/shared/net-guard';
+import {
+  ExactCasperScheme,
+  createClientCasperSigner,
+  type ClientCasperSigner,
+} from '@make-software/casper-x402';
+import { encodePaymentSignatureHeader } from '@x402/core/http';
+import { KeyAlgorithm } from 'casper-js-sdk';
 
 /** Result of a fetchPaid call (SPEC §6). */
 export interface PayAndFetchResult {
@@ -36,6 +44,19 @@ export interface AgentGateClientOpts {
    * data, so in live mode it must not point at internal infrastructure.
    */
   rejectPrivateHosts?: boolean;
+  /**
+   * Key algorithm for the facilitator rail's EIP-712 signer (buyer PEM). Default
+   * secp256k1. Only used when the 402 is an x402 v2 (facilitator) invoice.
+   */
+  buyerKeyAlgo?: 'ed25519' | 'secp256k1';
+  /**
+   * Test seam: build the facilitator (EIP-712) signer. Defaults to the real
+   * @make-software/casper-x402 createClientCasperSigner from the PEM path.
+   */
+  facilitatorSignerFactory?: (
+    pemPath: string,
+    keyAlgo: 'ed25519' | 'secp256k1',
+  ) => Promise<ClientCasperSigner>;
 }
 
 export interface AgentGateClient {
@@ -102,6 +123,37 @@ export function parsePaymentRequired(
   }
   if (typeof req.extra?.expiresAtMs !== 'number' || !Number.isFinite(req.extra.expiresAtMs) || req.extra.expiresAtMs <= now) {
     throw badInvoice('invoice is expired — refusing to pay');
+  }
+  return req;
+}
+
+const PKG_HASH_RE = /^[0-9a-f]{64}$/i;
+const V2_ADDRESS_RE = /^[0-9a-f]{66}$/i; // '00'+account-hash
+
+/**
+ * Validate an x402 v2 (facilitator) PaymentRequiredResponse and return the
+ * matching accepts[] entry (scheme 'exact', CAIP-2 network match). Throws
+ * BAD_INVOICE / NETWORK_MISMATCH on any violation.
+ */
+export function parseV2PaymentRequired(raw: unknown, chainNetwork: string): X402V2Requirements {
+  if (!isRecord(raw)) throw badInvoice('body is not a JSON object');
+  if (raw['x402Version'] !== X402_VERSION_V2) throw badInvoice(`unsupported x402Version (expected ${X402_VERSION_V2})`);
+  const accepts = raw['accepts'];
+  if (!Array.isArray(accepts) || accepts.length === 0) throw badInvoice('accepts must be a non-empty array');
+  const wantNetwork = toCaip2Network(chainNetwork);
+  const req = accepts.find(
+    (a): a is X402V2Requirements =>
+      isRecord(a) && a['scheme'] === X402_SCHEME && a['network'] === wantNetwork,
+  );
+  if (!req) {
+    throw new AgentGateError('NETWORK_MISMATCH', `invoice offers no facilitator payment on network "${wantNetwork}" — refusing to pay`, 502);
+  }
+  if (typeof req.asset !== 'string' || !PKG_HASH_RE.test(req.asset)) throw badInvoice('asset must be a 64-hex CEP-18 package hash');
+  if (typeof req.amount !== 'string' || !/^\d+$/.test(req.amount)) throw badInvoice('amount must be an atomic-unit decimal string');
+  if (typeof req.payTo !== 'string' || !V2_ADDRESS_RE.test(req.payTo)) throw badInvoice('payTo must be a 66-hex address');
+  const extra = req.extra as Record<string, unknown> | undefined;
+  if (!isRecord(extra) || typeof extra['name'] !== 'string' || typeof extra['version'] !== 'string') {
+    throw badInvoice('extra must carry the token { name, version }');
   }
   return req;
 }
@@ -177,6 +229,11 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
   const settleDelayMs = opts.settleDelayMs ?? (chain.network === 'mock' ? 0 : 3000);
   const requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
   const rejectPrivateHosts = opts.rejectPrivateHosts ?? chain.network !== 'mock';
+  const buyerKeyAlgo = opts.buyerKeyAlgo ?? 'secp256k1';
+  const makeFacilitatorSigner =
+    opts.facilitatorSignerFactory ??
+    ((pemPath: string, algo: 'ed25519' | 'secp256k1'): Promise<ClientCasperSigner> =>
+      createClientCasperSigner(pemPath, algo === 'secp256k1' ? KeyAlgorithm.SECP256K1 : KeyAlgorithm.ED25519));
 
   /** Adds a per-request timeout unless the caller supplied their own signal. */
   function withTimeout(init?: RequestInit): RequestInit {
@@ -234,6 +291,12 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
     }
 
     if (!first.isJson) throw badInvoice('402 response body is not JSON');
+
+    // x402 v2 → the OFFICIAL facilitator rail (CEP-18 + EIP-712). Discriminate on
+    // the top-level version, never by field-sniffing; native v1 falls through.
+    if (isRecord(first.body) && first.body['x402Version'] === X402_VERSION_V2) {
+      return await payViaFacilitator(url, init, first.body);
+    }
 
     // Parse and validate the PaymentRequiredResponse; network match is inside parsePaymentRequired.
     const req = parsePaymentRequired(first.body, chain.network);
@@ -303,6 +366,62 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
       pendingRetries += 1;
       logger?.debug('fetchPaid: verification pending, retrying', { wait, attempt: pendingRetries });
       await sleep(wait);
+    }
+  }
+
+  /**
+   * Facilitator (x402 v2) rail: sign an EIP-712 CEP-18 authorization with the
+   * buyer PEM (via @make-software/casper-x402) and retry with the PAYMENT-SIGNATURE
+   * header. The gateway settles server-side, so there is no local chain.transfer
+   * and no settle delay; the settlement tx hash comes back on X-PAYMENT-RESPONSE.
+   */
+  async function payViaFacilitator(
+    url: string, init: RequestInit | undefined, body: unknown,
+  ): Promise<PayAndFetchResult> {
+    if (signer.kind !== 'pem') {
+      throw new AgentGateError('SIGNER_MISSING', 'facilitator rail requires a live pem key (mock signer not supported)', 400);
+    }
+    const reqs = parseV2PaymentRequired(body, chain.network);
+    logger?.info('fetchPaid: received v2 facilitator requirements', {
+      url, asset: reqs.asset, amount: reqs.amount, network: reqs.network,
+    });
+    const s = await makeFacilitatorSigner(signer.pemPath, buyerKeyAlgo);
+    const built = await new ExactCasperScheme(s).createPaymentPayload(X402_VERSION_V2, reqs);
+    const paymentPayload = {
+      x402Version: X402_VERSION_V2,
+      accepted: reqs,
+      payload: built.payload,
+      ...(built.extensions ? { extensions: built.extensions } : {}),
+    };
+    const headers = new Headers(init?.headers);
+    headers.set('PAYMENT-SIGNATURE', encodePaymentSignatureHeader(paymentPayload));
+    const proofInit: RequestInit = { ...init, headers };
+
+    let pendingRetries = 0;
+    for (;;) {
+      const res = await doFetch(url, withTimeout(proofInit));
+      if (res.status !== 402) {
+        logger?.info('fetchPaid: facilitator-paid request completed', { url, status: res.status });
+        return {
+          status: res.status,
+          body: res.body,
+          paid: true,
+          settlement: res.settlement,
+          deployHash: res.settlement?.transaction,
+        };
+      }
+      if (res.retryAfterMs === undefined || pendingRetries >= MAX_PENDING_RETRIES) {
+        logger?.warn('fetchPaid: facilitator payment not settled', { url, status: res.status, pendingRetries });
+        return {
+          status: res.status,
+          body: res.body,
+          paid: false,
+          settlement: res.settlement,
+          deployHash: res.settlement?.transaction,
+        };
+      }
+      pendingRetries += 1;
+      await sleep(res.retryAfterMs);
     }
   }
 
