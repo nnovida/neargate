@@ -143,6 +143,8 @@ export interface FacilitatorTokenMeta {
   version: string;
   decimals: number;
   symbol: string;
+  /** x402 `extra` is an open bag; keep it assignable to Record<string, unknown>. */
+  [key: string]: unknown;
 }
 
 /** Per-service facilitator config (from FACILITATOR_SERVICES), keyed by service id. */
@@ -154,10 +156,13 @@ export interface FacilitatorServiceConfig {
   token: FacilitatorTokenMeta;
 }
 
+/** CAIP-2 network identifier, e.g. `casper:casper-test`. */
+export type Caip2Network = `${string}:${string}`;
+
 /** Official x402 v2 PaymentRequirements — the shape @x402/core + the facilitator expect. */
 export interface X402V2Requirements {
   scheme: string; // 'exact'
-  network: string; // CAIP-2, e.g. 'casper:casper-test'
+  network: Caip2Network; // CAIP-2, e.g. 'casper:casper-test'
   asset: string; // CEP-18 package hash (64 hex)
   amount: string; // token atomic units
   payTo: string; // '00' + account-hash (66 hex)
@@ -176,8 +181,8 @@ export interface X402V2Required {
 const ACCOUNT_HASH_RE = /^(?:account-hash-)?[0-9a-f]{64}$/i;
 
 /** casper-test → casper:casper-test (CAIP-2). Idempotent if already CAIP-2. */
-export function toCaip2Network(casperNetwork: string): string {
-  return casperNetwork.includes(':') ? casperNetwork : `casper:${casperNetwork}`;
+export function toCaip2Network(casperNetwork: string): Caip2Network {
+  return (casperNetwork.includes(':') ? casperNetwork : `casper:${casperNetwork}`) as Caip2Network;
 }
 
 /** account-hash-<64hex> → 00<64hex> (the 66-hex address the x402 v2 payload uses). */

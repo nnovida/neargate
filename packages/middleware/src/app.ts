@@ -16,21 +16,32 @@ import {
   createLogger,
   decodeXPayment,
   encodeXPaymentResponse,
+  HEADER_PAYMENT_SIGNATURE,
+  payToFromAccountHash,
   randomNonce,
   SELF_MAP_WINDOW_MS,
+  toCaip2Network,
   trustTier,
   X402_ASSET_CSPR,
   X402_SCHEME,
   X402_VERSION,
+  X402_VERSION_V2,
   type AgentGateConfig,
   type AnySigner,
   type ChainClient,
+  type FacilitatorServiceConfig,
   type Logger,
   type PaymentRequiredResponse,
   type PaymentRequirements,
   type ServiceRecord,
+  type X402V2Requirements,
 } from '@agentgate/shared';
 import { verifyOwnerSignature } from '@agentgate/chain';
+import {
+  HTTPFacilitatorClient,
+  decodePaymentSignatureHeader,
+  type FacilitatorClient,
+} from '@x402/core/http';
 import { MemoryInvoiceStore, type InvoiceStore } from './invoice-store';
 import { FileInvoiceStore } from './invoice-store-file';
 import { MemoryAttestationQueue, type AttestationQueue } from './attestation-queue';
@@ -72,6 +83,12 @@ export interface MiddlewareDeps {
   attestationRetryDelayMs?: number;
   /** Total attestation attempts before giving up (1 = no retry). Default 4. */
   attestationMaxAttempts?: number;
+  /**
+   * Facilitator client for the official x402 rail (CEP-18 + EIP-712). Injected in
+   * tests; in live mode with FACILITATOR_SERVICES set, defaults to an
+   * HTTPFacilitatorClient pointed at config.facilitatorUrl (auth = CSPR.cloud key).
+   */
+  facilitatorClient?: FacilitatorClient;
 }
 
 /** Internal handles startServer() uses for graceful shutdown. */
@@ -191,6 +208,20 @@ export function createApp(deps: MiddlewareDeps): Express {
   const services = new ServiceCache(chain);
   const attestationRetryDelayMs = deps.attestationRetryDelayMs ?? DEFAULT_ATTESTATION_RETRY_DELAY_MS;
   const attestationMaxAttempts = deps.attestationMaxAttempts ?? DEFAULT_ATTESTATION_MAX_ATTEMPTS;
+  // Official x402 facilitator client (CEP-18 + EIP-712). Injected in tests; else
+  // built for live mode when any service is facilitator-enabled. Auth reuses the
+  // CSPR.cloud key (raw Authorization header, no Bearer prefix).
+  const facilitator: FacilitatorClient | undefined =
+    deps.facilitatorClient ??
+    (config.mode === 'live' && Object.keys(config.facilitatorServices).length > 0
+      ? new HTTPFacilitatorClient({
+          url: config.facilitatorUrl,
+          createAuthHeaders: async () => {
+            const h = { Authorization: config.csprCloudApiKey };
+            return { verify: h, settle: h, supported: h };
+          },
+        })
+      : undefined);
 
   const app = express();
   app.disable('x-powered-by');
@@ -269,6 +300,36 @@ export function createApp(deps: MiddlewareDeps): Express {
     const expiresAt = Date.now() + config.invoiceTtlMs;
     await invoices.put({ nonce, serviceId: service.id, priceMotes: service.priceMotes, expiresAt, used: false });
     send402(res, error, buildRequirements(service, nonce, expiresAt, resource));
+  }
+
+  // --- official x402 facilitator rail (CEP-18 + EIP-712) helpers ---
+
+  /** Per-service facilitator config, or undefined for native services. */
+  function facilitatorConfigFor(id: number): FacilitatorServiceConfig | undefined {
+    return config.facilitatorServices[id];
+  }
+
+  /** Build the official x402 v2 PaymentRequirements for a facilitator-enabled service. */
+  function buildV2Requirements(
+    service: ServiceRecord, facCfg: FacilitatorServiceConfig,
+  ): X402V2Requirements {
+    return {
+      scheme: X402_SCHEME, // 'exact' — same identifier as the official spec
+      network: toCaip2Network(config.casperNetwork),
+      asset: facCfg.asset,
+      amount: facCfg.amount,
+      payTo: payToFromAccountHash(service.paymentTarget),
+      maxTimeoutSeconds: Math.floor(config.invoiceTtlMs / 1000),
+      extra: facCfg.token,
+    };
+  }
+
+  /** 402 for the facilitator rail (v2 body). Stateless here — no invoice persisted. */
+  function send402V2(
+    res: Response, error: string, requirements: X402V2Requirements, retryAfterSeconds?: number,
+  ): void {
+    if (retryAfterSeconds !== undefined) res.set('Retry-After', String(retryAfterSeconds));
+    res.status(402).json({ x402Version: X402_VERSION_V2, error, accepts: [requirements] });
   }
 
   /**
@@ -488,6 +549,94 @@ export function createApp(deps: MiddlewareDeps): Express {
       }
 
       const resource = `${req.protocol}://${req.get('host') ?? 'localhost'}${req.originalUrl}`;
+
+      // 1d. Facilitator rail: a facilitator-enabled service runs the OFFICIAL
+      //     x402 loop (CEP-18 + EIP-712 via the CSPR.cloud facilitator) instead
+      //     of the native-transfer rail. Stateless here — replay protection lives
+      //     in the signed authorization + the facilitator + the token's used_nonces.
+      const facCfg = facilitatorConfigFor(id);
+      if (facCfg) {
+        if (!facilitator) {
+          logger.error('facilitator_not_configured', { serviceId: id });
+          res.status(503).json({ error: 'service_unavailable' });
+          return;
+        }
+        const v2reqs = buildV2Requirements(service, facCfg);
+        const sig = req.header(HEADER_PAYMENT_SIGNATURE)?.trim() ?? '';
+        if (sig === '') {
+          send402V2(res, 'PAYMENT-SIGNATURE header is required', v2reqs);
+          return;
+        }
+        let v2payload;
+        try {
+          v2payload = decodePaymentSignatureHeader(sig);
+        } catch {
+          send402V2(res, 'invalid_payment_header', v2reqs);
+          return;
+        }
+        // verify → settle BEFORE serving: once settle succeeds the payment is
+        // final and non-replayable, mirroring the native "burn nonce before proxy".
+        let verify;
+        try {
+          verify = await facilitator.verify(v2payload, v2reqs);
+        } catch (err) {
+          logger.warn('facilitator_verify_error', { serviceId: id, error: err instanceof Error ? err.message : String(err) });
+          send402V2(res, 'facilitator_unavailable', v2reqs, 2);
+          return;
+        }
+        if (!verify.isValid) {
+          send402V2(res, verify.invalidReason ?? 'invalid_payment', v2reqs);
+          return;
+        }
+        let settle;
+        try {
+          settle = await facilitator.settle(v2payload, v2reqs);
+        } catch (err) {
+          logger.warn('facilitator_settle_error', { serviceId: id, error: err instanceof Error ? err.message : String(err) });
+          send402V2(res, 'facilitator_unavailable', v2reqs, 2);
+          return;
+        }
+        if (!settle.success || !settle.transaction) {
+          send402V2(res, settle.errorReason ?? 'settlement_failed', v2reqs);
+          return;
+        }
+
+        // Proxy to the upstream, then respond + attest (settle tx = the payment id).
+        const outcome = await proxyToUpstream({
+          upstreamUrl,
+          req,
+          timeoutMs: config.upstreamTimeoutMs,
+          followRedirects: config.mode !== 'live',
+          pinToPublicIp: config.mode === 'live',
+        });
+        const v2success = isUpstreamSuccess(outcome);
+        const payer = settle.payer ?? '';
+        // x402 addresses are '00'+account-hash (66 hex); reduce to the 64-hex
+        // account-hash so the self-payment (wash-trade) guard compares cleanly.
+        const payerHash = payer.length === 66 ? payer.slice(2) : payer;
+        res.set(
+          HEADER_X_PAYMENT_RESPONSE,
+          encodeXPaymentResponse({ success: true, transaction: settle.transaction, network: v2reqs.network, payer }),
+        );
+        if (outcome.kind === 'response') {
+          res.status(outcome.status);
+          if (outcome.contentType) res.set('Content-Type', outcome.contentType);
+          res.send(outcome.body);
+        } else {
+          logger.warn('proxy_failed', { serviceId: id, error: outcome.error });
+          res.status(outcome.status).json({ error: outcome.error });
+        }
+        const v2selfPaid = isSelfPayment(payerHash, service);
+        if (outcome.kind === 'response' && !v2selfPaid) {
+          scheduleAttestation(service, settle.transaction, v2success);
+        } else {
+          logger.info('attestation_skipped', {
+            serviceId: id,
+            reason: v2selfPaid ? 'self_payment' : outcome.kind === 'failure' ? outcome.error : 'skipped',
+          });
+        }
+        return;
+      }
 
       // 2. No payment proof → fresh 402 challenge.
       const xPayment = req.header(HEADER_X_PAYMENT)?.trim() ?? '';
