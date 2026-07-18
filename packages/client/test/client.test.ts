@@ -11,6 +11,7 @@ import {
   createAgentGateClient,
   parsePaymentRequired,
 } from '@agentgate/client';
+import type { ClientCasperSigner } from '@make-software/casper-x402';
 
 const DEPLOY_HASH = 'd'.repeat(64);
 const TARGET = `account-hash-${'a'.repeat(64)}`;
@@ -408,5 +409,71 @@ describe('parsePaymentRequired', () => {
       accepts: [{ ...req.accepts[0]!, extra: { ...req.accepts[0]!.extra, expiresAtMs: NaN } }],
     };
     expect(() => parsePaymentRequired(badReq, 'mock')).toThrowError(/invalid 402 invoice/);
+  });
+});
+
+describe('createAgentGateClient · fetchPaid · facilitator (x402 v2) rail', () => {
+  // chain.network is 'mock' → CAIP-2 'casper:mock'.
+  function v2Requirements(network = 'casper:mock') {
+    return {
+      x402Version: 2,
+      error: 'PAYMENT-SIGNATURE header is required',
+      accepts: [{
+        scheme: 'exact', network,
+        asset: 'f'.repeat(64),
+        amount: '100000000',
+        payTo: '00' + 'b'.repeat(64),
+        maxTimeoutSeconds: 300,
+        extra: { name: 'Test USD', version: '1', decimals: 9, symbol: 'TUSD' },
+      }],
+    };
+  }
+  // A fake EIP-712 signer so no real key/network is touched; ExactCasperScheme
+  // still runs the real typed-data hashing over it.
+  const fakeSigner: ClientCasperSigner = {
+    accountAddress: () => '00' + 'c'.repeat(64),
+    publicKey: () => '02' + 'e'.repeat(66),
+    signEIP712: async () => new Uint8Array(65),
+  };
+  const PEM_SIGNER = { kind: 'pem', pemPath: '/tmp/buyer.pem' } as const;
+
+  it('v2 402 → EIP-712 sign → PAYMENT-SIGNATURE retry returns the settlement, no native transfer', async () => {
+    const settlementHeader = encodeXPaymentResponse({
+      success: true, transaction: DEPLOY_HASH, network: 'casper:mock', payer: '00' + 'c'.repeat(64),
+    });
+    const { impl, calls } = queuedFetch([
+      json(v2Requirements(), 402),
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json', 'x-payment-response': settlementHeader },
+      }),
+    ]);
+    const chain = makeChain();
+    const client = createAgentGateClient({
+      chain,
+      signer: PEM_SIGNER,
+      fetchImpl: impl,
+      facilitatorSignerFactory: async () => fakeSigner,
+    });
+    const res = await client.fetchPaid('http://svc.test/svc/1');
+
+    expect(res.paid).toBe(true);
+    expect(res.status).toBe(200);
+    expect(res.deployHash).toBe(DEPLOY_HASH);
+    expect(res.settlement?.transaction).toBe(DEPLOY_HASH);
+    // the paid retry carried PAYMENT-SIGNATURE, never the native X-PAYMENT
+    const retryHeaders = new Headers(calls[1]?.init?.headers);
+    expect(retryHeaders.get('payment-signature')).toBeTruthy();
+    expect(retryHeaders.get('x-payment')).toBeNull();
+    // never touched the native rail
+    expect(chain.transfer).not.toHaveBeenCalled();
+  });
+
+  it('rejects a mock signer on the facilitator rail with SIGNER_MISSING and never pays', async () => {
+    const { impl } = queuedFetch([json(v2Requirements(), 402)]);
+    const chain = makeChain();
+    const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
+    await expect(client.fetchPaid('http://svc.test/svc/1')).rejects.toThrow(/facilitator rail requires a live pem key/);
+    expect(chain.transfer).not.toHaveBeenCalled();
   });
 });

@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { encodeXPayment, type AgentGateConfig, type Logger, type PaymentRequiredResponse } from '@agentgate/shared';
 import { startServer, type MiddlewareStartOpts, type RunningServer } from '../src/index';
 import { FakeChainClient } from './fake-chain';
+import type { FacilitatorClient } from '@x402/core/http';
 
 /** Silent logger so test output stays readable. */
 export const silentLogger: Logger = {
@@ -70,6 +71,7 @@ export async function bootGateway(
     attestationRetryDelayMs?: number;
     attestationMaxAttempts?: number;
     attestationQueuePath?: string;
+    facilitatorClient?: FacilitatorClient;
   } = {},
 ): Promise<TestGateway> {
   const config = opts.config ?? testConfig();
@@ -92,6 +94,9 @@ export async function bootGateway(
   }
   if (opts.attestationQueuePath !== undefined) {
     startOpts.attestationQueuePath = opts.attestationQueuePath;
+  }
+  if (opts.facilitatorClient !== undefined) {
+    startOpts.facilitatorClient = opts.facilitatorClient;
   }
   const server: RunningServer = await startServer(startOpts);
   return {

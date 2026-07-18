@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   X402_VERSION, X402_SCHEME,
   encodeXPayment, decodeXPayment, encodeXPaymentResponse, decodeXPaymentResponse,
+  toCaip2Network, payToFromAccountHash,
   type PaymentPayload, type SettlementResponse,
 } from '../src/x402';
 import { AgentGateError } from '../src/index';
@@ -69,5 +70,25 @@ describe('x402 codec', () => {
     expect(() => decodeXPaymentResponse(noTx)).toThrow(AgentGateError);
     const emptyNet = Buffer.from(JSON.stringify({ success: true, transaction: 'a'.repeat(64), network: '' }), 'utf8').toString('base64');
     expect(() => decodeXPaymentResponse(emptyNet)).toThrow(AgentGateError);
+  });
+});
+
+describe('x402 v2 facilitator helpers', () => {
+  it('toCaip2Network prefixes a bare network and is idempotent for CAIP-2', () => {
+    expect(toCaip2Network('casper-test')).toBe('casper:casper-test');
+    expect(toCaip2Network('casper')).toBe('casper:casper');
+    expect(toCaip2Network('casper:casper-test')).toBe('casper:casper-test');
+  });
+
+  it('payToFromAccountHash converts account-hash to the 66-hex x402 address', () => {
+    const hash = 'b'.repeat(64);
+    expect(payToFromAccountHash(`account-hash-${hash}`)).toBe(`00${hash}`);
+    expect(payToFromAccountHash(hash)).toBe(`00${hash}`); // bare hex also accepted
+    expect(payToFromAccountHash(`account-hash-${'B'.repeat(64)}`)).toBe(`00${'b'.repeat(64)}`); // lowercased
+  });
+
+  it('payToFromAccountHash rejects a non-account-hash', () => {
+    expect(() => payToFromAccountHash('account-hash-xyz')).toThrow(AgentGateError);
+    expect(() => payToFromAccountHash('00' + 'b'.repeat(64))).toThrow(AgentGateError); // 66 hex is not an account-hash
   });
 });
