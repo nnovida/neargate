@@ -25,6 +25,13 @@ export interface MiddlewareStartOpts {
    * to the INVOICE_STORE_PATH env var. Ignored when `invoiceStore` is injected.
    */
   invoiceStorePath?: string;
+  /**
+   * Persist pending attestations to this JSON file so a served+paid call whose
+   * on-chain attestation never confirmed is replayed after a restart (F7).
+   * Defaults to the ATTESTATION_QUEUE_PATH env var. Ignored when `attestationQueue`
+   * is injected.
+   */
+  attestationQueuePath?: string;
   /** Base delay before the first attestation retry (exponential backoff). Default 5000 ms. */
   attestationRetryDelayMs?: number;
   /** Total attestation attempts before giving up. Default 4. */
@@ -59,6 +66,8 @@ export async function startServer(opts: MiddlewareStartOpts = {}): Promise<Runni
 
   // Persist invoices across restarts when a path is configured (F2).
   const invoiceStorePath = opts.invoiceStorePath ?? process.env.INVOICE_STORE_PATH;
+  // Persist pending attestations across restarts when a path is configured (F7).
+  const attestationQueuePath = opts.attestationQueuePath ?? process.env.ATTESTATION_QUEUE_PATH;
 
   const app = createApp({
     config,
@@ -67,6 +76,7 @@ export async function startServer(opts: MiddlewareStartOpts = {}): Promise<Runni
     ...(opts.upstreamsFile !== undefined ? { upstreamsFile: opts.upstreamsFile } : {}),
     ...(opts.invoiceStore !== undefined ? { invoiceStore: opts.invoiceStore } : {}),
     ...(invoiceStorePath !== undefined ? { invoiceStorePath } : {}),
+    ...(attestationQueuePath !== undefined ? { attestationQueuePath } : {}),
     ...(opts.attestationRetryDelayMs !== undefined
       ? { attestationRetryDelayMs: opts.attestationRetryDelayMs }
       : {}),

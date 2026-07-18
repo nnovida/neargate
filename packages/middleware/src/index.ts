@@ -4,6 +4,7 @@
  * - createApp({ config, chain, logger? }): pure express factory, no listen()
  * - startServer(opts): boots the server, returns { port, close() }
  * - InvoiceStore / MemoryInvoiceStore: nonce → invoice persistence seam
+ * - AttestationQueue / MemoryAttestationQueue: durable pending-attestation seam (F7)
  * - UpstreamStore: serviceId → upstream URL map (atomic JSON file)
  */
 export { createApp } from './app';
@@ -13,6 +14,9 @@ export type { MiddlewareStartOpts, RunningServer } from './server';
 export { MemoryInvoiceStore } from './invoice-store';
 export { FileInvoiceStore } from './invoice-store-file';
 export type { InvoiceStore, StoredInvoice } from './invoice-store';
+export { MemoryAttestationQueue } from './attestation-queue';
+export { FileAttestationQueue } from './attestation-queue-file';
+export type { AttestationQueue, PendingAttestation } from './attestation-queue';
 export { UpstreamStore } from './upstream-store';
 export type { UpstreamMapping } from './upstream-store';
 export { ServiceCache, SERVICE_CACHE_TTL_MS } from './service-cache';

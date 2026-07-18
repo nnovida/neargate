@@ -33,6 +33,8 @@ import {
 import { verifyOwnerSignature } from '@agentgate/chain';
 import { MemoryInvoiceStore, type InvoiceStore } from './invoice-store';
 import { FileInvoiceStore } from './invoice-store-file';
+import { MemoryAttestationQueue, type AttestationQueue } from './attestation-queue';
+import { FileAttestationQueue } from './attestation-queue-file';
 import { UpstreamStore } from './upstream-store';
 import { ServiceCache } from './service-cache';
 import { isUpstreamSuccess, proxyToUpstream } from './proxy';
@@ -58,6 +60,14 @@ export interface MiddlewareDeps {
    * file so they survive a restart (finding F2). The gateway owns and closes it.
    */
   invoiceStorePath?: string;
+  /** Custom attestation queue (default: in-memory). Injected queues are not closed on dispose. */
+  attestationQueue?: AttestationQueue;
+  /**
+   * When set (and no `attestationQueue` is injected), persist pending attestations
+   * to this JSON file so a served+paid call whose on-chain attestation never
+   * confirmed is replayed after a restart instead of being under-counted (F7).
+   */
+  attestationQueuePath?: string;
   /** Base delay before the first attestation retry (exponential backoff). Default 5000 ms. */
   attestationRetryDelayMs?: number;
   /** Total attestation attempts before giving up (1 = no retry). Default 4. */
@@ -159,6 +169,14 @@ export function createApp(deps: MiddlewareDeps): Express {
       ? new FileInvoiceStore(deps.invoiceStorePath)
       : new MemoryInvoiceStore());
   const ownsInvoiceStore = deps.invoiceStore === undefined;
+  // Durable when a path is configured (F7), else in-memory. Owned queues (not
+  // injected) are closed on dispose.
+  const attestations =
+    deps.attestationQueue ??
+    (deps.attestationQueuePath !== undefined && deps.attestationQueuePath.trim() !== ''
+      ? new FileAttestationQueue(deps.attestationQueuePath)
+      : new MemoryAttestationQueue());
+  const ownsAttestationQueue = deps.attestationQueue === undefined;
   const upstreams = new UpstreamStore(
     deps.upstreamsFile !== undefined
       ? path.resolve(process.cwd(), deps.upstreamsFile)
@@ -254,13 +272,15 @@ export function createApp(deps: MiddlewareDeps): Express {
   }
 
   /**
-   * Fire-and-forget on-chain attestation (success := upstream 2xx). Never blocks
-   * the buyer's response; on failure retries with exponential backoff up to
-   * `attestationMaxAttempts` total tries (timers unref'd so they never keep the
-   * process alive). A call whose attempts all fail is under-counted, never
-   * over-counted (F7).
+   * Run the on-chain attestation attempt loop for one payment (success := upstream
+   * 2xx). Never blocks the buyer; on failure retries with exponential backoff up
+   * to `attestationMaxAttempts` total tries (timers unref'd so they never keep the
+   * process alive). On success the payment is dropped from the durable queue; a
+   * run whose attempts all fail leaves it queued for replay on the next boot (F7),
+   * so a served+paid call is under-counted only until the next restart, never
+   * over-counted.
    */
-  function scheduleAttestation(
+  function runAttestation(
     service: ServiceRecord,
     paymentDeployHash: string,
     success: boolean,
@@ -270,14 +290,19 @@ export function createApp(deps: MiddlewareDeps): Express {
     const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
     const attempt = (n: number): void => {
       chain.recordAttestation(input, signer).then(
-        (r) =>
+        (r) => {
           logger.info(n === 1 ? 'attestation_recorded' : 'attestation_recorded_on_retry', {
             ...input,
             attempt: n,
             txHash: r.txHash,
-          }),
+          });
+          // Confirmed on-chain — drop it from the durable queue so it is not replayed.
+          void attestations.remove(paymentDeployHash);
+        },
         (err: unknown) => {
           if (n >= attestationMaxAttempts) {
+            // Leave it queued: a persistent queue replays it on the next boot; an
+            // in-memory one drops it (under-count, never over-count).
             logger.error('attestation_failed_final', { ...input, attempts: n, error: msg(err) });
             return;
           }
@@ -294,6 +319,43 @@ export function createApp(deps: MiddlewareDeps): Express {
       );
     };
     attempt(1);
+  }
+
+  /**
+   * Enqueue a served+paid call for attestation (durably, when a queue path is
+   * configured), then run the attempt loop. The enqueue happens before the first
+   * on-chain attempt, so a crash mid-attest still leaves a replayable record.
+   * Fire-and-forget — never blocks the buyer response (F7).
+   */
+  function scheduleAttestation(
+    service: ServiceRecord,
+    paymentDeployHash: string,
+    success: boolean,
+  ): void {
+    void attestations
+      .enqueue({ paymentDeployHash, serviceId: service.id, success, enqueuedAt: Date.now() })
+      .then(() => runAttestation(service, paymentDeployHash, success));
+  }
+
+  /**
+   * Replay attestations persisted from a previous run that never confirmed (F7).
+   * Idempotent on-chain (`seen_payments` dedup), so re-recording an already-scored
+   * payment is a harmless no-op. Fire-and-forget on boot.
+   */
+  function replayPendingAttestations(): void {
+    void attestations.list().then(async (pending) => {
+      for (const p of pending) {
+        const service = await services.get(p.serviceId).catch(() => null);
+        if (service) {
+          runAttestation(service, p.paymentDeployHash, p.success);
+        } else {
+          logger.warn('attestation_replay_skipped_unknown_service', {
+            serviceId: p.serviceId,
+            paymentDeployHash: p.paymentDeployHash,
+          });
+        }
+      }
+    });
   }
 
   // ------------------------------------------------------------- rate limit
@@ -716,10 +778,15 @@ export function createApp(deps: MiddlewareDeps): Express {
   const internals: AppInternals = {
     async dispose(): Promise<void> {
       if (ownsInvoiceStore) invoices.close();
+      if (ownsAttestationQueue) attestations.close();
       await upstreams.flush();
     },
   };
   app.locals['agentgate'] = internals;
+
+  // Replay any attestations left pending by a previous run (F7). Fire-and-forget;
+  // idempotent on-chain, so it is safe even if the previous run partially recorded.
+  replayPendingAttestations();
 
   return app;
 }

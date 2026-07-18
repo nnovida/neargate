@@ -1,4 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import os from 'node:os';
+import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
 import { AgentGateError, decodeXPaymentResponse, encodeXPayment, type PaymentRequiredResponse } from '@agentgate/shared';
 import { createApp } from '../src/index';
 import {
@@ -397,6 +401,51 @@ describe('attestation retry', () => {
       expect(gw.fake.failAttestations).toBe(0); // both attempts were consumed
     } finally {
       await gw.close();
+      await upstream.close();
+    }
+  });
+
+  it('re-attests a payment whose attestation failed before a restart (F7 durable queue)', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'agentgate-attq-'));
+    const queuePath = path.join(dir, 'attestations.json');
+    const fake = new FakeChainClient();
+    fake.addService({ id: 1 });
+    const upstream = await startUpstream();
+    try {
+      // Boot 1: every attestation attempt fails, so the served+paid call is left
+      // pending in the durable queue rather than silently lost.
+      const gw1 = await bootGateway({
+        fake,
+        attestationQueuePath: queuePath,
+        attestationRetryDelayMs: 20,
+        attestationMaxAttempts: 2,
+      });
+      await adminMap(gw1, 1, `${upstream.url}/data`);
+      fake.failAttestations = 99; // every attempt throws
+      const proof = await payInvoice(gw1, 1);
+      const res = await fetch(`${gw1.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
+      expect(res.status).toBe(200); // buyer served regardless
+      await sleep(150); // let both attempts fail
+      expect(fake.attestations.length).toBe(0); // not recorded yet
+      await gw1.close();
+
+      // Boot 2: chain now healthy → the persisted pending attestation is replayed.
+      fake.failAttestations = 0;
+      const gw2 = await bootGateway({
+        fake,
+        attestationQueuePath: queuePath,
+        attestationRetryDelayMs: 20,
+      });
+      await until(() => fake.attestations.length === 1);
+      expect(fake.attestations[0]).toMatchObject({
+        serviceId: 1,
+        paymentDeployHash: proof.deployHash,
+        success: true,
+      });
+      // Confirmed attestations are removed from the durable queue.
+      await until(() => JSON.parse(readFileSync(queuePath, 'utf8')).length === 0);
+      await gw2.close();
+    } finally {
       await upstream.close();
     }
   });

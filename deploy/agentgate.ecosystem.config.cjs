@@ -26,6 +26,10 @@ module.exports = {
         // Persist issued invoices across restarts (FileInvoiceStore, F2) —
         // a buyer who paid on-chain is not lost if the gateway bounces.
         INVOICE_STORE_PATH: `${REPO}/data/gateway-invoices.json`,
+        // Persist pending attestations across restarts (FileAttestationQueue, F7)
+        // — a served+paid call whose attestation didn't confirm before a bounce
+        // is replayed on boot, so the trust ledger is never under-counted.
+        ATTESTATION_QUEUE_PATH: `${REPO}/data/gateway-attestations.json`,
       },
     },
     {

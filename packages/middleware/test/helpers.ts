@@ -66,6 +66,7 @@ export async function bootGateway(
     upstreamsFile?: string;
     attestationRetryDelayMs?: number;
     attestationMaxAttempts?: number;
+    attestationQueuePath?: string;
   } = {},
 ): Promise<TestGateway> {
   const config = opts.config ?? testConfig();
@@ -85,6 +86,9 @@ export async function bootGateway(
   }
   if (opts.attestationMaxAttempts !== undefined) {
     startOpts.attestationMaxAttempts = opts.attestationMaxAttempts;
+  }
+  if (opts.attestationQueuePath !== undefined) {
+    startOpts.attestationQueuePath = opts.attestationQueuePath;
   }
   const server: RunningServer = await startServer(startOpts);
   return {
