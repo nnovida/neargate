@@ -16,7 +16,7 @@ import {
   RpcClient,
   AccountHash,
 } from './sdk';
-import { AgentGateError, formatCspr, stripTrailingSlashes } from '@agentgate/shared';
+import { AgentGateError, formatCspr, formatToken, stripTrailingSlashes } from '@agentgate/shared';
 import type {
   ActivityEvent,
   AgentGateConfig,
@@ -357,6 +357,74 @@ function parseCloudAmount(value: string | number | undefined): bigint {
     `expected an integer-string motes amount from CSPR.cloud, got ${typeof value}: ${String(value)}`,
     502,
   );
+}
+
+export interface FacilitatorAsset {
+  packageHash: string;
+  symbol: string;
+  decimals: number;
+}
+
+/**
+ * CEP-18 tokens the official facilitator rail settles in. Payments in these move
+ * as `transfer_with_authorization`, which the native `/transfers` endpoint does
+ * NOT return — so listRecentActivity reads them separately to keep the ledger
+ * complete. Metadata is static, sparing a per-refresh contract-package lookup
+ * (and the CSPR.cloud quota it would cost).
+ */
+export const FACILITATOR_ASSETS: readonly FacilitatorAsset[] = [
+  {
+    packageHash: '3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e',
+    symbol: 'WCSPR',
+    decimals: 9,
+  },
+];
+
+interface CloudFtAction {
+  amount?: string | number;
+  from_hash?: string | null;
+  to_hash?: string | null;
+  deploy_hash?: string;
+  transaction_hash?: string;
+  ft_action_type_id?: number;
+  timestamp?: string;
+}
+
+/**
+ * Map a CEP-18 ft-token action to a `payment` ActivityEvent, or null when it is
+ * not a token transfer (ft_action_type_id 2) into a registered service's payment
+ * target. Display-only: an unparseable amount yields null rather than throwing,
+ * so one odd row never blanks the feed. Pure — unit-tested independently of the
+ * CSPR.cloud fan-out.
+ */
+export function ftActionToPaymentEvent(
+  action: CloudFtAction,
+  asset: FacilitatorAsset,
+  services: ReadonlyArray<{ id: number; paymentTarget: string }>,
+): ActivityEvent | null {
+  // ft_action_type_id 2 = transfer; skip mints/burns/approvals. Absent ⇒ lenient.
+  if (action.ft_action_type_id !== undefined && action.ft_action_type_id !== 2) return null;
+  const toHex = normalizeAccountHashHex(action.to_hash ?? '');
+  if (toHex === '') return null;
+  const service = services.find((s) => normalizeAccountHashHex(s.paymentTarget) === toHex);
+  if (!service) return null; // only surface transfers into a known seller target
+  let amount: bigint;
+  try {
+    amount = parseCloudAmount(action.amount);
+  } catch {
+    return null;
+  }
+  const short = toHex.length > 16 ? `${toHex.slice(0, 8)}…${toHex.slice(-4)}` : toHex;
+  return {
+    kind: 'payment',
+    txHash: action.deploy_hash ?? action.transaction_hash ?? '',
+    serviceId: service.id,
+    amountMotes: amount.toString(),
+    assetSymbol: asset.symbol,
+    assetDecimals: asset.decimals,
+    timestamp: parseCloudTimestamp(action.timestamp),
+    detail: `payment of ${formatToken(amount.toString(), asset.decimals, asset.symbol)} to ${short}`,
+  };
 }
 
 /**
@@ -826,6 +894,28 @@ export class LiveCasperClient implements ChainClient {
           timestamp: parseCloudTimestamp(transfer.timestamp),
           detail: `payment of ${formatCspr(amount.toString())} to ${shortTarget}`,
         });
+      }
+    }
+
+    // CEP-18 (facilitator-rail) payments — see FACILITATOR_ASSETS. These settle as
+    // transfer_with_authorization, invisible to the native /transfers reads above,
+    // so a WCSPR buy would otherwise show only an amount-less attestation row. One
+    // read per asset (by contract package, not per target) keeps the quota bounded.
+    const targetHexes = new Set(targets.map(normalizeAccountHashHex));
+    for (const asset of FACILITATOR_ASSETS) {
+      let actions: CloudListEnvelope<CloudFtAction> | null;
+      try {
+        actions = await this.cloudGet<CloudListEnvelope<CloudFtAction>>(
+          `/contract-packages/${asset.packageHash}/ft-token-actions?page_size=50&order_by=timestamp&order_direction=DESC`,
+          true,
+        );
+      } catch {
+        continue; // best-effort: a failed token read must not blank the feed
+      }
+      for (const action of actions?.data ?? []) {
+        if (!targetHexes.has(normalizeAccountHashHex(action.to_hash ?? ''))) continue;
+        const ev = ftActionToPaymentEvent(action, asset, services);
+        if (ev) events.push(ev);
       }
     }
 

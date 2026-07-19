@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import useSWR from 'swr';
 import type { ActivityEvent } from '@agentgate/shared';
-import { addMotes, formatCspr } from '@agentgate/shared';
+import { addMotes, formatCspr, formatToken } from '@agentgate/shared';
 import { fetcher, isChainDown, isRateLimited } from '@/lib/fetcher';
 import { formatDateTime, formatInt, svcLabel, timeAgo } from '@/lib/format';
 import type { ActivityResponse } from '@/lib/api-types';
@@ -43,7 +43,11 @@ function StatTile({ label, value, sub }: { label: string; value: string; sub: st
 function Summary({ events }: { events: ActivityEvent[] }) {
   const payments = events.filter((e) => e.kind === 'payment');
   const attests = events.filter((e) => e.kind === 'attestation');
-  const volumeMotes = payments.reduce((sum, e) => addMotes(sum, e.amountMotes ?? '0'), '0');
+  // Native-CSPR volume only — token (WCSPR) payments carry the same 9-decimal
+  // scale but are a different asset, so summing them into a CSPR total would lie.
+  const volumeMotes = payments
+    .filter((e) => !e.assetSymbol)
+    .reduce((sum, e) => addMotes(sum, e.amountMotes ?? '0'), '0');
   const attestOk = attests.filter((e) => e.success !== false).length;
   const rate = attests.length ? Math.round((attestOk / attests.length) * 100) : null;
   const services = new Set(events.map((e) => e.serviceId).filter((id): id is number => id !== null)).size;
@@ -140,7 +144,15 @@ function Row({ event, network }: { event: ActivityEvent; network: string }) {
         </span>
       </td>
       <td className="whitespace-nowrap py-3 pr-4 text-right font-mono text-xs tabular-nums text-white">
-        {event.amountMotes ? formatCspr(event.amountMotes) : <span className="text-mut">—</span>}
+        {event.amountMotes ? (
+          event.assetSymbol ? (
+            formatToken(event.amountMotes, event.assetDecimals ?? 9, event.assetSymbol)
+          ) : (
+            formatCspr(event.amountMotes)
+          )
+        ) : (
+          <span className="text-mut">—</span>
+        )}
       </td>
       <td className="whitespace-nowrap py-3 pr-4">
         <span className="inline-flex items-center gap-1.5 text-[11px] text-mut">

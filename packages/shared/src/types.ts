@@ -29,6 +29,13 @@ export interface ActivityEvent {
   txHash: string;
   serviceId: number | null;
   amountMotes?: Motes;
+  /**
+   * Token (CEP-18) payments only — the facilitator-rail settlement asset. When
+   * set, `amountMotes` is the token's atomic amount; render with these instead of
+   * treating it as native CSPR. Absent ⇒ native CSPR payment.
+   */
+  assetSymbol?: string;
+  assetDecimals?: number;
   success?: boolean;
   timestamp: number;
   detail: string;            // human-readable one-liner for the dashboard feed
