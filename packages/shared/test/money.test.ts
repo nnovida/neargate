@@ -128,8 +128,8 @@ describe('formatUnits / formatToken (facilitator CEP-18 amounts)', () => {
   });
 
   it('formatToken appends the symbol', () => {
-    expect(formatToken('100000000', 9, 'AGXUSD')).toBe('0.1 AGXUSD');
-    expect(formatToken('2500000000', 9, 'AGXUSD')).toBe('2.5 AGXUSD');
+    expect(formatToken('100000000', 9, 'WCSPR')).toBe('0.1 WCSPR');
+    expect(formatToken('2500000000', 9, 'WCSPR')).toBe('2.5 WCSPR');
   });
 
   it('formatUnits rejects a non-integer atomic string', () => {

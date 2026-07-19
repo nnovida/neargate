@@ -92,7 +92,7 @@ export function formatUnits(atomic: string, decimals: number): string {
   return `${whole.toString()}.${fracStr}`;
 }
 
-/** Human-readable token amount, e.g. formatToken("100000000", 9, "AGXUSD") === "0.1 AGXUSD". */
+/** Human-readable token amount, e.g. formatToken("100000000", 9, "WCSPR") === "0.1 WCSPR". */
 export function formatToken(atomic: string, decimals: number, symbol: string): string {
   return `${formatUnits(atomic, decimals)} ${symbol}`;
 }

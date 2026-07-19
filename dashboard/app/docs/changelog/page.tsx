@@ -16,12 +16,23 @@ export default function Page() {
         lede="Notable changes to AgentGate — the CLI, gateway, smart contracts and docs — newest first."
       />
 
+      <H2 id="2026-07-19-wcspr">2026-07-19 — Facilitator rail settles in WCSPR</H2>
+      <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-mut">
+        <li>
+          <strong className="text-white">Canonical wrapped-CSPR token.</strong> The official x402
+          (facilitator) rail now settles in <M>WCSPR</M> (Wrapped CSPR) — the canonical CEP-18 token
+          used by the make-software Casper x402 stack — instead of a bespoke test token. Buyers pay
+          with WCSPR minted 1:1 from CSPR on <M>testnet.cspr.trade</M>. Config-only change (the
+          <M>FACILITATOR_SERVICES</M> asset + EIP-712 domain); the native-CSPR rail is unchanged.
+        </li>
+      </ul>
+
       <H2 id="2026-07-18-v016">2026-07-18 — CLI v0.1.6</H2>
       <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-mut">
         <li>
           <strong className="text-white">Facilitator buy shows the token amount.</strong> On the
           facilitator (x402 v2) rail, <M>agentgate buy</M> and the MCP <M>agentgate_buy</M> tool now
-          print the real CEP-18 charge (e.g. <M>0.1 AGXUSD</M>) instead of the on-chain nominal CSPR
+          print the real CEP-18 charge (e.g. <M>0.1 WCSPR</M>) instead of the on-chain nominal CSPR
           price. Adds shared <M>formatUnits</M>/<M>formatToken</M> helpers; native-rail output is
           unchanged.
         </li>

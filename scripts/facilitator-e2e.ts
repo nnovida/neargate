@@ -4,12 +4,12 @@
  * Self-contained + isolated from the public gateway: boots an in-process
  * middleware on an ephemeral port with a TEMP upstream file, a live chain
  * client, and the real CSPR.cloud facilitator; flags service #5 as
- * facilitator-enabled (pays in the AGXUSD test token), then drives the real
- * client through the full loop:
+ * facilitator-enabled (pays in WCSPR — the canonical Wrapped CSPR token), then
+ * drives the real client through the full loop:
  *   buyer signs EIP-712 -> PAYMENT-SIGNATURE -> gateway verify+settle via the
  *   facilitator -> proxy -> on-chain attestation (settle tx as the payment id).
  *
- * Prereq: buyer holds AGXUSD (funded separately). Env from `.env` (live).
+ * Prereq: buyer holds WCSPR (swap CSPR->WCSPR on testnet.cspr.trade). Env from `.env` (live).
  */
 import os from 'node:os';
 import path from 'node:path';
@@ -20,13 +20,13 @@ import { startServer } from '@agentgate/middleware';
 import { createAgentGateClient } from '@agentgate/client';
 
 const SERVICE_ID = 5;
-const AGXUSD = 'f38458b4a595a03b84a924330b3e25bd136d53562c7eb0c9ab602aef2ab8f9be';
+const WCSPR = '3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e';
 
 process.env.FACILITATOR_SERVICES = JSON.stringify({
   [SERVICE_ID]: {
-    asset: AGXUSD,
-    amount: '100000000', // 0.1 AGXUSD (9 decimals)
-    token: { name: 'AgentGate X402 Test USD', version: '1', decimals: 9, symbol: 'AGXUSD' },
+    asset: WCSPR,
+    amount: '100000000', // 0.1 WCSPR (9 decimals)
+    token: { name: 'Wrapped CSPR', version: '1', decimals: 9, symbol: 'WCSPR' },
   },
 });
 
