@@ -280,6 +280,37 @@ export default function ConfigurationPage() {
             'yes (for the CLI / seller)',
             'Path to the PEM key for the CLI / seller — required to run agentgate wrap (register a service) in live mode.',
           ],
+          [
+            <M key="v">FACILITATOR_URL</M>,
+            <M key="d">https://x402-facilitator.cspr.cloud</M>,
+            'no (has default)',
+            <span key="m">
+              Hosted Casper x402 <M>facilitator</M> base URL (<M>/verify</M>, <M>/settle</M>) for the
+              CEP-18 + EIP-712 rail. Auth reuses <M>CSPR_CLOUD_API_KEY</M>; the facilitator sponsors
+              settlement gas.
+            </span>,
+          ],
+          [
+            <M key="v">FACILITATOR_SERVICES</M>,
+            <span key="d">
+              <M>&apos;&apos;</M> (empty)
+            </span>,
+            'no (opt-in)',
+            <span key="m">
+              JSON map opting a service into the official x402 facilitator rail:{' '}
+              <M>{'{"<id>":{"asset":"<cep18-pkg-hash>","amount":"<atomic>","token":{"name","version","decimals","symbol"}}}'}</M>
+              . A listed service runs its whole <M>402 → pay → settle → attest</M> loop through the
+              facilitator (CEP-18, no 2.5-CSPR floor); unlisted services stay on the native-CSPR rail.
+              The live deployment settles in <M>WCSPR</M> (pkg{' '}
+              <M>3d80df21…</M>) — see <DocLink href="/docs/deployment">Deploy</DocLink>.
+            </span>,
+          ],
+          [
+            <M key="v">BUYER_KEY_ALGO</M>,
+            <M key="d">secp256k1</M>,
+            'no (has default)',
+            'Key algorithm the buyer uses to sign the facilitator rail’s EIP-712 authorization: ed25519 or secp256k1.',
+          ],
         ]}
       />
       <Callout tone="info" title="Signer paths are not validated at load time">

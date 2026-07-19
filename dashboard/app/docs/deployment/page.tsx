@@ -382,7 +382,10 @@ export default function DeploymentPage() {
               A listed service settles through the CSPR.cloud <M>facilitator</M> (
               <M>FACILITATOR_URL</M>, default <M>https://x402-facilitator.cspr.cloud</M>, auth reuses{' '}
               <M>CSPR_CLOUD_API_KEY</M>); unlisted services stay on the native-CSPR rail. Buyers select
-              the signing key algorithm with <M>BUYER_KEY_ALGO</M> (default <M>secp256k1</M>).
+              the signing key algorithm with <M>BUYER_KEY_ALGO</M> (default <M>secp256k1</M>). The
+              live deployment settles in <M>WCSPR</M> (Wrapped CSPR, pkg <M>3d80df21…</M>), which
+              buyers mint 1:1 from CSPR on <M>testnet.cspr.trade</M> — though the rail accepts any
+              CEP-18 token.
             </span>,
           ],
           [

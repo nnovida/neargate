@@ -253,7 +253,9 @@ export default function Page() {
       <Callout tone="warn" title="LIVE NETWORK MINIMUM">
         Casper rejects native transfers below <M>2.5 CSPR</M> on live networks. On{' '}
         <M>casper-test</M> a 0.5 CSPR invoice is still settled with a 2.5 CSPR transfer — set{' '}
-        <M>--budget</M> for live runs accordingly. Mock mode has no minimum.
+        <M>--budget</M> for live runs accordingly. Mock mode has no minimum. Facilitator-enabled
+        services sidestep this floor entirely: they settle in <M>WCSPR</M> (a CEP-18 token the buyer
+        mints 1:1 from CSPR on <M>testnet.cspr.trade</M>), so sub-CSPR micropayments work there.
       </Callout>
       <P>
         Both refusals are non-fatal: the agent prints the reason, returns <M>paid: false</M> /{' '}

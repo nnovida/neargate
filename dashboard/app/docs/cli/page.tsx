@@ -644,8 +644,9 @@ export default function Page() {
       <P>
         <M>--pem</M> (or <M>BUYER_SIGNER_PEM_PATH</M>) supplies the <em>buyer</em> signer used only
         by <M>agentgate_buy</M> — the read tools ignore it, so <M>mcp</M> starts fine with no key.
-        On start the server prints a readiness line to <strong className="text-white">stderr</strong>
-        (v0.1.4); <M>stdout</M> is the JSON-RPC channel, so nothing else is ever written there.
+        On start the server prints a readiness line — including its real package version — to{' '}
+        <strong className="text-white">stderr</strong>; <M>stdout</M> is the JSON-RPC channel, so
+        nothing else is ever written there.
       </P>
       <H3 id="mcp-claude-desktop">Claude Desktop</H3>
       <P>

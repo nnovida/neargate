@@ -76,8 +76,10 @@ export default function Page() {
           <M>facilitator</M> (CSPR.cloud): a <strong className="text-white">CEP-18</strong> token moved
           by an <strong className="text-white">EIP-712</strong> authorization (x402 v2,{' '}
           <M>PAYMENT-SIGNATURE</M> header), with gas sponsored by the facilitator. CEP-18 has no
-          2.5-CSPR floor, so this rail supports true sub-CSPR micropayments. Either way the gateway
-          custodies nothing. See <DocLink href="/docs/deployment">Deploy</DocLink> and the{' '}
+          2.5-CSPR floor, so this rail supports true sub-CSPR micropayments. The live deployment
+          settles in <M>WCSPR</M> (Wrapped CSPR, mintable 1:1 from CSPR on <M>testnet.cspr.trade</M>),
+          though the rail accepts any CEP-18 token. Either way the gateway custodies nothing. See{' '}
+          <DocLink href="/docs/deployment">Deploy</DocLink> and the{' '}
           <DocLink href="/docs/changelog">changelog</DocLink>.
         </P>
       </Callout>
