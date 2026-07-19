@@ -38,6 +38,8 @@ export interface ServiceDetailResponse {
 export interface ActivityResponse {
   network: string;
   events: ActivityEvent[];
+  /** True when served from the server cache because a live refresh failed (e.g. CSPR.cloud quota). */
+  stale?: boolean;
 }
 
 export interface StatsResponse {

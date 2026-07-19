@@ -48,6 +48,11 @@ export function isChainDown(err: unknown): boolean {
   return err instanceof ApiError && (err.code === 'chain_unreachable' || err.status === 0);
 }
 
+/** True when the upstream data provider (CSPR.cloud) rate-limited / hit its quota. */
+export function isRateLimited(err: unknown): boolean {
+  return err instanceof ApiError && (err.code === 'rate_limited' || err.status === 429);
+}
+
 /** True when the API reported a missing resource (e.g. unknown service id). */
 export function isNotFound(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;

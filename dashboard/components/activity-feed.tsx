@@ -5,7 +5,7 @@ import Link from 'next/link';
 import useSWR from 'swr';
 import type { ActivityEvent } from '@agentgate/shared';
 import { addMotes, formatCspr } from '@agentgate/shared';
-import { fetcher, isChainDown } from '@/lib/fetcher';
+import { fetcher, isChainDown, isRateLimited } from '@/lib/fetcher';
 import { formatDateTime, formatInt, svcLabel, timeAgo } from '@/lib/format';
 import type { ActivityResponse } from '@/lib/api-types';
 import { TxHash } from '@/components/tx-hash';
@@ -181,17 +181,34 @@ function FeedSkeleton() {
   );
 }
 
-/** /activity ledger — polls /api/activity every 5 s. */
+/** Soft, transient rate-limit state — the upstream history provider hit its quota. */
+function RateLimited() {
+  return (
+    <div className="panel px-6 py-14 text-center">
+      <p className="microlabel text-warn">rate limited</p>
+      <p className="mx-auto mt-3 max-w-md font-display text-lg text-white">
+        Live history is temporarily rate-limited
+      </p>
+      <p className="mx-auto mt-3 max-w-md text-sm text-mut">
+        The on-chain history provider (CSPR.cloud) hit its request quota. This view refreshes
+        automatically once the quota window resets — on-chain data and payments are unaffected.
+      </p>
+    </div>
+  );
+}
+
+/** /activity ledger — polls /api/activity (server-cached ~30 s). */
 export function ActivityFeed() {
   const [filter, setFilter] = useState<Kind | 'all'>('all');
   const { data, error, isLoading } = useSWR<ActivityResponse>('/api/activity?limit=100', fetcher, {
-    refreshInterval: 5000,
+    refreshInterval: 30000,
     keepPreviousData: true,
   });
 
   if (!data) {
     if (isLoading) return <FeedSkeleton />;
     if (error) {
+      if (isRateLimited(error)) return <RateLimited />;
       return isChainDown(error) ? (
         <>
           <ChainDownBanner />
@@ -215,7 +232,14 @@ export function ActivityFeed() {
 
   return (
     <div className="space-y-6">
-      {error ? <ChainDownBanner /> : null}
+      {data.stale ? (
+        <p className="border border-warn/30 bg-warn/5 px-4 py-2 text-xs text-warn">
+          Showing cached activity — the live history refresh is rate-limited (CSPR.cloud quota).
+          Retrying automatically.
+        </p>
+      ) : error ? (
+        <ChainDownBanner />
+      ) : null}
 
       {events.length === 0 ? (
         <div className="panel px-6 py-14 text-center">

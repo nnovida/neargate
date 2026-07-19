@@ -54,6 +54,10 @@ export function toApiFailure(err: unknown, route: string): ApiFailure {
     log.error('config invalid', { route, message });
     return { status: 500, body: { error: 'config_invalid' } };
   }
+  if (isAgentGateError(err) && err.code === 'CSPR_CLOUD_RATE_LIMITED') {
+    log.warn('cspr.cloud rate limited', { route, message });
+    return { status: 429, body: { error: 'rate_limited' } };
+  }
   log.warn('chain unreachable', { route, message });
   return { status: 503, body: { error: 'chain_unreachable' } };
 }

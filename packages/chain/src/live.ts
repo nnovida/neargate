@@ -16,7 +16,7 @@ import {
   RpcClient,
   AccountHash,
 } from './sdk';
-import { AgentGateError, stripTrailingSlashes } from '@agentgate/shared';
+import { AgentGateError, formatCspr, stripTrailingSlashes } from '@agentgate/shared';
 import type {
   ActivityEvent,
   AgentGateConfig,
@@ -427,6 +427,13 @@ export class LiveCasperClient implements ChainClient {
       return null;
     }
     const text = await res.text();
+    if (res.status === 429) {
+      throw new AgentGateError(
+        'CSPR_CLOUD_RATE_LIMITED',
+        `CSPR.cloud rate limit / daily quota exceeded (GET ${path}): ${text.slice(0, 160)}`,
+        429,
+      );
+    }
     if (!res.ok) {
       throw new AgentGateError(
         'CSPR_CLOUD_ERROR',
@@ -793,10 +800,20 @@ export class LiveCasperClient implements ChainClient {
     for (const target of targets) {
       const hex = normalizeAccountHashHex(target);
       // ⚠️ verify against deployed contract — CSPR.cloud account-transfers endpoint shape.
-      const transfers = await this.cloudGet<CloudListEnvelope<CloudTransfer>>(
-        `/accounts/${hex}/transfers?page_size=20`,
-        true,
-      );
+      // Best-effort per target: a failed/rate-limited transfers read for one
+      // payment target must not blank the whole feed — skip it and keep the
+      // registration/attestation events (and other targets') we already have.
+      let transfers: CloudListEnvelope<CloudTransfer> | null;
+      try {
+        transfers = await this.cloudGet<CloudListEnvelope<CloudTransfer>>(
+          `/accounts/${hex}/transfers?page_size=20`,
+          true,
+        );
+      } catch {
+        continue;
+      }
+      const th = target.replace(/^account-hash-/i, '');
+      const shortTarget = th.length > 16 ? `${th.slice(0, 8)}…${th.slice(-4)}` : target;
       for (const transfer of transfers?.data ?? []) {
         if (normalizeAccountHashHex(transfer.to_account_hash ?? '') !== hex) continue;
         const service = services.find((s) => normalizeAccountHashHex(s.paymentTarget) === hex);
@@ -807,7 +824,7 @@ export class LiveCasperClient implements ChainClient {
           serviceId: service?.id ?? null,
           amountMotes: amount.toString(),
           timestamp: parseCloudTimestamp(transfer.timestamp),
-          detail: `payment of ${amount} motes to ${target}`,
+          detail: `payment of ${formatCspr(amount.toString())} to ${shortTarget}`,
         });
       }
     }
