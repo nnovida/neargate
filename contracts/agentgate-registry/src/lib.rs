@@ -22,6 +22,6 @@ extern crate alloc;
 pub mod registry;
 
 pub use registry::{
-    AgentGateRegistry, Attestation, AttestationRecorded, Error, Service, ServiceRegistered,
-    ServiceStatusChanged,
+    AgentGateRegistry, Attestation, AttestationRecorded, Error, PaymentOption, Service,
+    ServiceRegistered, ServiceStatusChanged,
 };

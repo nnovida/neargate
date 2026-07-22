@@ -35,6 +35,131 @@ pub const MIN_PRICE_MOTES: u64 = 1000;
 /// Attestation list cap per service: keep only the last 100, drop the oldest.
 pub const MAX_ATTESTATIONS: usize = 100;
 
+/// One accepted way to pay for a call (an entry in a service's `accepts` list).
+/// Mirrors an x402 `accepts[]` option. `asset` is "native" for CSPR or a CEP-18
+/// package hash string ("hash-<64hex>") for a token (e.g. WCSPR). `amount` is in
+/// the asset's atomic units. `name`/`version` are the EIP-712 domain fields the
+/// facilitator rail needs (cosmetic for native).
+///
+/// Hand-rolled instead of `#[odra::odra_type]`: that macro always reports
+/// `CLType::Any` for a named-field struct, but `#[odra::event]`
+/// (`casper-event-standard`) reverts with `ExecutionError::Formatting` at
+/// `emit_event` time if ANY field's `CLType` contains `Any` anywhere in its
+/// tree — and `ServiceRegistered.accepts: Vec<PaymentOption>` is exactly that.
+/// Every impl below is otherwise byte-for-byte what the macro generates;
+/// `CLTyped` alone is swapped for an accurate nested-tuple description —
+/// `((asset, amount, decimals), (symbol, name, version))` — which stands in
+/// losslessly for the 6 fields (`CLType` tuples cap out at 3 elements) and
+/// serializes identically to plain field concatenation, so it is also the
+/// correct declared shape for a future off-chain byte parser.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PaymentOption {
+    pub asset: String,
+    pub amount: U512,
+    pub decimals: u8,
+    pub symbol: String,
+    pub name: String,
+    pub version: String,
+}
+
+impl odra::casper_types::bytesrepr::ToBytes for PaymentOption {
+    fn to_bytes(&self) -> Result<Vec<u8>, odra::casper_types::bytesrepr::Error> {
+        let mut result = Vec::with_capacity(self.serialized_length());
+        result.extend(odra::casper_types::bytesrepr::ToBytes::to_bytes(&self.asset)?);
+        result.extend(odra::casper_types::bytesrepr::ToBytes::to_bytes(&self.amount)?);
+        result.extend(odra::casper_types::bytesrepr::ToBytes::to_bytes(&self.decimals)?);
+        result.extend(odra::casper_types::bytesrepr::ToBytes::to_bytes(&self.symbol)?);
+        result.extend(odra::casper_types::bytesrepr::ToBytes::to_bytes(&self.name)?);
+        result.extend(odra::casper_types::bytesrepr::ToBytes::to_bytes(&self.version)?);
+        Ok(result)
+    }
+
+    fn serialized_length(&self) -> usize {
+        self.asset.serialized_length()
+            + self.amount.serialized_length()
+            + self.decimals.serialized_length()
+            + self.symbol.serialized_length()
+            + self.name.serialized_length()
+            + self.version.serialized_length()
+    }
+}
+
+impl odra::casper_types::bytesrepr::FromBytes for PaymentOption {
+    fn from_bytes(bytes: &[u8]) -> Result<(Self, &[u8]), odra::casper_types::bytesrepr::Error> {
+        let (asset, bytes) = odra::casper_types::bytesrepr::FromBytes::from_bytes(bytes)?;
+        let (amount, bytes) = odra::casper_types::bytesrepr::FromBytes::from_bytes(bytes)?;
+        let (decimals, bytes) = odra::casper_types::bytesrepr::FromBytes::from_bytes(bytes)?;
+        let (symbol, bytes) = odra::casper_types::bytesrepr::FromBytes::from_bytes(bytes)?;
+        let (name, bytes) = odra::casper_types::bytesrepr::FromBytes::from_bytes(bytes)?;
+        let (version, bytes) = odra::casper_types::bytesrepr::FromBytes::from_bytes(bytes)?;
+        Ok((
+            Self { asset, amount, decimals, symbol, name, version },
+            bytes,
+        ))
+    }
+}
+
+impl odra::casper_types::CLTyped for PaymentOption {
+    fn cl_type() -> odra::casper_types::CLType {
+        use odra::casper_types::CLType;
+        CLType::Tuple2([
+            Box::new(CLType::Tuple3([
+                Box::new(CLType::String),
+                Box::new(CLType::U512),
+                Box::new(CLType::U8),
+            ])),
+            Box::new(CLType::Tuple3([
+                Box::new(CLType::String),
+                Box::new(CLType::String),
+                Box::new(CLType::String),
+            ])),
+        ])
+    }
+}
+
+impl odra::contract_def::HasEvents for PaymentOption {
+    fn events() -> Vec<odra::contract_def::Event> {
+        Vec::new()
+    }
+
+    fn event_schemas() -> BTreeMap<String, odra::casper_event_standard::Schema> {
+        BTreeMap::new()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl odra::schema::SchemaCustomTypes for PaymentOption {
+    fn schema_types() -> Vec<Option<odra::schema::casper_contract_schema::CustomType>> {
+        BTreeSet::<Option<odra::schema::casper_contract_schema::CustomType>>::new()
+            .into_iter()
+            .chain(vec![Some(odra::schema::custom_struct(
+                "PaymentOption",
+                vec![
+                    odra::schema::struct_member::<String>("asset"),
+                    odra::schema::struct_member::<U512>("amount"),
+                    odra::schema::struct_member::<u8>("decimals"),
+                    odra::schema::struct_member::<String>("symbol"),
+                    odra::schema::struct_member::<String>("name"),
+                    odra::schema::struct_member::<String>("version"),
+                ],
+            ))])
+            .chain(<String as odra::schema::SchemaCustomTypes>::schema_types())
+            .chain(<U512 as odra::schema::SchemaCustomTypes>::schema_types())
+            .chain(<u8 as odra::schema::SchemaCustomTypes>::schema_types())
+            .collect()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl odra::schema::NamedCLTyped for PaymentOption {
+    fn ty() -> odra::schema::casper_contract_schema::NamedCLType {
+        odra::schema::casper_contract_schema::NamedCLType::Custom(String::from("PaymentOption"))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl odra::schema::SchemaCustomElement for PaymentOption {}
+
 /// On-chain record describing one registered (wrapped) service.
 #[odra::odra_type]
 pub struct Service {
@@ -45,8 +170,9 @@ pub struct Service {
     /// Base URL of the AgentGate middleware that fronts this service.
     /// Readers compute the public endpoint as `{gateway_base_url}/svc/{id}`.
     pub gateway_base_url: String,
-    /// Price per call in motes of native CSPR (>= 1000).
-    pub price: U512,
+    /// Accepted payment options (non-empty). The authoritative price list;
+    /// readers derive the x402 402 `accepts[]` directly from this.
+    pub accepts: Vec<PaymentOption>,
     /// Account that receives the 402 payments (the x402 `payTo`).
     pub payment_target: Address,
     /// Service owner — the registration caller. May toggle `active` and
@@ -82,8 +208,8 @@ pub struct ServiceRegistered {
     pub owner: Address,
     /// Service name.
     pub name: String,
-    /// Price per call in motes.
-    pub price: U512,
+    /// Accepted payment options at registration.
+    pub accepts: Vec<PaymentOption>,
     /// Payment target account.
     pub payment_target: Address,
     /// Authorised attestor key.
@@ -169,22 +295,28 @@ impl AgentGateRegistry {
     /// assigned 1-based service id.
     ///
     /// Reverts with [`Error::EmptyName`] if `name` is empty/whitespace-only,
-    /// or [`Error::InvalidPrice`] if `price < 1000` motes.
+    /// or [`Error::InvalidPrice`] if `accepts` is empty or any option's
+    /// `amount < 1000` motes.
     /// Emits [`ServiceRegistered`].
     pub fn register_service(
         &mut self,
         name: String,
         description: String,
         gateway_base_url: String,
-        price: U512,
+        accepts: Vec<PaymentOption>,
         payment_target: Address,
         attestor: Address,
     ) -> u64 {
         if name.trim().is_empty() {
             self.env().revert(Error::EmptyName);
         }
-        if price < U512::from(MIN_PRICE_MOTES) {
+        if accepts.is_empty() {
             self.env().revert(Error::InvalidPrice);
+        }
+        for opt in accepts.iter() {
+            if opt.amount < U512::from(MIN_PRICE_MOTES) {
+                self.env().revert(Error::InvalidPrice);
+            }
         }
 
         // 1-based ids: bump the counter first, then assign it as the id. The
@@ -199,7 +331,7 @@ impl AgentGateRegistry {
             service_id,
             owner,
             name: name.clone(),
-            price,
+            accepts: accepts.clone(),
             payment_target,
             attestor,
         });
@@ -210,7 +342,7 @@ impl AgentGateRegistry {
                 name,
                 description,
                 gateway_base_url,
-                price,
+                accepts,
                 payment_target,
                 owner,
                 attestor,
@@ -371,13 +503,35 @@ mod tests {
         (env, registry)
     }
 
-    /// Register a default service (caller = current env caller) and return its id.
+    // Test option constructors.
+    fn native(amount: u64) -> PaymentOption {
+        PaymentOption {
+            asset: "native".to_string(),
+            amount: U512::from(amount),
+            decimals: 9,
+            symbol: "CSPR".to_string(),
+            name: "CSPR".to_string(),
+            version: String::new(),
+        }
+    }
+
+    fn wcspr(amount: u64) -> PaymentOption {
+        PaymentOption {
+            asset: "hash-3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e".to_string(),
+            amount: U512::from(amount),
+            decimals: 9,
+            symbol: "WCSPR".to_string(),
+            name: "Wrapped CSPR".to_string(),
+            version: "1".to_string(),
+        }
+    }
+
     fn register(env: &HostEnv, registry: &mut AgentGateRegistryHostRef) -> u64 {
         registry.register_service(
             "USD/IDR + Gold Oracle".to_string(),
             "RWA feed: USD/IDR rate and gold spot with confidence".to_string(),
             "http://localhost:4021".to_string(),
-            U512::from(500_000_000u64), // 0.5 CSPR
+            vec![native(500_000_000)],
             env.get_account(PAYMENT_TARGET),
             env.get_account(ATTESTOR),
         )
@@ -401,7 +555,7 @@ mod tests {
         );
         // Base URL stored verbatim — readers compute `{base}/svc/{id}`.
         assert_eq!(service.gateway_base_url, "http://localhost:4021");
-        assert_eq!(service.price, U512::from(500_000_000u64));
+        assert_eq!(service.accepts, vec![native(500_000_000)]);
         assert_eq!(service.payment_target, env.get_account(PAYMENT_TARGET));
         assert_eq!(service.owner, env.get_account(OWNER)); // caller becomes owner
         assert_eq!(service.attestor, env.get_account(ATTESTOR));
@@ -414,7 +568,7 @@ mod tests {
                 service_id: 1,
                 owner: env.get_account(OWNER),
                 name: "USD/IDR + Gold Oracle".to_string(),
-                price: U512::from(500_000_000u64),
+                accepts: vec![native(500_000_000)],
                 payment_target: env.get_account(PAYMENT_TARGET),
                 attestor: env.get_account(ATTESTOR),
             }
@@ -444,7 +598,7 @@ mod tests {
                         bad_name.to_string(),
                         "desc".to_string(),
                         "http://localhost:4021".to_string(),
-                        U512::from(MIN_PRICE_MOTES),
+                        vec![native(MIN_PRICE_MOTES)],
                         env.get_account(PAYMENT_TARGET),
                         env.get_account(ATTESTOR),
                     )
@@ -457,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn price_below_minimum_reverts_and_minimum_is_accepted() {
+    fn amount_below_minimum_reverts_and_minimum_is_accepted() {
         let (env, mut registry) = setup();
 
         // 999 motes — below the 1000-motes floor.
@@ -467,7 +621,7 @@ mod tests {
                     "Cheap".to_string(),
                     "desc".to_string(),
                     "http://localhost:4021".to_string(),
-                    U512::from(MIN_PRICE_MOTES - 1),
+                    vec![native(MIN_PRICE_MOTES - 1)],
                     env.get_account(PAYMENT_TARGET),
                     env.get_account(ATTESTOR),
                 )
@@ -480,11 +634,49 @@ mod tests {
             "Min price".to_string(),
             "desc".to_string(),
             "http://localhost:4021".to_string(),
-            U512::from(MIN_PRICE_MOTES),
+            vec![native(MIN_PRICE_MOTES)],
             env.get_account(PAYMENT_TARGET),
             env.get_account(ATTESTOR),
         );
-        assert_eq!(registry.get_service(id).unwrap().price, U512::from(1000u64));
+        assert_eq!(registry.get_service(id).unwrap().accepts, vec![native(1000)]);
+    }
+
+    #[test]
+    fn empty_accepts_reverts() {
+        let (env, mut registry) = setup();
+        assert_eq!(
+            registry
+                .try_register_service(
+                    "No options".to_string(),
+                    "desc".to_string(),
+                    "http://localhost:4021".to_string(),
+                    vec![],
+                    env.get_account(PAYMENT_TARGET),
+                    env.get_account(ATTESTOR),
+                )
+                .unwrap_err(),
+            Error::InvalidPrice.into()
+        );
+        assert_eq!(registry.services_count(), 0);
+    }
+
+    #[test]
+    fn multi_asset_accepts_round_trip() {
+        let (env, mut registry) = setup();
+        let id = registry.register_service(
+            "Global Currency Feed".to_string(),
+            "Live USD FX; pay in CSPR or WCSPR".to_string(),
+            "http://localhost:4021".to_string(),
+            vec![native(2_500_000_000), wcspr(100_000_000)],
+            env.get_account(PAYMENT_TARGET),
+            env.get_account(ATTESTOR),
+        );
+        let service = registry.get_service(id).unwrap();
+        assert_eq!(service.accepts.len(), 2);
+        assert_eq!(service.accepts[0], native(2_500_000_000));
+        assert_eq!(service.accepts[1], wcspr(100_000_000));
+        assert_eq!(service.accepts[1].symbol, "WCSPR");
+        assert_eq!(service.accepts[1].name, "Wrapped CSPR");
     }
 
     // ───────────────────────── read defaults ─────────────────────────
