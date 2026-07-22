@@ -65,6 +65,44 @@
     },
     {
       "struct": {
+        "name": "PaymentOption",
+        "description": null,
+        "members": [
+          {
+            "name": "asset",
+            "description": null,
+            "ty": "String"
+          },
+          {
+            "name": "amount",
+            "description": null,
+            "ty": "U512"
+          },
+          {
+            "name": "decimals",
+            "description": null,
+            "ty": "U8"
+          },
+          {
+            "name": "symbol",
+            "description": null,
+            "ty": "String"
+          },
+          {
+            "name": "name",
+            "description": null,
+            "ty": "String"
+          },
+          {
+            "name": "version",
+            "description": null,
+            "ty": "String"
+          }
+        ]
+      }
+    },
+    {
+      "struct": {
         "name": "Service",
         "description": null,
         "members": [
@@ -84,9 +122,11 @@
             "ty": "String"
           },
           {
-            "name": "price",
+            "name": "accepts",
             "description": null,
-            "ty": "U512"
+            "ty": {
+              "List": "PaymentOption"
+            }
           },
           {
             "name": "payment_target",
@@ -155,9 +195,11 @@
             "ty": "String"
           },
           {
-            "name": "price",
+            "name": "accepts",
             "description": null,
-            "ty": "U512"
+            "ty": {
+              "List": "PaymentOption"
+            }
           },
           {
             "name": "payment_target",
@@ -248,9 +290,11 @@
           "optional": false
         },
         {
-          "name": "price",
+          "name": "accepts",
           "description": null,
-          "ty": "U512",
+          "ty": {
+            "List": "PaymentOption"
+          },
           "optional": false
         },
         {
