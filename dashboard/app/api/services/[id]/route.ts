@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { parseMotes, trustTier, type Motes } from '@agentgate/shared';
+import { facilitatorConfigFromAccepts, parseMotes, trustTier, type Motes } from '@agentgate/shared';
 import { getChain, parseServiceId, toApiFailure } from '@/lib/server/chain';
 import type { ServiceDetailResponse } from '@/lib/api-types';
 
@@ -44,6 +44,8 @@ export async function GET(
       }
     }
 
+    // Facilitator rail: env override first, else derived from on-chain accepts[].
+    const fac = config.facilitatorServices[id] ?? facilitatorConfigFromAccepts(service.accepts);
     const body: ServiceDetailResponse = {
       network: chain.network,
       mode: config.mode,
@@ -53,6 +55,9 @@ export async function GET(
       attestations,
       revenueMotes,
       balanceMotes,
+      ...(fac
+        ? { facilitator: { amount: fac.amount, symbol: fac.token.symbol, decimals: fac.token.decimals } }
+        : {}),
     };
     return NextResponse.json(body);
   } catch (err) {

@@ -11,10 +11,25 @@ import type {
   TrustTier,
 } from '@agentgate/shared';
 
+export interface FacilitatorPrice {
+  /** Atomic token amount charged on the x402 facilitator rail (decimal string). */
+  amount: Motes;
+  /** Token symbol, e.g. "WCSPR". */
+  symbol: string;
+  /** Token decimals for display (WCSPR = 9). */
+  decimals: number;
+}
+
 export interface CatalogEntry {
   service: ServiceRecord;
   score: ServiceScore;
   trustTier: TrustTier;
+  /**
+   * Set when the service settles on the x402 facilitator rail (a CEP-18 token),
+   * from the gateway's FACILITATOR_SERVICES config. The on-chain `priceMotes` is
+   * the native-CSPR nominal; this is what a facilitator buy actually charges.
+   */
+  facilitator?: FacilitatorPrice;
 }
 
 export interface ServicesResponse {
@@ -33,6 +48,8 @@ export interface ServiceDetailResponse {
   revenueMotes: Motes;
   /** getBalance(paymentTarget) — mock mode only, null in live or on failure. */
   balanceMotes: Motes | null;
+  /** Facilitator-rail token price, when this service settles in a CEP-18 token. */
+  facilitator?: FacilitatorPrice;
 }
 
 export interface ActivityResponse {

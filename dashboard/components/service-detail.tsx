@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import useSWR from 'swr';
-import { formatCspr, motesToCspr } from '@agentgate/shared';
+import { formatCspr, formatToken, motesToCspr } from '@agentgate/shared';
 import { fetcher, isChainDown, isNotFound } from '@/lib/fetcher';
 import { formatDateTime, formatInt, svcLabel, timeAgo, truncateMiddle } from '@/lib/format';
 import type { ServiceDetailResponse } from '@/lib/api-types';
@@ -119,7 +119,7 @@ export function ServiceDetail({ id }: { id: number }) {
     return null;
   }
 
-  const { service, score, trustTier, attestations, revenueMotes, balanceMotes, network, mode } =
+  const { service, score, trustTier, attestations, revenueMotes, balanceMotes, network, mode, facilitator } =
     data;
 
   return (
@@ -165,7 +165,14 @@ export function ServiceDetail({ id }: { id: number }) {
               value={service.endpointUrl}
               copyValue={service.endpointUrl}
             />
-            <MetaRow label="price / call" value={formatCspr(service.priceMotes)} />
+            <MetaRow
+              label="price / call"
+              value={
+                facilitator
+                  ? `${formatToken(facilitator.amount, facilitator.decimals, facilitator.symbol)} · via x402 facilitator`
+                  : formatCspr(service.priceMotes)
+              }
+            />
             <MetaRow
               label="payment target"
               value={truncateMiddle(service.paymentTarget, 22, 8)}

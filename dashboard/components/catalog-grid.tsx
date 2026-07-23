@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import useSWR from 'swr';
-import { formatCspr } from '@agentgate/shared';
+import { formatCspr, formatToken } from '@agentgate/shared';
 import { fetcher, isChainDown } from '@/lib/fetcher';
 import { formatInt, svcLabel } from '@/lib/format';
 import type { CatalogEntry, ServicesResponse } from '@/lib/api-types';
@@ -86,7 +86,16 @@ function ServiceCard({ entry }: { entry: CatalogEntry }) {
       <div className="mt-6 flex items-end justify-between gap-3 border-t border-line pt-4">
         <div>
           <p className="microlabel">price / call</p>
-          <p className="mt-1 font-mono text-xl text-white">{formatCspr(service.priceMotes)}</p>
+          {entry.facilitator ? (
+            <>
+              <p className="mt-1 font-mono text-xl text-white">
+                {formatToken(entry.facilitator.amount, entry.facilitator.decimals, entry.facilitator.symbol)}
+              </p>
+              <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-accent">via x402 facilitator</p>
+            </>
+          ) : (
+            <p className="mt-1 font-mono text-xl text-white">{formatCspr(service.priceMotes)}</p>
+          )}
         </div>
         <div className="flex flex-col items-end gap-1.5">
           <TrustBadge tier={trustTier} />
@@ -126,7 +135,16 @@ function ServiceRow({ entry }: { entry: CatalogEntry }) {
       {/* price */}
       <div className="shrink-0 sm:w-28 sm:text-right">
         <span className="microlabel sm:hidden">price / call · </span>
-        <span className="font-mono text-sm text-white">{formatCspr(service.priceMotes)}</span>
+        {entry.facilitator ? (
+          <span
+            className="font-mono text-sm text-white"
+            title="settles via the x402 facilitator (CEP-18 token)"
+          >
+            {formatToken(entry.facilitator.amount, entry.facilitator.decimals, entry.facilitator.symbol)}
+          </span>
+        ) : (
+          <span className="font-mono text-sm text-white">{formatCspr(service.priceMotes)}</span>
+        )}
       </div>
 
       {/* trust */}
