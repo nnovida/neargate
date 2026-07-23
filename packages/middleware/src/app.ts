@@ -16,6 +16,7 @@ import {
   createLogger,
   decodeXPayment,
   encodeXPaymentResponse,
+  facilitatorConfigFromAccepts,
   HEADER_PAYMENT_SIGNATURE,
   payToFromAccountHash,
   randomNonce,
@@ -209,11 +210,12 @@ export function createApp(deps: MiddlewareDeps): Express {
   const attestationRetryDelayMs = deps.attestationRetryDelayMs ?? DEFAULT_ATTESTATION_RETRY_DELAY_MS;
   const attestationMaxAttempts = deps.attestationMaxAttempts ?? DEFAULT_ATTESTATION_MAX_ATTEMPTS;
   // Official x402 facilitator client (CEP-18 + EIP-712). Injected in tests; else
-  // built for live mode when any service is facilitator-enabled. Auth reuses the
-  // CSPR.cloud key (raw Authorization header, no Bearer prefix).
+  // built for live mode — a service becomes facilitator-enabled via the env map
+  // OR its on-chain accepts[], so the client must exist regardless of env. Auth
+  // reuses the CSPR.cloud key (raw Authorization header, no Bearer prefix).
   const facilitator: FacilitatorClient | undefined =
     deps.facilitatorClient ??
-    (config.mode === 'live' && Object.keys(config.facilitatorServices).length > 0
+    (config.mode === 'live'
       ? new HTTPFacilitatorClient({
           url: config.facilitatorUrl,
           createAuthHeaders: async () => {
@@ -304,9 +306,13 @@ export function createApp(deps: MiddlewareDeps): Express {
 
   // --- official x402 facilitator rail (CEP-18 + EIP-712) helpers ---
 
-  /** Per-service facilitator config, or undefined for native services. */
-  function facilitatorConfigFor(id: number): FacilitatorServiceConfig | undefined {
-    return config.facilitatorServices[id];
+  /**
+   * Per-service facilitator config: the env `FACILITATOR_SERVICES` map is the
+   * operator override; otherwise derived from the service's on-chain registry-v2
+   * `accepts[]` (first CEP-18 option). Undefined → native rail.
+   */
+  function facilitatorConfigFor(service: ServiceRecord): FacilitatorServiceConfig | undefined {
+    return config.facilitatorServices[service.id] ?? facilitatorConfigFromAccepts(service.accepts);
   }
 
   /** Build the official x402 v2 PaymentRequirements for a facilitator-enabled service. */
@@ -554,7 +560,7 @@ export function createApp(deps: MiddlewareDeps): Express {
       //     x402 loop (CEP-18 + EIP-712 via the CSPR.cloud facilitator) instead
       //     of the native-transfer rail. Stateless here — replay protection lives
       //     in the signed authorization + the facilitator + the token's used_nonces.
-      const facCfg = facilitatorConfigFor(id);
+      const facCfg = facilitatorConfigFor(service);
       if (facCfg) {
         if (!facilitator) {
           logger.error('facilitator_not_configured', { serviceId: id });
