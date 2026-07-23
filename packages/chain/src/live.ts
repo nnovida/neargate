@@ -24,6 +24,7 @@ import type {
   AttestationRecord,
   ChainClient,
   Motes,
+  PaymentOption,
   PemSignerRef,
   RegisterServiceInput,
   ServiceRecord,
@@ -275,6 +276,163 @@ class ByteReader {
     if (tag === 0) return `account-hash-${hex}`;
     return `contract-package-${hex}`;
   }
+
+  /** True when every byte has been consumed — layout-detection guard. */
+  done(): boolean {
+    return this.offset === this.buf.length;
+  }
+}
+
+// ---- Service record parsing ---------------------------------------------------
+
+/** Sanity cap on accepts[] length — fails fast when a v1 record is tried as v2. */
+const MAX_ACCEPTS = 64;
+
+/** One registry-v2 `PaymentOption`: (asset, amount, decimals, symbol, name, version). */
+function readPaymentOption(reader: ByteReader): PaymentOption {
+  const asset = reader.string();
+  const amount = reader.u512().toString();
+  const decimals = reader.u8();
+  const symbol = reader.string();
+  const name = reader.string();
+  const version = reader.string();
+  return { asset, amount, decimals, symbol, name, version };
+}
+
+function parseServiceLayout(bytes: Uint8Array, id: number, layout: 'v1' | 'v2'): ServiceRecord {
+  const reader = new ByteReader(bytes);
+  const name = reader.string();
+  const description = reader.string();
+  const gatewayBaseUrl = stripTrailingSlashes(reader.string());
+  let accepts: PaymentOption[] | undefined;
+  let priceMotes: Motes;
+  if (layout === 'v2') {
+    const count = reader.u32le();
+    // The contract rejects empty accepts[]; the cap catches v1 price bytes
+    // (whose first byte is a U512 length) masquerading as a count.
+    if (count === 0 || count > MAX_ACCEPTS) throw new Error(`implausible accepts count ${count}`);
+    accepts = Array.from({ length: count }, () => readPaymentOption(reader));
+    const priced = accepts.find((o) => o.asset === 'native') ?? accepts[0];
+    if (priced === undefined) throw new Error('empty accepts');
+    priceMotes = priced.amount;
+  } else {
+    priceMotes = reader.u512().toString();
+  }
+  const paymentTarget = reader.address();
+  const owner = reader.address();
+  const attestor = reader.address();
+  const active = reader.bool();
+  const createdAt = Number(reader.u64le());
+  // A layout only wins by consuming the record exactly — no silent mis-decodes.
+  if (!reader.done()) throw new Error('trailing bytes after Service record');
+  return {
+    id,
+    name,
+    description,
+    // SPEC §9 final decision: readers compute endpointUrl from the stored base.
+    endpointUrl: `${gatewayBaseUrl}/svc/${id}`,
+    priceMotes,
+    paymentTarget,
+    // ⚠️ verify against deployed contract — on-chain Addresses surface as
+    // account-hash strings here (public keys are not stored by the contract).
+    owner,
+    attestor,
+    active,
+    createdAt,
+    ...(accepts !== undefined ? { accepts } : {}),
+  };
+}
+
+/**
+ * Parses the contract's `Service` struct. Tries the registry-v2 layout first
+ * (`accepts: Vec<PaymentOption>` after `gateway_base_url`; `priceMotes` mirrors
+ * the native option, or the first option when none is native), then falls back
+ * to the legacy v1 layout (single U512 `price`) so reads keep working against
+ * the old locked registry after a rollback. Exported for unit testing.
+ */
+export function parseServiceBytes(bytes: Uint8Array, id: number): ServiceRecord {
+  let v2Error: unknown;
+  try {
+    return parseServiceLayout(bytes, id, 'v2');
+  } catch (error) {
+    v2Error = error;
+  }
+  try {
+    return parseServiceLayout(bytes, id, 'v1');
+  } catch {
+    throw new AgentGateError(
+      'STATE_PARSE_FAILED',
+      `cannot parse Service ${id} from contract state: ${
+        v2Error instanceof Error ? v2Error.message : String(v2Error)
+      }`,
+      502,
+    );
+  }
+}
+
+/**
+ * Printable-ASCII guard for on-chain string args. casper-js-sdk 5.0.12 writes a
+ * CLString's u32 length prefix in UTF-16 code units while encoding the payload
+ * as UTF-8, so any non-ASCII char (an em dash, say) silently corrupts the arg
+ * and the stored call reverts with Odra `LeftOverBytes` (user error 64649).
+ */
+function asciiCLString(value: string, argName: string): CLValue {
+  if (/[^\x20-\x7e]/.test(value)) {
+    throw new AgentGateError(
+      'invalid_argument',
+      `${argName} must be printable ASCII — casper-js-sdk 5.0.12 corrupts non-ASCII CLString args on-chain`,
+      400,
+    );
+  }
+  return CLValue.newCLString(value);
+}
+
+function accountKeyCLValue(accountHash: string): CLValue {
+  const hex = normalizeAccountHashHex(accountHash);
+  if (!/^[0-9a-f]{64}$/.test(hex)) {
+    throw new AgentGateError(
+      'invalid_account_hash',
+      `expected "account-hash-<64 hex>", got ${accountHash}`,
+      400,
+    );
+  }
+  return CLValue.newCLKey(Key.newKey(`account-hash-${hex}`));
+}
+
+/**
+ * `register_service` args for the registry-v2 ABI: the price list is
+ * `accepts: List<Tuple2<Tuple3<String,U512,U8>, Tuple3<String,String,String>>>`
+ * (PaymentOption's CLType). A plain `wrap --price` maps to a single native-CSPR
+ * option (9 decimals, empty EIP-712 domain). Exported for unit testing — the
+ * encoding is byte-compatible with the deployed contract's
+ * `PaymentOption::from_bytes`.
+ */
+export function buildRegisterServiceArgs(input: RegisterServiceInput): Args {
+  // The contract's attestor arg is an Address — derive it from the public key hex.
+  const attestorKey = CLValue.newCLKey(
+    Key.newKey(PublicKey.fromHex(input.attestor).accountHash().toPrefixedString()),
+  );
+  const nativeOption = CLValue.newCLTuple2(
+    CLValue.newCLTuple3(
+      asciiCLString('native', 'accepts.asset'),
+      CLValue.newCLUInt512(BigNumber.from(input.priceMotes)),
+      CLValue.newCLUint8(9),
+    ),
+    CLValue.newCLTuple3(
+      asciiCLString('CSPR', 'accepts.symbol'),
+      asciiCLString('CSPR', 'accepts.name'),
+      asciiCLString('', 'accepts.version'),
+    ),
+  );
+  return Args.fromMap({
+    name: asciiCLString(input.name, 'name'),
+    description: asciiCLString(input.description, 'description'),
+    // SPEC §9 final decision: endpointUrl carries the GATEWAY BASE url on input.
+    gateway_base_url: asciiCLString(stripTrailingSlashes(input.endpointUrl), 'gateway_base_url'),
+    accepts: CLValue.newCLList(nativeOption.type, [nativeOption]),
+    payment_target: accountKeyCLValue(input.paymentTarget),
+    attestor: attestorKey,
+  });
 }
 
 // ---- CSPR.cloud REST response shapes (subset we consume) ----------------------
@@ -333,7 +491,9 @@ export function cloudEntryPoint(deploy: CloudDeploy): string {
   const args = deploy.args ?? {};
   const has = (k: string): boolean => k in args;
   if (has('payment_deploy_hash')) return 'record_attestation';
-  if (has('name') && has('price')) return 'register_service';
+  // v1 registers carry `price`; v2 registers carry `accepts`. The name check
+  // must come before `attestor` (a register call has that arg too).
+  if (has('name') && (has('price') || has('accepts'))) return 'register_service';
   if (has('active')) return 'set_active';
   if (has('attestor')) return 'set_attestor';
   return '';
@@ -716,44 +876,13 @@ export class LiveCasperClient implements ChainClient {
   }
 
   /**
-   * Parses the contract's `Service` struct (SPEC §10 field order: name,
-   * description, gateway_base_url, price, payment_target, owner, attestor,
-   * active, created_at). ⚠️ verify against deployed contract.
+   * Parses the contract's `Service` struct — v2 layout first (SPEC §10 field
+   * order with `accepts: Vec<PaymentOption>` after `gateway_base_url`), falling
+   * back to the legacy v1 layout (single U512 `price`) so reads keep working
+   * against the old locked registry after a rollback.
    */
   private parseService(bytes: Uint8Array, id: number): ServiceRecord {
-    try {
-      const reader = new ByteReader(bytes);
-      const name = reader.string();
-      const description = reader.string();
-      const gatewayBaseUrl = stripTrailingSlashes(reader.string());
-      const priceMotes = reader.u512().toString();
-      const paymentTarget = reader.address();
-      const owner = reader.address();
-      const attestor = reader.address();
-      const active = reader.bool();
-      const createdAt = Number(reader.u64le());
-      return {
-        id,
-        name,
-        description,
-        // SPEC §9 final decision: readers compute endpointUrl from the stored base.
-        endpointUrl: `${gatewayBaseUrl}/svc/${id}`,
-        priceMotes,
-        paymentTarget,
-        // ⚠️ verify against deployed contract — on-chain Addresses surface as
-        // account-hash strings here (public keys are not stored by the contract).
-        owner,
-        attestor,
-        active,
-        createdAt,
-      };
-    } catch (error) {
-      throw new AgentGateError(
-        'STATE_PARSE_FAILED',
-        `cannot parse Service ${id} from contract state: ${error instanceof Error ? error.message : String(error)}`,
-        502,
-      );
-    }
+    return parseServiceBytes(bytes, id);
   }
 
   // ---- ChainClient reads ------------------------------------------------------
@@ -1021,15 +1150,7 @@ export class LiveCasperClient implements ChainClient {
 
   /** Builds a CLValue Key for an `account-hash-…` string (Odra Address::Account). */
   private accountKey(accountHash: string): CLValue {
-    const hex = normalizeAccountHashHex(accountHash);
-    if (!/^[0-9a-f]{64}$/.test(hex)) {
-      throw new AgentGateError(
-        'invalid_account_hash',
-        `expected "account-hash-<64 hex>", got ${accountHash}`,
-        400,
-      );
-    }
-    return CLValue.newCLKey(Key.newKey(`account-hash-${hex}`));
+    return accountKeyCLValue(accountHash);
   }
 
   async registerService(
@@ -1043,20 +1164,7 @@ export class LiveCasperClient implements ChainClient {
     if (!MOTES_RE.test(input.priceMotes) || BigInt(input.priceMotes) < 1000n) {
       throw new AgentGateError('invalid_price', 'priceMotes must be ≥ 1000 motes', 400);
     }
-    // The contract's attestor arg is an Address — derive it from the public key hex.
-    // ⚠️ verify against deployed contract — arg names + Address (Key) encoding per Odra ABI.
-    const attestorKey = CLValue.newCLKey(
-      Key.newKey(PublicKey.fromHex(input.attestor).accountHash().toPrefixedString()),
-    );
-    const args = Args.fromMap({
-      name: CLValue.newCLString(input.name),
-      description: CLValue.newCLString(input.description),
-      // SPEC §9 final decision: endpointUrl carries the GATEWAY BASE url on input.
-      gateway_base_url: CLValue.newCLString(stripTrailingSlashes(input.endpointUrl)),
-      price: CLValue.newCLUInt512(BigNumber.from(input.priceMotes)),
-      payment_target: this.accountKey(input.paymentTarget),
-      attestor: attestorKey,
-    });
+    const args = buildRegisterServiceArgs(input);
     const txHash = await this.callEntrypoint(
       'register_service',
       args,

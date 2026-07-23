@@ -19,6 +19,12 @@ describe('cloudEntryPoint — args-inferred when CSPR.cloud omits the entry-poin
     ).toBe('register_service');
   });
 
+  it('register_service ← name + accepts (registry v2 — must not classify as set_attestor)', () => {
+    expect(
+      cloudEntryPoint(dep(['attestor', 'description', 'gateway_base_url', 'name', 'payment_target', 'accepts'])),
+    ).toBe('register_service');
+  });
+
   it('set_active ← active', () => {
     expect(cloudEntryPoint(dep(['active', 'service_id']))).toBe('set_active');
   });
