@@ -118,9 +118,10 @@ export default function Page() {
         ]}
       />
       <P>
-        Two module constants govern the policy: <M>MIN_PRICE_MOTES = 1000</M> (the price floor,
-        1e-6 CSPR, keeps dust out of the catalog) and <M>MAX_ATTESTATIONS = 100</M> (the per-service
-        attestation-list cap; the <M>scores</M> counters are unbounded and keep full history).
+        Two module constants govern the policy: <M>MIN_PRICE_MOTES = 1000</M> (the floor for every{' '}
+        <M>accepts[]</M> option amount, 1e-6 CSPR, keeps dust out of the catalog) and{' '}
+        <M>MAX_ATTESTATIONS = 100</M> (the per-service attestation-list cap; the <M>scores</M>{' '}
+        counters are unbounded and keep full history).
       </P>
       <H3 id="registry-service-struct">Service record</H3>
       <PropList
@@ -137,7 +138,16 @@ export default function Page() {
               </>
             ),
           },
-          { name: 'price', type: 'U512', desc: <>Price per call in motes of native CSPR (&ge; 1000).</> },
+          {
+            name: 'accepts',
+            type: 'Vec<PaymentOption>',
+            desc: (
+              <>
+                The authoritative per-asset price list (non-empty; registry v2). Readers derive the
+                x402 402 <M>accepts[]</M> directly from this — native CSPR and/or CEP-18 tokens.
+              </>
+            ),
+          },
           { name: 'payment_target', type: 'Address', desc: <>Account that receives the 402 payments (the x402 payTo).</> },
           {
             name: 'owner',
@@ -151,6 +161,26 @@ export default function Page() {
             desc: <>Discovery flag; <M>true</M> at registration. Inactive services reject attestations and are filtered out by buyers.</>,
           },
           { name: 'created_at', type: 'u64', desc: <>Block time in milliseconds at registration.</> },
+        ]}
+      />
+      <H3 id="registry-paymentoption-struct">PaymentOption record</H3>
+      <P>
+        One accepted payment rail. On the wire it is CLType{' '}
+        <M>{'Tuple2<Tuple3<String,U512,U8>, Tuple3<String,String,String>>'}</M> — six fields that
+        serialize as plain concatenation:
+      </P>
+      <PropList
+        items={[
+          {
+            name: 'asset',
+            type: 'String',
+            desc: <><M>&quot;native&quot;</M> for CSPR, or a CEP-18 contract package hash (<M>hash-&lt;64hex&gt;</M>) for a token (e.g. WCSPR).</>,
+          },
+          { name: 'amount', type: 'U512', desc: <>Price per call in the asset&apos;s atomic units (&ge; 1000).</> },
+          { name: 'decimals', type: 'u8', desc: <>Display decimals (9 for CSPR and WCSPR).</> },
+          { name: 'symbol', type: 'String', desc: <>Token symbol, e.g. <M>CSPR</M> / <M>WCSPR</M>.</> },
+          { name: 'name', type: 'String', desc: <>EIP-712 domain name the facilitator rail signs against (cosmetic for native).</> },
+          { name: 'version', type: 'String', desc: <>EIP-712 domain version (empty for native).</> },
         ]}
       />
       <H3 id="registry-attestation-struct">Attestation record</H3>
@@ -167,13 +197,13 @@ export default function Page() {
         head={['Signature', 'Auth', 'Behavior & reverts']}
         rows={[
           [
-            <M key="s">register_service(name, description, gateway_base_url, price, payment_target, attestor) → u64</M>,
+            <M key="s">register_service(name, description, gateway_base_url, accepts, payment_target, attestor) → u64</M>,
             'anyone (caller becomes owner)',
             <span key="b">
               Bumps <M>services_count</M>, assigns it as the 1-based id, stores the record with{' '}
               <M>active=true</M>, emits <M>ServiceRegistered</M>, returns the id. Reverts{' '}
               <M>EmptyName</M> (6) if the name is empty/whitespace-only, <M>InvalidPrice</M> (5) if{' '}
-              <M>price &lt; 1000</M> motes.
+              <M>accepts</M> is empty or any option&apos;s <M>amount &lt; 1000</M>.
             </span>,
           ],
           [
@@ -254,7 +284,7 @@ export default function Page() {
         rows={[
           [
             <M key="e">ServiceRegistered</M>,
-            'service_id (== services_count after the call), owner, name, price, payment_target, attestor',
+            'service_id (== services_count after the call), owner, name, accepts, payment_target, attestor',
             <M key="o">register_service</M>,
           ],
           [

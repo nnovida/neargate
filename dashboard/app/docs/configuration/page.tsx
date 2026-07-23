@@ -297,12 +297,15 @@ export default function ConfigurationPage() {
             </span>,
             'no (opt-in)',
             <span key="m">
-              JSON map opting a service into the official x402 facilitator rail:{' '}
+              <strong className="text-white">Operator override</strong> for the facilitator rail:{' '}
               <M>{'{"<id>":{"asset":"<cep18-pkg-hash>","amount":"<atomic>","token":{"name","version","decimals","symbol"}}}'}</M>
-              . A listed service runs its whole <M>402 → pay → settle → attest</M> loop through the
-              facilitator (CEP-18, no 2.5-CSPR floor); unlisted services stay on the native-CSPR rail.
-              The live deployment settles in <M>WCSPR</M> (pkg{' '}
-              <M>3d80df21…</M>) — see <DocLink href="/docs/deployment">Deploy</DocLink>.
+              . Since registry v2 the gateway derives this per service from the on-chain{' '}
+              <M>accepts[]</M> (first CEP-18 option) — a service with a token option runs its whole{' '}
+              <M>402 → pay → settle → attest</M> loop through the facilitator (CEP-18, no 2.5-CSPR
+              floor) with <strong className="text-white">no env needed</strong>; native-only
+              services stay on the native-CSPR rail. Set this only to override what the chain says.
+              The live deployment settles in <M>WCSPR</M> (pkg <M>3d80df21…</M>) — see{' '}
+              <DocLink href="/docs/deployment">Deploy</DocLink>.
             </span>,
           ],
           [

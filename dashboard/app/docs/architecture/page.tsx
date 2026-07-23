@@ -252,7 +252,8 @@ export default function ArchitecturePage() {
             title: 'Seller registers',
             body: (
               <>
-                The CLI calls <M>chain.registerService</M> (name, price in motes, payment target,
+                The CLI calls <M>chain.registerService</M> (name, price — stored on-chain as a
+                native <M>accepts[]</M> option since registry v2 — payment target,
                 and the attestor — the gateway key allowed to record attestations), getting back a{' '}
                 <M>serviceId</M>. It then maps the private upstream URL to
                 that id on the gateway. In live mode this is a self-service, owner-signed{' '}

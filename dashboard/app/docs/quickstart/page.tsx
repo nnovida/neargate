@@ -250,7 +250,8 @@ export default function Page() {
         asks for a PEM key. The command above passes <M>--mode mock</M> explicitly.
       </Callout>
       <P>
-        This registers the service on-chain (name, gateway URL, price in motes, payment target,
+        This registers the service on-chain (name, gateway URL, the price as an <M>accepts[]</M>{' '}
+        option, payment target,
         attestor) <em>and</em> maps the upstream URL on the gateway over the authenticated admin
         API. On success it prints the service id, the public <M>/svc/&lt;id&gt;</M> endpoint, a
         dashboard link and the register tx hash. Every flag is documented in{' '}
