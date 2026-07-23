@@ -6,11 +6,11 @@ import { DEFAULT_REGISTRY_PACKAGE_HASH } from '@agentgate/shared';
  * `cli`/`sdk` when those packages publish a new version.
  */
 export const DOCS_VERSION = {
-  cli: '0.1.6', // @neargate/cli
+  cli: '0.2.1', // @neargate/cli
   sdk: '0.1.0', // @agentgate/client
   network: 'casper-test',
   registryHash: DEFAULT_REGISTRY_PACKAGE_HASH,
 } as const;
 
-/** Compact form of the registry package hash for badges (e.g. `hash-10f92725…`). */
+/** Compact form of the registry package hash for badges (e.g. `hash-e09869a1…`). */
 export const REGISTRY_HASH_SHORT = `${DEFAULT_REGISTRY_PACKAGE_HASH.slice(0, 13)}…`;

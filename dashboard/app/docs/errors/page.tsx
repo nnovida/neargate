@@ -129,7 +129,7 @@ export default function Page() {
       <Callout tone="info" title="Contract is live on Casper Testnet">
         <M>AgentGateRegistry</M> is deployed and live on Casper Testnet (network{' '}
         <M>casper-test</M>, Casper 2.0). Package hash:{' '}
-        <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. The
+        <M>hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df</M>. The
         published CLI already defaults to this hash, so reads run zero-env via node RPC — no{' '}
         <M>CSPR_CLOUD_API_KEY</M> is needed for reads. Set{' '}
         <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> explicitly for a self-hosted gateway, which also
@@ -146,7 +146,7 @@ export default function Page() {
             <M key="nd">NOT_DEPLOYED</M>,
             '503',
             'A contract call/read was attempted while REGISTRY_CONTRACT_PACKAGE_HASH is unset.',
-            'The published CLI already defaults REGISTRY_CONTRACT_PACKAGE_HASH to the live package hash (hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9), so CLI reads run zero-env. This error only fires for a self-hosted gateway/server that leaves the hash unset — set it there.',
+            'The published CLI already defaults REGISTRY_CONTRACT_PACKAGE_HASH to the live package hash (hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df), so CLI reads run zero-env. This error only fires for a self-hosted gateway/server that leaves the hash unset — set it there.',
           ],
           [
             <M key="tf">TX_FAILED</M>,

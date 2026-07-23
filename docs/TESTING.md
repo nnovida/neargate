@@ -7,7 +7,7 @@ real paid call on-chain.
 
 > **Current deployment (level 4):** `AgentGateRegistry` is live on Casper Testnet
 > (`casper-test`), package hash
-> `hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9`. Real tx links
+> `hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df`. Real tx links
 > are in the [README "Deployed addresses"](../README.md#deployed-addresses-casper-testnet) table.
 
 ## Prerequisites
@@ -96,7 +96,7 @@ In mock mode the SSRF guard is off (localhost upstreams allowed) and no real key
 
 Open these on the explorer — they should all show **`Success`**:
 
-- Contract: `testnet.cspr.live` → search the package hash `10f92725…` (or the contract
+- Contract: `testnet.cspr.live` → search the package hash `e09869a1…` (or the contract
   `fe134f78…`). The 4 transactions (install / `register_service` / payment transfer /
   `record_attestation`) are linked in the README "Deployed addresses" table.
 
@@ -108,7 +108,7 @@ Create the root `.env` from `.env.example` and fill the live values:
 cp .env.example .env
 # then set in .env:
 #   AGENTGATE_MODE=live
-#   REGISTRY_CONTRACT_PACKAGE_HASH=hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9
+#   REGISTRY_CONTRACT_PACKAGE_HASH=hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df
 #   CSPR_CLOUD_API_KEY=<your key>
 #   AGENTGATE_ADMIN_TOKEN=<a strong non-default token>   # live mode refuses the default
 #   GATE_SIGNER_PEM_PATH / BUYER_SIGNER_PEM_PATH / SELLER_SIGNER_PEM_PATH=<your secret_key.pem paths>

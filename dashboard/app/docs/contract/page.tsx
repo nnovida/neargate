@@ -491,7 +491,7 @@ export default function Page() {
         </a>{' '}
         under &ldquo;Deployed addresses (Casper Testnet)&rdquo;, and the package is browsable on{' '}
         <a
-          href="https://testnet.cspr.live/contract-package/10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9"
+          href="https://testnet.cspr.live/contract-package/e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df"
           target="_blank"
           rel="noopener noreferrer"
           className="text-accent underline underline-offset-4 hover:text-white"
@@ -504,7 +504,7 @@ export default function Page() {
       </Callout>
       <CodeBlock
         label="root .env"
-        code={'REGISTRY_CONTRACT_PACKAGE_HASH=hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9'}
+        code={'REGISTRY_CONTRACT_PACKAGE_HASH=hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df'}
       />
 
       <NextLinks

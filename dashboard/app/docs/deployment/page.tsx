@@ -240,7 +240,7 @@ export default function DeploymentPage() {
         text={
           'docker run -d --name agentgate-gateway -p 4021:4021 \\\n' +
           '  -e AGENTGATE_MODE=live \\\n' +
-          '  -e REGISTRY_CONTRACT_PACKAGE_HASH=hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9 \\\n' +
+          '  -e REGISTRY_CONTRACT_PACKAGE_HASH=hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df \\\n' +
           '  -e CSPR_CLOUD_API_KEY="$CSPR_CLOUD_API_KEY" \\\n' +
           '  -e AGENTGATE_ADMIN_TOKEN="$(openssl rand -hex 32)" \\\n' +
           '  -e GATE_SIGNER_PEM_PATH=/keys/gate.pem \\\n' +
@@ -519,7 +519,7 @@ export default function DeploymentPage() {
       <Callout tone="ok" title="Registry contract is live on Casper Testnet">
         AgentGateRegistry is deployed and running on Casper Testnet (network{' '}
         <M>casper-test</M>, Casper 2.0). Package hash:{' '}
-        <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. Set this as{' '}
+        <M>hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df</M>. Set this as{' '}
         <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> in <M>.env</M> to enable live contract reads and
         writes. Real transaction links are in the repo README under &ldquo;Deployed addresses
         (Casper Testnet)&rdquo;.

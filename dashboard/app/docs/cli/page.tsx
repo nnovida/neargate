@@ -183,7 +183,7 @@ export default function Page() {
           [
             <M key="f3">--registry {'<hash>'}</M>,
             <M key="e3">REGISTRY_CONTRACT_PACKAGE_HASH</M>,
-            <span key="d3"><M>hash-10f92725…</M> (the deployed package)</span>,
+            <span key="d3"><M>hash-e09869a1…</M> (the deployed package)</span>,
             'all commands',
           ],
           [

@@ -76,7 +76,7 @@ export default function InstallationPage() {
       <Callout tone="ok" title="Contract is deployed">
         AgentGateRegistry is live on Casper Testnet (network <M>casper-test</M>). The registry
         package hash is{' '}
-        <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>. You can
+        <M>hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df</M>. You can
         install, run the full payment loop, and pass every test without ever touching Rust. The
         Rust toolchain only matters if you want to run the 45 OdraVM contract tests (20 registry +
         25 SpendGuard) locally.
@@ -263,7 +263,7 @@ export default function InstallationPage() {
       <Callout tone="ok" title="Live mode is deployable end to end">
         AgentGateRegistry is deployed on Casper Testnet. Set{' '}
         <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> to{' '}
-        <M>hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9</M>, plus{' '}
+        <M>hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df</M>, plus{' '}
         <M>CSPR_CLOUD_API_KEY</M> and your PEM signer paths in <M>.env</M>, then set{' '}
         <M>AGENTGATE_MODE=live</M> and start the live stack with <M>npm run dev:live</M> (the one
         script that auto-loads <M>.env</M>). The full loop (register_service, pay, record_attestation,

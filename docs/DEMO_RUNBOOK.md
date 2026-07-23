@@ -17,7 +17,7 @@ real WCSPR transfer, facilitator-sponsored gas. Nothing in the wow beat is `src/
 |---|---|
 | Gateway (public) | `https://gateway.example.org` |
 | Dashboard / activity ledger | `https://agentgate.example.org` · `/activity` |
-| Registry contract package | `hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9` |
+| Registry contract package | `hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df` |
 | **Facilitator service #9** | "Global Currency Feed" — active, tier **reliable**, x402 **v2** WCSPR |
 | WCSPR asset pkg | `3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e` (name "Wrapped CSPR", 9dp) |
 | Facilitator (hosted) | `https://x402-facilitator.cspr.cloud` (`/supported` `/verify` `/settle`) |
