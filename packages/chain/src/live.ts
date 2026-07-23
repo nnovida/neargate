@@ -957,6 +957,10 @@ export class LiveCasperClient implements ChainClient {
   async listRecentActivity(limit = 50): Promise<ActivityEvent[]> {
     const packageHash = this.requireContract();
     const events: ActivityEvent[] = [];
+    // payment tx hash (lowercase) → attested service id. Payment targets are
+    // shared across services (one gate account), so target-matching cannot
+    // attribute a payment; the attestation that references the payment can.
+    const attestedPayment = new Map<string, number>();
 
     // ⚠️ verify against deployed contract — CSPR.cloud deploys filter params/shape.
     const res = await this.cloudGet<CloudListEnvelope<CloudDeploy>>(
@@ -980,6 +984,10 @@ export class LiveCasperClient implements ChainClient {
         const sid = Number(cloudArg(deploy, 'service_id'));
         const success =
           cloudArg(deploy, 'success') === true || cloudArg(deploy, 'success') === 'true';
+        const paymentHash = String(cloudArg(deploy, 'payment_deploy_hash') ?? '');
+        if (Number.isSafeInteger(sid) && /^[0-9a-fA-F]{64}$/.test(paymentHash)) {
+          attestedPayment.set(paymentHash.toLowerCase(), sid);
+        }
         events.push({
           kind: 'attestation',
           txHash: deploy.deploy_hash ?? '',
@@ -1013,12 +1021,16 @@ export class LiveCasperClient implements ChainClient {
       const shortTarget = th.length > 16 ? `${th.slice(0, 8)}…${th.slice(-4)}` : target;
       for (const transfer of transfers?.data ?? []) {
         if (normalizeAccountHashHex(transfer.to_account_hash ?? '') !== hex) continue;
+        const txHash = transfer.deploy_hash ?? transfer.transaction_hash ?? '';
+        // Attribute via the attestation that references this payment; the
+        // shared-target fallback is only right when one service uses the target.
         const service = services.find((s) => normalizeAccountHashHex(s.paymentTarget) === hex);
+        const serviceId = attestedPayment.get(txHash.toLowerCase()) ?? service?.id ?? null;
         const amount = parseCloudAmount(transfer.amount);
         events.push({
           kind: 'payment',
-          txHash: transfer.deploy_hash ?? transfer.transaction_hash ?? '',
-          serviceId: service?.id ?? null,
+          txHash,
+          serviceId,
           amountMotes: amount.toString(),
           timestamp: parseCloudTimestamp(transfer.timestamp),
           detail: `payment of ${formatCspr(amount.toString())} to ${shortTarget}`,
@@ -1044,7 +1056,10 @@ export class LiveCasperClient implements ChainClient {
       for (const action of actions?.data ?? []) {
         if (!targetHexes.has(normalizeAccountHashHex(action.to_hash ?? ''))) continue;
         const ev = ftActionToPaymentEvent(action, asset, services);
-        if (ev) events.push(ev);
+        if (ev) {
+          ev.serviceId = attestedPayment.get(ev.txHash.toLowerCase()) ?? ev.serviceId;
+          events.push(ev);
+        }
       }
     }
 
