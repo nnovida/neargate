@@ -1,4 +1,5 @@
 import { AgentGateError } from './errors';
+import type { PaymentOption } from './types';
 
 export const X402_VERSION = 1;
 export const X402_SCHEME = 'exact';
@@ -154,6 +155,36 @@ export interface FacilitatorServiceConfig {
   /** Price per call in the token's atomic units (decimal string). */
   amount: string;
   token: FacilitatorTokenMeta;
+}
+
+const CEP18_ASSET_RE = /^hash-([0-9a-f]{64})$/;
+
+/**
+ * Derives the facilitator-rail config from a service's on-chain registry-v2
+ * `accepts[]`: the first CEP-18 option (asset `hash-<64hex>`) becomes the
+ * facilitator price; native-only (or absent/legacy) accepts → undefined, i.e.
+ * the native-transfer rail. The env `FACILITATOR_SERVICES` map stays as an
+ * operator override — callers check it first.
+ */
+export function facilitatorConfigFromAccepts(
+  accepts: readonly PaymentOption[] | undefined,
+): FacilitatorServiceConfig | undefined {
+  for (const option of accepts ?? []) {
+    const match = CEP18_ASSET_RE.exec(option.asset);
+    if (match?.[1] !== undefined) {
+      return {
+        asset: match[1],
+        amount: option.amount,
+        token: {
+          name: option.name,
+          version: option.version,
+          decimals: option.decimals,
+          symbol: option.symbol,
+        },
+      };
+    }
+  }
+  return undefined;
 }
 
 /** CAIP-2 network identifier, e.g. `casper:casper-test`. */

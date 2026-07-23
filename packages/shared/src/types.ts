@@ -1,6 +1,22 @@
 /** All money values are motes of native CSPR as decimal strings (1 CSPR = 1_000_000_000 motes). U512-safe via bigint. */
 export type Motes = string;
 
+/**
+ * One accepted payment rail for a service, as stored on-chain (registry v2
+ * `PaymentOption`). `asset` is `'native'` for CSPR or a CEP-18 contract package
+ * hash string (`hash-<64hex>`); `amount` is in the asset's atomic units.
+ * `name`/`version` are the EIP-712 domain fields the facilitator rail needs
+ * (empty for native).
+ */
+export interface PaymentOption {
+  asset: string;
+  amount: Motes;
+  decimals: number;
+  symbol: string;
+  name: string;
+  version: string;
+}
+
 export interface ServiceRecord {
   id: number;
   name: string;
@@ -12,6 +28,12 @@ export interface ServiceRecord {
   attestor: string;          // public key hex allowed to record attestations
   active: boolean;
   createdAt: number;         // unix ms
+  /**
+   * Registry v2 on-chain accepts[] (absent for records read from the legacy
+   * single-price registry and from mock mode). When present, `priceMotes`
+   * mirrors the native option's amount (or the first option if none is native).
+   */
+  accepts?: PaymentOption[];
 }
 
 export interface ServiceScore { totalCalls: number; successCalls: number; }

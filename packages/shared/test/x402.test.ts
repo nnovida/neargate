@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   X402_VERSION, X402_SCHEME,
   encodeXPayment, decodeXPayment, encodeXPaymentResponse, decodeXPaymentResponse,
-  toCaip2Network, payToFromAccountHash,
+  toCaip2Network, payToFromAccountHash, facilitatorConfigFromAccepts,
   type PaymentPayload, type SettlementResponse,
 } from '../src/x402';
 import { AgentGateError } from '../src/index';
@@ -90,5 +90,30 @@ describe('x402 v2 facilitator helpers', () => {
   it('payToFromAccountHash rejects a non-account-hash', () => {
     expect(() => payToFromAccountHash('account-hash-xyz')).toThrow(AgentGateError);
     expect(() => payToFromAccountHash('00' + 'b'.repeat(64))).toThrow(AgentGateError); // 66 hex is not an account-hash
+  });
+});
+
+describe('facilitatorConfigFromAccepts — facilitator rail derived from on-chain accepts[]', () => {
+  const PKG = '3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e';
+  const native = { asset: 'native', amount: '2500000000', decimals: 9, symbol: 'CSPR', name: 'CSPR', version: '' };
+  const wcspr = { asset: `hash-${PKG}`, amount: '100000000', decimals: 9, symbol: 'WCSPR', name: 'Wrapped CSPR', version: '1' };
+
+  it('picks the first CEP-18 option and strips the hash- prefix', () => {
+    expect(facilitatorConfigFromAccepts([native, wcspr])).toEqual({
+      asset: PKG,
+      amount: '100000000',
+      token: { name: 'Wrapped CSPR', version: '1', decimals: 9, symbol: 'WCSPR' },
+    });
+  });
+
+  it('native-only or absent accepts → undefined (native rail)', () => {
+    expect(facilitatorConfigFromAccepts([native])).toBeUndefined();
+    expect(facilitatorConfigFromAccepts(undefined)).toBeUndefined();
+    expect(facilitatorConfigFromAccepts([])).toBeUndefined();
+  });
+
+  it('ignores malformed asset strings rather than building a broken rail', () => {
+    const bad = { ...wcspr, asset: 'hash-nothex' };
+    expect(facilitatorConfigFromAccepts([bad])).toBeUndefined();
   });
 });
