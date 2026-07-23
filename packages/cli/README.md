@@ -2,6 +2,8 @@
 
 Wrap any HTTP API into a **paid x402 service on Casper** — HTTP 402 micropayments in native CSPR, with on-chain discovery and reputation. One command turns your endpoint into a machine-payable service that AI agents can discover, pay, and rate autonomously.
 
+Services carry an on-chain **`accepts[]` price list** (registry v2): native CSPR, or a CEP-18 token like WCSPR settled through the official Casper x402 facilitator (gas sponsored — true sub-CSPR micropayments). `buy` auto-detects the rail from the 402.
+
 ## Read the live catalog — zero setup
 
 The read commands run against Casper Testnet with **no configuration and no keys**:
@@ -26,7 +28,7 @@ It signs the on-chain registration with `--pem`, then maps your upstream on the 
 `buy` runs the whole x402 exchange for you: fetch the `402` invoice, pay it with a **native CSPR transfer carrying the invoice nonce as `transfer_id`**, retry with the `X-PAYMENT` proof, and print the result — response body on **stdout** (pipeable), payment receipt on **stderr**:
 
 ```bash
-npx @neargate/cli buy 5 --pem ./buyer.pem --max 5
+npx @neargate/cli buy 2 --pem ./buyer.pem --max 5
 ```
 
 `--max` is a budget cap: any invoice priced above it is refused (`PRICE_EXCEEDED`) before a single mote moves. Unknown or paused services fail fast before any payment.

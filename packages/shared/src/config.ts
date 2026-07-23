@@ -7,9 +7,14 @@ export type AgentGateMode = 'mock' | 'live';
 /** The shipped default admin token. loadConfig() refuses it in live mode. */
 export const DEFAULT_ADMIN_TOKEN = 'dev-admin-token';
 
-/** The deployed AgentGateRegistry package hash on Casper Testnet (SPEC deploy). */
+/**
+ * The deployed AgentGateRegistry package hash on Casper Testnet — registry v2
+ * (multi-asset `accepts[]`, unlocked/upgradable). The legacy locked v1 package
+ * (`hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9`)
+ * stays on-chain as the rollback target; readers still decode its layout.
+ */
 export const DEFAULT_REGISTRY_PACKAGE_HASH =
-  'hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9';
+  'hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df';
 
 /**
  * Default hosted gateway the CLI targets in live mode when `--gateway` is unset.

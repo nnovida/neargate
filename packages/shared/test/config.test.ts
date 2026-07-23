@@ -158,7 +158,7 @@ describe('loadConfig — requireCloudKey opt-out (CLI reads)', () => {
 
   it('exposes the deployed registry package hash constant', () => {
     expect(DEFAULT_REGISTRY_PACKAGE_HASH).toBe(
-      'hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9',
+      'hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df',
     );
   });
 });
