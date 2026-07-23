@@ -26,8 +26,27 @@
           "is_required": true
         },
         {
-          "name": "price",
-          "ty": "U512",
+          "name": "accepts",
+          "ty": {
+            "List": {
+              "Tuple2": [
+                {
+                  "Tuple3": [
+                    "String",
+                    "U512",
+                    "U8"
+                  ]
+                },
+                {
+                  "Tuple3": [
+                    "String",
+                    "String",
+                    "String"
+                  ]
+                }
+              ]
+            }
+          },
           "is_ref": false,
           "is_slice": false,
           "is_required": true
@@ -153,8 +172,27 @@
           "is_required": true
         },
         {
-          "name": "price",
-          "ty": "U512",
+          "name": "accepts",
+          "ty": {
+            "List": {
+              "Tuple2": [
+                {
+                  "Tuple3": [
+                    "String",
+                    "U512",
+                    "U8"
+                  ]
+                },
+                {
+                  "Tuple3": [
+                    "String",
+                    "String",
+                    "String"
+                  ]
+                }
+              ]
+            }
+          },
           "is_ref": false,
           "is_slice": false,
           "is_required": true
