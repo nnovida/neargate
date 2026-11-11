@@ -368,7 +368,8 @@ export class LiveNearClient implements ChainClient {
    * `Account.signAndSendTransaction` builds the tx, has the CallSigner sign it (which records
    * its hash before anything is sent), re-signs with a fresh nonce on InvalidNonce, and throws
    * the parsed execution error on a `Failure` status, so contract panics keep their `ERR_*`
-   * codes. A call that times out after its tx was signed is TX_TIMEOUT naming that tx.
+   * codes. Once the tx is signed, anything short of NEAR's verdict on it (a failed or timed-out
+   * send, a reply without its outcome, the call's 120 s bound) is TX_TIMEOUT naming that tx.
    */
   private async call(
     signer: NearKeySigner,
@@ -407,6 +408,7 @@ export class LiveNearClient implements ChainClient {
     } catch (err) {
       throw mapCallError(err, {
         what,
+        method,
         network: this.network,
         registryId: this.registryId,
         signerId: signer.accountId,
@@ -416,7 +418,12 @@ export class LiveNearClient implements ChainClient {
       });
     }
     const txHash = (outcome as { transaction_outcome?: { id?: unknown } }).transaction_outcome?.id;
-    if (!isNearTxHash(txHash)) throw badResponse(what, 'without a transaction hash');
+    if (!isNearTxHash(txHash)) {
+      // A reply without the tx's outcome (a status alone, or a shape this client cannot read) settles nothing.
+      throw callSigner.txHash === undefined
+        ? badResponse(what, 'without a transaction hash')
+        : new TxTimeoutError(`the NEAR RPC answered ${what} without the tx's outcome`, callSigner.txHash, this.explorerUrl);
+    }
     return { txHash, result: getTransactionLastResult(outcome) };
   }
 

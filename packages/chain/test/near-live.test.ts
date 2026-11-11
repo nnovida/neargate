@@ -91,12 +91,20 @@ interface SentTx {
   waitUntil: string;
 }
 
-/** A send_tx answer: a fixture name or envelope, an HTTP error status (`httpError`), or no answer ever. */
-type SendTxReply = string | Json | { httpStatus: number; body: string } | 'hang';
+/**
+ * A send_tx answer: a fixture name or envelope, an HTTP error status (`httpError`), no answer
+ * ever (`hang`), or a connection that drops once the tx is out (`reset`).
+ */
+type SendTxReply = string | Json | { httpStatus: number; body: string } | 'hang' | 'reset';
 
 /** send_tx answered with HTTP `status` (the body is a fixture name). */
 function httpError(status: number, body: string): SendTxReply {
   return { httpStatus: status, body };
+}
+
+/** How Node's fetch fails when the connection drops: TypeError "fetch failed", the network code under it. */
+function connectionReset(): TypeError {
+  return new TypeError('fetch failed', { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) });
 }
 
 /** A fake NEAR JSON-RPC endpoint: routes by method (last registration wins) and records every call. */
@@ -166,6 +174,7 @@ class FakeRpc {
       });
       const reply = queue[Math.min(answered++, queue.length - 1)];
       if (reply === 'hang') return new Promise<Response>(() => {});
+      if (reply === 'reset') throw connectionReset();
       if (typeof reply === 'object' && reply !== null && typeof reply.httpStatus === 'number') {
         return json(fixture(String(reply.body)), reply.httpStatus);
       }
@@ -875,6 +884,81 @@ describe('LiveNearClient change calls', () => {
     const pending = rejection(client.pay({ serviceId: 1, nonce: NONCE, depositYocto: DEPOSIT }, nearSigner(BUYER).signer));
     await vi.advanceTimersByTimeAsync(5_000);
     expect(await pending).toMatchObject({ code: 'RPC_TIMEOUT', httpStatus: 504 });
+    expect(rpc.sent).toHaveLength(0);
+  });
+
+  it("once its tx is signed, any answer short of NEAR's verdict on it is TX_TIMEOUT naming that tx (R45)", async () => {
+    const buyer = nearSigner(BUYER).signer;
+    const cases: Array<[SendTxReply, string]> = [
+      // near-api-js's own 502 error names the RPC URL; the lead never does
+      [httpError(502, 'error-internal.json'), 'the NEAR RPC failed (HTTP 502) after the pay tx was sent'],
+      [httpError(429, 'error-internal.json'), 'the NEAR RPC failed (HTTP 429) after the pay tx was sent'],
+      ['reset', 'the NEAR RPC connection failed (ECONNRESET) after the pay tx was sent'],
+      ['error-request-routed.json', 'the NEAR RPC forwarded the pay tx to another node without waiting for its outcome'],
+      ['error-internal.json', 'the NEAR RPC failed (node is overloaded) after the pay tx was sent'],
+      [{ jsonrpc: '2.0' }, 'the NEAR RPC gave no usable answer after the pay tx was sent'],
+      [{ jsonrpc: '2.0', result: { final_execution_status: 'INCLUDED' } }, "the NEAR RPC answered the pay call without the tx's outcome"],
+    ];
+    for (const [i, [reply, lead]] of cases.entries()) {
+      rpc.sendTx(reply);
+      const err = await rejection(client.pay({ serviceId: 1, nonce: String(5000 + i), depositYocto: DEPOSIT }, buyer));
+      const hash = rpc.sent.at(-1)!.hash;
+      expect(err).toBeInstanceOf(TxTimeoutError);
+      expect(err).toMatchObject({ code: 'TX_TIMEOUT', httpStatus: 504, txHash: hash });
+      expect(err.message).toBe(`${lead}: tx ${hash} may still land; check https://testnet.nearblocks.io/txns/${hash} before retrying`);
+    }
+    expect(rpc.sent).toHaveLength(cases.length); // one tx per call, none sent twice
+  });
+
+  it("NEAR's verdict on a signed tx keeps its code: rejected (InvalidTx), or landed and failed (R45)", async () => {
+    const buyer = nearSigner(BUYER);
+    const invalidTx = (kind: Json): Json => {
+      const envelope = fixture('error-not-enough-balance.json');
+      envelope.error.data.TxExecutionError.InvalidTxError = kind;
+      return envelope;
+    };
+    const noDetail = fixture('error-not-enough-balance.json');
+    delete noDetail.error.data; // INVALID_TRANSACTION alone
+    const failed = (kind: Json): Json => {
+      const envelope = fixture('send-tx-failure-nonce-used.json');
+      envelope.result.status = { Failure: { ActionError: { index: 0, kind } } };
+      return envelope;
+    };
+    const cases: Array<[SendTxReply, string, RegExp]> = [
+      // rejected: the tx will not land
+      ['error-not-enough-balance.json', 'ERR_INSUFFICIENT_BALANCE', /^ERR_INSUFFICIENT_BALANCE: buyer\.testnet has /],
+      [invalidTx('Expired'), 'TX_FAILED', /^NEAR rejected the pay call: /],
+      [invalidTx('InvalidSignature'), 'TX_FAILED', /^NEAR rejected the pay call: /],
+      [
+        invalidTx({ InvalidAccessKeyError: { AccessKeyNotFound: { account_id: BUYER, public_key: buyer.publicKey } } }),
+        'SIGNER_KEY_NOT_FOUND',
+        /is not an access key of buyer\.testnet/,
+      ],
+      [noDetail, 'TX_FAILED', /^NEAR rejected the pay call: Invalid transaction$/],
+      // landed and failed
+      ['send-tx-failure-nonce-used.json', 'ERR_NONCE_USED', /^ERR_NONCE_USED: nonce already paid/],
+      [failed({ FunctionCallError: { MethodResolveError: 'MethodNotFound' } }), 'NOT_DEPLOYED', /is not a deployed neargate-registry/],
+    ];
+    for (const [i, [reply, code, message]] of cases.entries()) {
+      rpc.sendTx(reply);
+      const err = await rejection(client.pay({ serviceId: 1, nonce: String(6000 + i), depositYocto: DEPOSIT }, buyer.signer));
+      expect(err).not.toBeInstanceOf(TxTimeoutError);
+      expect(err.code).toBe(code);
+      expect(err.message).toMatch(message);
+    }
+    expect(rpc.sent).toHaveLength(cases.length);
+  });
+
+  it('the same 502 or dropped connection before the tx is signed is RPC_ERROR: nothing was sent (R45)', async () => {
+    rpc.sendTx();
+    rpc.query('view_access_key', () => new Response('upstream down', { status: 502 }));
+    const badGateway = await rejection(client.pay({ serviceId: 1, nonce: NONCE, depositYocto: DEPOSIT }, nearSigner(BUYER).signer));
+    expect(badGateway).toMatchObject({ code: 'RPC_ERROR', httpStatus: 502, message: 'the NEAR RPC answered HTTP 502 to the pay call' });
+    rpc.query('view_access_key', () => {
+      throw connectionReset();
+    });
+    const dropped = await rejection(client.pay({ serviceId: 1, nonce: NONCE, depositYocto: DEPOSIT }, nearSigner(BUYER).signer));
+    expect(dropped).toMatchObject({ code: 'RPC_ERROR', httpStatus: 502, message: 'the NEAR RPC was unreachable for the pay call (ECONNRESET)' });
     expect(rpc.sent).toHaveLength(0);
   });
 

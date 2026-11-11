@@ -8,9 +8,11 @@ import {
   ContractExecutionError,
   ContractMethodNotFoundError,
   HostGuestPanicError,
+  InvalidTransactionError,
   LackBalanceForStateActionError,
   NotEnoughBalanceError,
   NotEnoughBalanceForDepositError,
+  RequestRoutedError,
   RpcError,
   SignerDoesNotExistError,
   TransactionExecutionError,
@@ -26,8 +28,10 @@ export interface NearErrorContext {
   registryId: string;
 }
 
-/** A change call also names its signer, the public key it signs with and the tx it signed. */
+/** A change call also names its method, its signer, the public key it signs with and the tx it signed. */
 export interface CallErrorContext extends NearErrorContext {
+  /** The registry method called, e.g. "pay" ("after the pay tx was sent"). */
+  method: string;
   signerId: string;
   publicKey: string;
   /** The hash of the last tx the call signed, and so may have sent; undefined while nothing was signed. */
@@ -37,17 +41,18 @@ export interface CallErrorContext extends NearErrorContext {
 }
 
 /**
- * TX_TIMEOUT (504): a registry change call was signed and sent, but nothing came back for it
- * (the RPC gave up with HTTP 408 or TIMEOUT_ERROR, or the call's own bound ran out). The tx may
- * still land: look it up before retrying, or a retry can register or pay twice. The error
- * carries what that takes:
+ * TX_TIMEOUT (504): a registry change call's tx was sent, but its outcome is unknown: no
+ * definitive NEAR verdict came back for it (the RPC stopped waiting, failed or dropped the
+ * connection after the tx went out, forwarded it without waiting, answered without its outcome,
+ * or the call's own bound ran out). The tx may still land: look it up before retrying, or a
+ * retry can register or pay twice. The error carries what that takes:
  *
  * - `txHash`: the hash of the signed tx that was sent (its explorer page is in the message)
  */
 export class TxTimeoutError extends AgentGateError {
   readonly txHash: string;
 
-  /** `lead` says what gave up, e.g. "the NEAR RPC stopped waiting for the pay call". */
+  /** `lead` says what happened, e.g. "the NEAR RPC failed (HTTP 502) after the pay tx was sent". */
   constructor(lead: string, txHash: string, explorerUrl: string) {
     super(
       'TX_TIMEOUT',
@@ -158,6 +163,11 @@ function networkCode(err: unknown): string | null {
   return typeof code === 'string' && /^[A-Z0-9_]{2,40}$/.test(code) ? code : null;
 }
 
+/** A `fetch` that got no HTTP answer at all: Node's TypeError "fetch failed", a network code under it. */
+function isFetchFailure(err: unknown): err is TypeError {
+  return err instanceof TypeError && (err.message === 'fetch failed' || networkCode(err) !== null);
+}
+
 /**
  * Any failure of a NEAR RPC round trip as an AgentGateError. Transport errors never repeat the
  * error's own text: near-api-js puts the RPC URL (which can embed an API key) in some of them.
@@ -165,8 +175,8 @@ function networkCode(err: unknown): string | null {
  * - a registry without the contract (or not this ABI) → NOT_DEPLOYED (503)
  * - a contract panic → `mapContractPanic`
  * - a transaction the RPC stopped waiting for → TX_TIMEOUT (504); one NEAR rejected → TX_FAILED (502)
- * - HTTP 408 → RPC_TIMEOUT (504): a read can simply be retried (`mapCallError` turns a 408 on a
- *   sent tx into TX_TIMEOUT); other HTTP errors, unreachable RPC, RPC-side errors → RPC_ERROR (502)
+ * - HTTP 408 → RPC_TIMEOUT (504): a read can simply be retried; other HTTP errors, unreachable
+ *   RPC, RPC-side errors → RPC_ERROR (502). (On a sent tx, `mapCallError` makes each of these TX_TIMEOUT.)
  * - malformed JSON → RPC_BAD_RESPONSE (502)
  */
 export function mapNearError(err: unknown, ctx: NearErrorContext): AgentGateError {
@@ -190,7 +200,7 @@ export function mapNearError(err: unknown, ctx: NearErrorContext): AgentGateErro
       504,
     );
   }
-  if (err instanceof TransactionExecutionError) {
+  if (err instanceof TransactionExecutionError || err instanceof InvalidTransactionError) {
     return new AgentGateError('TX_FAILED', withTx(`NEAR rejected ${ctx.what}: ${clip(err.message)}`, err), 502);
   }
   const status = httpStatusOf(err);
@@ -204,7 +214,7 @@ export function mapNearError(err: unknown, ctx: NearErrorContext): AgentGateErro
     // RPC-side errors (node syncing, unknown block, internal error): the node's own text.
     return new AgentGateError('RPC_ERROR', `the NEAR RPC failed ${ctx.what}: ${clip(err.message)}`, 502);
   }
-  if (err instanceof TypeError && (err.message === 'fetch failed' || networkCode(err) !== null)) {
+  if (isFetchFailure(err)) {
     const code = networkCode(err);
     return new AgentGateError(
       'RPC_ERROR',
@@ -220,20 +230,62 @@ export function mapNearError(err: unknown, ctx: NearErrorContext): AgentGateErro
 }
 
 /**
- * A failed change call (sign + send through `Account`) as an AgentGateError: the send-side and
- * signer-side failures first, then everything `mapNearError` covers.
+ * The definitive NEAR verdicts on a sent tx, as near-api-js parses them; only these settle its
+ * outcome:
  *
- * - the RPC giving up on a signed tx (HTTP 408 or TIMEOUT_ERROR) → TxTimeoutError (TX_TIMEOUT,
- *   504) naming the tx, which may still land. A 408 before anything was signed (the access key
- *   or block read) stays RPC_TIMEOUT: nothing was sent, so a retry is safe.
+ * - rejected, so it will not land: INVALID_TRANSACTION, parsed into the TransactionExecutionError
+ *   for its InvalidTxError (NotEnoughBalance, Expired, InvalidSignature, an unknown access key, …),
+ *   or InvalidTransactionError when the RPC gives no detail
+ * - landed and failed: the tx's `Failure` outcome, parsed into a TransactionExecutionError (an
+ *   action error) or a ContractExecutionError (the contract panicked or failed). No contract is
+ *   called once a tx is signed, so after signing a ContractExecutionError can only be this.
+ */
+function isDefinitiveVerdict(err: unknown): boolean {
+  return (
+    err instanceof InvalidTransactionError ||
+    err instanceof TransactionExecutionError ||
+    err instanceof ContractExecutionError
+  );
+}
+
+/** What left a sent tx without a verdict, for its TX_TIMEOUT lead; a transport error's own text is never repeated. */
+function unknownOutcomeLead(err: unknown, ctx: CallErrorContext): string {
+  const sent = `after the ${ctx.method} tx was sent`;
+  const status = httpStatusOf(err);
+  if (err instanceof TransactionTimeoutError || status === 408) return `the NEAR RPC stopped waiting for ${ctx.what}`;
+  if (status !== null) return `the NEAR RPC failed (HTTP ${status}) ${sent}`;
+  if (err instanceof RequestRoutedError) {
+    return `the NEAR RPC forwarded the ${ctx.method} tx to another node without waiting for its outcome`;
+  }
+  if (err instanceof RpcError) return `the NEAR RPC failed (${clip(err.message)}) ${sent}`; // the node's own text
+  if (isFetchFailure(err)) {
+    const code = networkCode(err);
+    return `the NEAR RPC connection failed${code === null ? '' : ` (${code})`} ${sent}`;
+  }
+  return `the NEAR RPC gave no usable answer ${sent}`;
+}
+
+/**
+ * A failed change call (sign + send through `Account`) as an AgentGateError.
+ *
+ * Once the call has signed a tx (`ctx.txHash`), only a definitive NEAR verdict on it
+ * (`isDefinitiveVerdict`) maps as listed below. Any other failure (an HTTP error after
+ * near-api-js's retries, a dropped connection, REQUEST_ROUTED, TIMEOUT_ERROR, a reply this client
+ * cannot read) leaves the tx's outcome unknown: TxTimeoutError (TX_TIMEOUT, 504) naming the tx,
+ * which may still land. Before anything is signed nothing was sent, and a failure maps as for a
+ * read (RPC_TIMEOUT, RPC_ERROR, …): a retry is safe.
+ *
  * - NEAR refusing a tx the signer cannot fund (NotEnoughBalance), or one that leaves an account
  *   short of its storage stake (LackBalanceForState) → ERR_INSUFFICIENT_BALANCE (400), the mock's code
  * - a signing key that is not an access key of the signer → SIGNER_KEY_NOT_FOUND (400)
  * - a signer account that does not exist → SIGNER_ACCOUNT_NOT_FOUND (400)
+ * - anything else → `mapNearError`: a contract panic keeps its `ERR_*` code, another rejection or
+ *   failed action is TX_FAILED
  */
 export function mapCallError(err: unknown, ctx: CallErrorContext): AgentGateError {
-  if (ctx.txHash !== undefined && (err instanceof TransactionTimeoutError || httpStatusOf(err) === 408)) {
-    return new TxTimeoutError(`the NEAR RPC stopped waiting for ${ctx.what}`, ctx.txHash, ctx.explorerUrl);
+  if (err instanceof AgentGateError) return err; // this client's own answer, e.g. the call's time bound
+  if (ctx.txHash !== undefined && !isDefinitiveVerdict(err)) {
+    return new TxTimeoutError(unknownOutcomeLead(err, ctx), ctx.txHash, ctx.explorerUrl);
   }
   if (err instanceof NotEnoughBalanceError || err instanceof NotEnoughBalanceForDepositError) {
     return new AgentGateError(
