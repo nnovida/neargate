@@ -35,7 +35,17 @@ describe('chainErrorCode', () => {
     expect(chainErrorCode(null)).toBeNull();
     expect(chainErrorCode(undefined)).toBeNull();
     expect(chainErrorCode('ERR_ALREADY_ATTESTED')).toBeNull();
-    expect(chainErrorCode({ code: 'ERR_ALREADY_ATTESTED' })).toBe('ERR_ALREADY_ATTESTED');
     expect(chainErrorCode({ code: 42, message: 7 })).toBeNull();
+  });
+
+  it('ignores the ERR_* code of any error that is not an AgentGateError (Node core uses them too)', () => {
+    const nodeStyle = Object.assign(new TypeError('Invalid URL'), { code: 'ERR_INVALID_URL' });
+    expect(chainErrorCode(nodeStyle)).toBeNull();
+    expect(chainErrorCode(Object.assign(new Error('socket hang up'), { code: 'ERR_STREAM_PREMATURE_CLOSE' }))).toBeNull();
+    // a plain object is not an error at all, whatever it carries
+    expect(chainErrorCode({ code: 'ERR_ALREADY_ATTESTED' })).toBeNull();
+    expect(chainErrorCode({ code: 'ERR_ALREADY_ATTESTED', message: 'ERR_ALREADY_ATTESTED: x' })).toBeNull();
+    // ...but a message that starts with a contract code still counts (the live client's shape)
+    expect(chainErrorCode(Object.assign(new Error('ERR_ALREADY_ATTESTED: x'), { code: 'ERR_INVALID_URL' }))).toBe('ERR_ALREADY_ATTESTED');
   });
 });

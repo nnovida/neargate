@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { readFileSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AgentGateError, SELF_MAP_WINDOW_MS } from '@agentgate/shared';
 import {
@@ -5,6 +9,7 @@ import {
   newTestKey,
   postSelfMap,
   signSelfMap,
+  sleep,
   startUpstream,
   testConfig,
   type TestGateway,
@@ -57,6 +62,8 @@ describe('self-service mapping POST /services/:id/map (NEAR full-access key)', (
         headers: { authorization: `Bearer ${gw.config.adminToken}` },
       });
       expect(await list.json()).toEqual([{ serviceId: 1, upstreamUrl: target() }]);
+      // ...and it is on disk, not just in memory (the 204 is only sent once the write landed)
+      expect(JSON.parse(readFileSync(gw.upstreamsFile, 'utf8'))).toEqual({ '1': target() });
     });
 
     it('a later, newer-timestamp request re-maps the same service', async () => {
@@ -263,6 +270,7 @@ describe('self-service mapping POST /services/:id/map (NEAR full-access key)', (
         { ...good, timestamp: good.timestamp + 0.5 },
         { ...good, timestamp: 2 ** 60 },
         { ...good, signature: '!!!not base64!!!' },
+        { ...good, signature: Buffer.alloc(100, 1).toString('base64') }, // valid base64, 136 chars: past the 128-char cap
         { ...good, signature: 5 },
         { ...good, signature: undefined },
       ];
@@ -288,6 +296,13 @@ describe('self-service mapping POST /services/:id/map (NEAR full-access key)', (
   });
 
   describe('check order', () => {
+    it('the body shape runs before the service lookup (malformed body + unknown service → 400)', async () => {
+      const res = await postSelfMap(gw, 999, { ...sign({ serviceId: 999 }), signature: 5 });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid_body' });
+      expect((await postSelfMap(gw, 999, {})).status).toBe(400);
+    });
+
     it('the service lookup runs before the freshness check (unknown service + stale → 404)', async () => {
       const res = await postSelfMap(gw, 999, sign({ serviceId: 999, timestamp: Date.now() - 10 * SELF_MAP_WINDOW_MS }));
       expect(res.status).toBe(404);
@@ -328,6 +343,50 @@ describe('self-service mapping POST /services/:id/map (NEAR full-access key)', (
     });
   });
 
+  describe('concurrency and persistence', () => {
+    it('two or more concurrent identical requests: exactly one 204, the rest 409 replayed', async () => {
+      // Hold every request at the key lookup so all of them are in flight past the cheap checks together.
+      const real = gw.fake.isFullAccessKey.bind(gw.fake);
+      gw.fake.isFullAccessKey = async (accountId, publicKey) => {
+        await sleep(30);
+        return real(accountId, publicKey);
+      };
+      const body = sign();
+      const results = await Promise.all([postSelfMap(gw, 1, body), postSelfMap(gw, 1, body), postSelfMap(gw, 1, body)]);
+      expect(results.map((r) => r.status).sort()).toEqual([204, 409, 409]);
+    });
+
+    it('a persist failure is a 500 and the guard moves with the in-memory mapping: the same body is then 409', async () => {
+      const dir = await mkdtemp(path.join(os.tmpdir(), 'agentgate-selfmap-'));
+      const blocker = path.join(dir, 'state'); // the upstreams file will live inside this directory
+      const broken = await bootGateway({ fake: gw.fake, upstreamsFile: path.join(blocker, 'upstreams.json') });
+      try {
+        // A regular file where the directory should be makes every later write fail (even for root).
+        writeFileSync(blocker, 'not a directory');
+        const t = Date.now();
+        const body = sign({ timestamp: t });
+        const first = await postSelfMap(broken, 1, body);
+        expect(first.status).toBe(500);
+        expect(await first.json()).toEqual({ error: 'internal_error' });
+
+        // The store updates memory before it persists, so the gateway IS serving the new URL: the guard
+        // must say the same thing, or the failed request could be replayed against a mapping it already changed.
+        expect((await fetch(`${broken.baseUrl}/svc/1`)).status).toBe(402);
+        const replay = await postSelfMap(broken, 1, body);
+        expect(replay.status).toBe(409);
+        expect(await replay.json()).toEqual({ error: 'replayed' });
+
+        // Recovery: fix the disk, re-sign with a newer timestamp.
+        await rm(blocker);
+        expect((await postSelfMap(broken, 1, sign({ timestamp: t + 1 }))).status).toBe(204);
+        expect(JSON.parse(readFileSync(broken.upstreamsFile, 'utf8'))).toEqual({ '1': target() });
+      } finally {
+        await broken.close();
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe('chain trouble', () => {
     it('an unreachable chain on the key lookup → 503, never 204, and nothing is mapped', async () => {
       gw.fake.keyLookupFailure = new AgentGateError('devnet_unreachable', 'devnet request failed', 502);
@@ -340,6 +399,16 @@ describe('self-service mapping POST /services/:id/map (NEAR full-access key)', (
       // The failed attempt did not advance the replay guard: the same signed request works once the chain is back.
       gw.fake.keyLookupFailure = null;
       expect((await postSelfMap(gw, 1, body)).status).toBe(204);
+    });
+
+    it('fails closed: any answer other than a literal true is a refusal', async () => {
+      for (const answer of ['yes', 1, {}, null, undefined, 'true']) {
+        gw.fake.isFullAccessKey = () => Promise.resolve(answer as unknown as boolean);
+        const res = await postSelfMap(gw, 1, sign({ timestamp: Date.now() }));
+        expect(res.status, JSON.stringify(answer)).toBe(403);
+        expect(await res.json()).toEqual({ error: 'key_not_full_access' });
+      }
+      expect(await isMapped(1)).toBe(false);
     });
 
     it('a contract rejection on the key lookup is also a 503, not a verdict on the key', async () => {

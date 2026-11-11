@@ -192,9 +192,13 @@ export class MockChainHttpClient implements ChainClient {
   async isFullAccessKey(accountId: string, publicKey: string): Promise<boolean> {
     assertNonEmpty(accountId, 'accountId');
     assertNonEmpty(publicKey, 'publicKey');
-    const result = await this.get<{ fullAccess: boolean }>(
+    const result = await this.get<{ fullAccess?: unknown } | undefined>(
       `/accounts/${encodeURIComponent(accountId)}/keys/${encodeURIComponent(publicKey)}`,
     );
+    // The answer gates owner authority: anything but a boolean is a broken devnet, never a "yes".
+    if (typeof result?.fullAccess !== 'boolean') {
+      throw new AgentGateError('devnet_bad_response', 'devnet key check did not answer { fullAccess: boolean }', 502);
+    }
     return result.fullAccess;
   }
 

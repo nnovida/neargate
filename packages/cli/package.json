@@ -14,7 +14,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.22.2"
   },
   "license": "MIT",
   "homepage": "https://example.invalid/AgentGate#readme",

@@ -123,7 +123,8 @@ export function createSelfMapHandler(deps: SelfMapDeps): (req: Request, res: Res
       res.status(503).json({ error: 'chain_unavailable' });
       return;
     }
-    if (!fullAccess) {
+    if (fullAccess !== true) {
+      // Fail closed: anything but a literal `true` from the chain client is a refusal.
       res.status(403).json({ error: 'key_not_full_access' });
       return;
     }
@@ -143,17 +144,12 @@ export function createSelfMapHandler(deps: SelfMapDeps): (req: Request, res: Res
     }
 
     // Advance the guard before the first await so two concurrent requests cannot both pass the
-    // replay check; give it back if the mapping could not be persisted.
+    // replay check. `upstreams.set` updates the in-memory map before it persists, so the guard
+    // and the served mapping move together: a persist failure surfaces as a 500 (generic
+    // handler) and the same signed request then reads as replayed; the owner re-signs with a
+    // newer timestamp.
     lastSelfMapTs.set(id, timestamp);
-    try {
-      await upstreams.set(id, verdict.url.toString());
-    } catch (err) {
-      if (lastSelfMapTs.get(id) === timestamp) {
-        if (last === undefined) lastSelfMapTs.delete(id);
-        else lastSelfMapTs.set(id, last);
-      }
-      throw err;
-    }
+    await upstreams.set(id, verdict.url.toString());
     logger.info('self_mapped', { serviceId: id });
     res.status(204).end();
   };

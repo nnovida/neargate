@@ -17,7 +17,7 @@ const svc = (over: Partial<ServiceRecord> = {}): ServiceRecord => ({
   ...over,
 });
 
-describe('isSelfPaid (shared rule the gateway applies) — F1 wash-trade guard', () => {
+describe('isSelfPaid (the shared rule the registry and devnet apply; the gateway follows verdict.selfPaid) — F1 wash-trade guard', () => {
   it('true when the payer is the payout account', () => {
     expect(isSelfPaid('seller.mock', svc())).toBe(true);
   });

@@ -74,8 +74,8 @@ export interface SettlementResponse {
   errorReason?: string;
 }
 
-/** Longest base58 encoding of 32 bytes; anything longer is rejected before decoding. */
-const TX_HASH_MAX_CHARS = 44;
+/** Longest base58 encoding of 32 bytes (a tx hash or an ed25519 key); anything longer is rejected before decoding. */
+const BASE58_32_BYTES_MAX_CHARS = 44;
 const ED25519_KEY_PREFIX = 'ed25519:';
 /** Strict, padded standard base64. */
 const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
@@ -100,7 +100,7 @@ export function isNearAccountId(s: unknown): s is string {
  * (each becomes one '1'), and some 44-char strings decode to 33 bytes.
  */
 export function isNearTxHash(s: unknown): s is string {
-  if (typeof s !== 'string' || s.length > TX_HASH_MAX_CHARS) return false;
+  if (typeof s !== 'string' || s.length > BASE58_32_BYTES_MAX_CHARS) return false;
   try {
     return base58Decode(s).length === 32;
   } catch {
@@ -112,7 +112,7 @@ export function isNearTxHash(s: unknown): s is string {
 export function isEd25519PublicKey(s: unknown): s is string {
   if (typeof s !== 'string' || !s.startsWith(ED25519_KEY_PREFIX)) return false;
   const encoded = s.slice(ED25519_KEY_PREFIX.length);
-  if (encoded.length > TX_HASH_MAX_CHARS) return false; // longest base58 of 32 bytes
+  if (encoded.length > BASE58_32_BYTES_MAX_CHARS) return false;
   try {
     return base58Decode(encoded).length === 32;
   } catch {

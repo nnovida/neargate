@@ -1,3 +1,5 @@
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startServer } from '@agentgate/devnet';
 import type { RunningServer } from '@agentgate/devnet';
@@ -514,4 +516,42 @@ describe('MockChainHttpClient.verifyPayment — every failure reason, in the reg
     await expectAgentGateError(chain.verifyPayment(query({ maxAgeMs: -1 })), 'invalid_query', 400);
     await expectAgentGateError(chain.verifyPayment(query({ maxAgeMs: Number.NaN })), 'invalid_query', 400);
   });
+});
+
+describe('MockChainHttpClient.isFullAccessKey fails closed on a malformed devnet answer', () => {
+  let stub: http.Server;
+  let client: MockChainHttpClient;
+  let answer = '';
+
+  beforeAll(async () => {
+    stub = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(answer);
+    });
+    await new Promise<void>((resolve) => stub.listen(0, '127.0.0.1', resolve));
+    client = new MockChainHttpClient(`http://127.0.0.1:${(stub.address() as AddressInfo).port}`);
+  });
+
+  afterAll(async () => {
+    stub.closeAllConnections();
+    await new Promise<void>((resolve) => stub.close(() => resolve()));
+  });
+
+  it('passes a boolean answer through', async () => {
+    answer = '{"fullAccess":true}';
+    expect(await client.isFullAccessKey('owner.mock', 'ed25519:abc')).toBe(true);
+    answer = '{"fullAccess":false}';
+    expect(await client.isFullAccessKey('owner.mock', 'ed25519:abc')).toBe(false);
+  });
+
+  it.each(['{"fullAccess":"yes"}', '{"fullAccess":"true"}', '{"fullAccess":1}', '{"fullAccess":null}', '{}', 'null', '[]', 'not json', ''])(
+    'throws devnet_bad_response instead of answering for %j',
+    async (body) => {
+      answer = body;
+      await expect(client.isFullAccessKey('owner.mock', 'ed25519:abc')).rejects.toMatchObject({
+        code: 'devnet_bad_response',
+        httpStatus: 502,
+      });
+    },
+  );
 });
