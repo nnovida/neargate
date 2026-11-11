@@ -20,10 +20,10 @@ export {
 } from './status';
 export {
   createDemoAccounts,
-  generateMockPublicKey,
-  DEMO_FAUCET_CSPR,
+  generateMockAccountId,
+  DEMO_FAUCET_NEAR,
   type CreateDemoAccountsOpts,
   type DemoAccount,
   type DemoAccountsResult,
 } from './demo-accounts';
-export { signerAccountHash, signerPublicKeyHex, signMessage } from './identity';
+export { signerAccountId, signMessage } from './identity';

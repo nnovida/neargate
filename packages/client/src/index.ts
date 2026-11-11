@@ -1,47 +1,33 @@
-import type { AnySigner, ChainClient, Logger, Motes } from '@agentgate/shared';
-import { AgentGateError, compareMotes, parseMotes } from '@agentgate/shared';
+import type { AnySigner, ChainClient, Logger, Yocto } from '@agentgate/shared';
+import { AgentGateError, compareYocto, isNearAccountId, parseYocto } from '@agentgate/shared';
 import {
   encodeXPayment, decodeXPaymentResponse,
-  X402_VERSION, X402_VERSION_V2, X402_SCHEME, toCaip2Network,
-  type PaymentRequirements, type PaymentRequiredResponse, type SettlementResponse,
-  type X402V2Requirements,
+  X402_VERSION, X402_SCHEME,
+  type PaymentRequirements, type SettlementResponse,
 } from '@agentgate/shared';
 import { resolvedHostIsPublic, validateHttpUrl } from '@agentgate/shared/net-guard';
-import {
-  ExactCasperScheme,
-  createClientCasperSigner,
-  type ClientCasperSigner,
-} from '@make-software/casper-x402';
-import { encodePaymentSignatureHeader } from '@x402/core/http';
-import { createRequire } from 'node:module';
-// casper-js-sdk is CJS; a static `import { KeyAlgorithm }` crashes at runtime under
-// ESM loaders (tsx / node ESM). Load it loader-agnostically, like @agentgate/chain's sdk shim.
-const { KeyAlgorithm } = createRequire(import.meta.url)('casper-js-sdk') as typeof import('casper-js-sdk');
 
-/** Result of a fetchPaid call (SPEC §6). */
+/** Result of a fetchPaid call. */
 export interface PayAndFetchResult {
   status: number;
   body: unknown;
   paid: boolean;
   requirements?: PaymentRequirements;
   settlement?: SettlementResponse;
-  deployHash?: string;
-  priceMotes?: Motes;
-  /**
-   * Set on the facilitator (x402 v2) rail: the CEP-18 token payment — atomic
-   * `amount`, token `symbol`/`decimals`, and the `asset` package hash. Lets
-   * callers display the real token charge instead of the on-chain CSPR nominal.
-   */
-  facilitator?: { amount: string; symbol: string; decimals: number; asset: string };
+  txHash?: string;
+  priceYocto?: Yocto;
 }
 
 export interface AgentGateClientOpts {
   chain: ChainClient;
   signer: AnySigner;
-  /** Refuse to pay any invoice priced above this (motes decimal string). */
-  maxPriceMotes?: Motes;
+  /**
+   * Refuse to pay any invoice whose maxAmountRequired is above this (yocto decimal string).
+   * TODO(Task 5): budget cap `maxYocto` → BUDGET_EXCEEDED.
+   */
+  maxPriceYocto?: Yocto;
   logger?: Logger;
-  /** Wait after the on-chain transfer before retrying with proof. Default: 0 (mock) / 3000 (live). */
+  /** Wait after the on-chain payment before retrying with proof. Default: 0 (mock) / 3000 (live). */
   settleDelayMs?: number;
   /** Injectable fetch implementation (dependency injection for tests). Defaults to globalThis.fetch. */
   fetchImpl?: typeof fetch;
@@ -53,26 +39,13 @@ export interface AgentGateClientOpts {
    * data, so in live mode it must not point at internal infrastructure.
    */
   rejectPrivateHosts?: boolean;
-  /**
-   * Key algorithm for the facilitator rail's EIP-712 signer (buyer PEM). Default
-   * secp256k1. Only used when the 402 is an x402 v2 (facilitator) invoice.
-   */
-  buyerKeyAlgo?: 'ed25519' | 'secp256k1';
-  /**
-   * Test seam: build the facilitator (EIP-712) signer. Defaults to the real
-   * @make-software/casper-x402 createClientCasperSigner from the PEM path.
-   */
-  facilitatorSignerFactory?: (
-    pemPath: string,
-    keyAlgo: 'ed25519' | 'secp256k1',
-  ) => Promise<ClientCasperSigner>;
 }
 
 export interface AgentGateClient {
   /**
    * GET the URL; on 402 parse+validate the PaymentRequiredResponse (refuse if
-   * maxAmountRequired > maxPriceMotes), pay via chain.transfer with transferId =
-   * extra.nonce, then retry with the X-PAYMENT header (base64-encoded proof).
+   * maxAmountRequired > maxPriceYocto), pay via chain.pay with the invoice's
+   * serviceId + nonce, then retry with the X-PAYMENT header (base64-encoded proof).
    * Retries on 402 + Retry-After (seconds) up to 5×. Non-402 first responses
    * pass through. Exposes `requirements` (parsed entry) and `settlement` (decoded
    * X-PAYMENT-RESPONSE) on success.
@@ -85,7 +58,6 @@ const MAX_PENDING_RETRIES = 5;
 /** Never sleep longer than this per pending retry, regardless of what the server asks for. */
 const MAX_RETRY_AFTER_MS = 30_000;
 
-const ACCOUNT_HASH_RE = /^account-hash-[0-9a-fA-F]{64}$/;
 const NONCE_RE = /^\d{1,20}$/;
 const U64_MAX = 18_446_744_073_709_551_615n; // 2^64 - 1
 
@@ -100,9 +72,10 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 /**
  * Strict runtime validation of a PaymentRequiredResponse body. Finds the first
  * accepts[] entry matching scheme==="exact" and network===chainNetwork, then
- * validates maxAmountRequired (motes), payTo (account-hash-<64hex>),
+ * validates maxAmountRequired (yocto), payTo (NEAR account id),
  * extra.nonce (u64 decimal) and extra.expiresAtMs (future unix ms).
  * Throws AgentGateError('BAD_INVOICE') on any violation.
+ * TODO(Task 5): validate the NEAR registry extra (contractId, method, priceYocto, storageFeeYocto).
  */
 export function parsePaymentRequired(
   raw: unknown, chainNetwork: string, now: number = Date.now(),
@@ -119,12 +92,12 @@ export function parsePaymentRequired(
   if (!req) throw new AgentGateError('NETWORK_MISMATCH', `invoice offers no payment on network "${chainNetwork}" — refusing to pay`, 502);
   if (typeof req.maxAmountRequired !== 'string') throw badInvoice('maxAmountRequired must be a string');
   try {
-    parseMotes(req.maxAmountRequired);
+    parseYocto(req.maxAmountRequired);
   } catch {
-    throw badInvoice(`maxAmountRequired ${JSON.stringify(req.maxAmountRequired)} is not a motes decimal string`);
+    throw badInvoice(`maxAmountRequired ${JSON.stringify(req.maxAmountRequired)} is not a yocto decimal string`);
   }
-  if (typeof req.payTo !== 'string' || !ACCOUNT_HASH_RE.test(req.payTo)) {
-    throw badInvoice('payTo must be "account-hash-<64 hex>"');
+  if (!isNearAccountId(req.payTo)) {
+    throw badInvoice('payTo must be a NEAR account id');
   }
   const nonce = req.extra?.nonce;
   if (typeof nonce !== 'string' || !NONCE_RE.test(nonce) || BigInt(nonce) > U64_MAX) {
@@ -132,37 +105,6 @@ export function parsePaymentRequired(
   }
   if (typeof req.extra?.expiresAtMs !== 'number' || !Number.isFinite(req.extra.expiresAtMs) || req.extra.expiresAtMs <= now) {
     throw badInvoice('invoice is expired — refusing to pay');
-  }
-  return req;
-}
-
-const PKG_HASH_RE = /^[0-9a-f]{64}$/i;
-const V2_ADDRESS_RE = /^[0-9a-f]{66}$/i; // '00'+account-hash
-
-/**
- * Validate an x402 v2 (facilitator) PaymentRequiredResponse and return the
- * matching accepts[] entry (scheme 'exact', CAIP-2 network match). Throws
- * BAD_INVOICE / NETWORK_MISMATCH on any violation.
- */
-export function parseV2PaymentRequired(raw: unknown, chainNetwork: string): X402V2Requirements {
-  if (!isRecord(raw)) throw badInvoice('body is not a JSON object');
-  if (raw['x402Version'] !== X402_VERSION_V2) throw badInvoice(`unsupported x402Version (expected ${X402_VERSION_V2})`);
-  const accepts = raw['accepts'];
-  if (!Array.isArray(accepts) || accepts.length === 0) throw badInvoice('accepts must be a non-empty array');
-  const wantNetwork = toCaip2Network(chainNetwork);
-  const req = accepts.find(
-    (a): a is X402V2Requirements =>
-      isRecord(a) && a['scheme'] === X402_SCHEME && a['network'] === wantNetwork,
-  );
-  if (!req) {
-    throw new AgentGateError('NETWORK_MISMATCH', `invoice offers no facilitator payment on network "${wantNetwork}" — refusing to pay`, 502);
-  }
-  if (typeof req.asset !== 'string' || !PKG_HASH_RE.test(req.asset)) throw badInvoice('asset must be a 64-hex CEP-18 package hash');
-  if (typeof req.amount !== 'string' || !/^\d+$/.test(req.amount)) throw badInvoice('amount must be an atomic-unit decimal string');
-  if (typeof req.payTo !== 'string' || !V2_ADDRESS_RE.test(req.payTo)) throw badInvoice('payTo must be a 66-hex address');
-  const extra = req.extra as Record<string, unknown> | undefined;
-  if (!isRecord(extra) || typeof extra['name'] !== 'string' || typeof extra['version'] !== 'string') {
-    throw badInvoice('extra must carry the token { name, version }');
   }
   return req;
 }
@@ -217,32 +159,27 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Agent-side pay helper (SPEC §6): parse 402 → validate PaymentRequirements →
- * pay (native transfer with transfer_id = extra.nonce) → retry with X-PAYMENT header.
+ * Agent-side pay helper: parse 402 → validate PaymentRequirements →
+ * pay (registry `pay` with the invoice nonce) → retry with X-PAYMENT header.
  */
 export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClient {
   if (!opts || typeof opts !== 'object') {
     throw new AgentGateError('BAD_OPTS', 'createAgentGateClient requires an options object', 500);
   }
-  const { chain, signer, maxPriceMotes, logger } = opts;
-  if (!chain || typeof chain.transfer !== 'function') {
+  const { chain, signer, maxPriceYocto, logger } = opts;
+  if (!chain || typeof chain.pay !== 'function') {
     throw new AgentGateError('BAD_OPTS', 'opts.chain must be a ChainClient', 500);
   }
-  if (!signer || (signer.kind !== 'mock' && signer.kind !== 'pem')) {
-    throw new AgentGateError('BAD_OPTS', 'opts.signer must be a mock or pem signer', 500);
+  if (!signer || (signer.kind !== 'mock' && signer.kind !== 'near')) {
+    throw new AgentGateError('BAD_OPTS', 'opts.signer must be a mock or near signer', 500);
   }
-  if (maxPriceMotes !== undefined) {
-    parseMotes(maxPriceMotes); // throws AgentGateError('INVALID_AMOUNT') on garbage
+  if (maxPriceYocto !== undefined) {
+    parseYocto(maxPriceYocto); // throws AgentGateError('INVALID_AMOUNT') on garbage
   }
   const fetchImpl: typeof fetch = opts.fetchImpl ?? fetch;
   const settleDelayMs = opts.settleDelayMs ?? (chain.network === 'mock' ? 0 : 3000);
   const requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
   const rejectPrivateHosts = opts.rejectPrivateHosts ?? chain.network !== 'mock';
-  const buyerKeyAlgo = opts.buyerKeyAlgo ?? 'secp256k1';
-  const makeFacilitatorSigner =
-    opts.facilitatorSignerFactory ??
-    ((pemPath: string, algo: 'ed25519' | 'secp256k1'): Promise<ClientCasperSigner> =>
-      createClientCasperSigner(pemPath, algo === 'secp256k1' ? KeyAlgorithm.SECP256K1 : KeyAlgorithm.ED25519));
 
   /** Adds a per-request timeout unless the caller supplied their own signal. */
   function withTimeout(init?: RequestInit): RequestInit {
@@ -301,12 +238,6 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
 
     if (!first.isJson) throw badInvoice('402 response body is not JSON');
 
-    // x402 v2 → the OFFICIAL facilitator rail (CEP-18 + EIP-712). Discriminate on
-    // the top-level version, never by field-sniffing; native v1 falls through.
-    if (isRecord(first.body) && first.body['x402Version'] === X402_VERSION_V2) {
-      return await payViaFacilitator(url, init, first.body);
-    }
-
     // Parse and validate the PaymentRequiredResponse; network match is inside parsePaymentRequired.
     const req = parsePaymentRequired(first.body, chain.network);
 
@@ -318,20 +249,20 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
     });
 
     // Price guard — never pay above the caller's cap.
-    if (maxPriceMotes !== undefined && compareMotes(req.maxAmountRequired, maxPriceMotes) > 0) {
+    if (maxPriceYocto !== undefined && compareYocto(req.maxAmountRequired, maxPriceYocto) > 0) {
       throw new AgentGateError(
         'PRICE_EXCEEDED',
-        `invoice price ${req.maxAmountRequired} motes exceeds maxPriceMotes ${maxPriceMotes}`,
+        `invoice price ${req.maxAmountRequired} yocto exceeds maxPriceYocto ${maxPriceYocto}`,
         402,
       );
     }
 
-    // Pay: native transfer carrying extra.nonce as transfer_id.
-    const { deployHash } = await chain.transfer(
-      { to: req.payTo, amountMotes: req.maxAmountRequired, transferId: req.extra.nonce },
+    // Pay through the registry: `pay(service_id, nonce)` with price + storage fee attached.
+    const { txHash } = await chain.pay(
+      { serviceId: req.extra.serviceId, nonce: req.extra.nonce, depositYocto: req.maxAmountRequired },
       signer,
     );
-    logger?.info('fetchPaid: payment sent', { deployHash, amountMotes: req.maxAmountRequired });
+    logger?.info('fetchPaid: payment sent', { txHash, amountYocto: req.maxAmountRequired });
 
     await sleep(settleDelayMs);
 
@@ -341,7 +272,7 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
       x402Version: X402_VERSION,
       scheme: X402_SCHEME,
       network: chain.network,
-      payload: { transaction: deployHash, transferId: req.extra.nonce },
+      payload: { kind: 'tx', transaction: txHash, nonce: req.extra.nonce, payer: signer.accountId },
     }));
     const proofInit: RequestInit = { ...init, headers };
 
@@ -356,8 +287,8 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
           paid: true,
           requirements: req,
           settlement: res.settlement,
-          deployHash,
-          priceMotes: req.maxAmountRequired,
+          txHash,
+          priceYocto: req.maxAmountRequired,
         };
       }
       const wait = res.retryAfterMs;
@@ -368,77 +299,13 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
           body: res.body,
           paid: true,
           requirements: req,
-          deployHash,
-          priceMotes: req.maxAmountRequired,
+          txHash,
+          priceYocto: req.maxAmountRequired,
         };
       }
       pendingRetries += 1;
       logger?.debug('fetchPaid: verification pending, retrying', { wait, attempt: pendingRetries });
       await sleep(wait);
-    }
-  }
-
-  /**
-   * Facilitator (x402 v2) rail: sign an EIP-712 CEP-18 authorization with the
-   * buyer PEM (via @make-software/casper-x402) and retry with the PAYMENT-SIGNATURE
-   * header. The gateway settles server-side, so there is no local chain.transfer
-   * and no settle delay; the settlement tx hash comes back on X-PAYMENT-RESPONSE.
-   */
-  async function payViaFacilitator(
-    url: string, init: RequestInit | undefined, body: unknown,
-  ): Promise<PayAndFetchResult> {
-    if (signer.kind !== 'pem') {
-      throw new AgentGateError('SIGNER_MISSING', 'facilitator rail requires a live pem key (mock signer not supported)', 400);
-    }
-    const reqs = parseV2PaymentRequired(body, chain.network);
-    const facilitator = {
-      amount: reqs.amount,
-      symbol: reqs.extra.symbol,
-      decimals: reqs.extra.decimals,
-      asset: reqs.asset,
-    };
-    logger?.info('fetchPaid: received v2 facilitator requirements', {
-      url, asset: reqs.asset, amount: reqs.amount, network: reqs.network,
-    });
-    const s = await makeFacilitatorSigner(signer.pemPath, buyerKeyAlgo);
-    const built = await new ExactCasperScheme(s).createPaymentPayload(X402_VERSION_V2, reqs);
-    const paymentPayload = {
-      x402Version: X402_VERSION_V2,
-      accepted: reqs,
-      payload: built.payload,
-      ...(built.extensions ? { extensions: built.extensions } : {}),
-    };
-    const headers = new Headers(init?.headers);
-    headers.set('PAYMENT-SIGNATURE', encodePaymentSignatureHeader(paymentPayload));
-    const proofInit: RequestInit = { ...init, headers };
-
-    let pendingRetries = 0;
-    for (;;) {
-      const res = await doFetch(url, withTimeout(proofInit));
-      if (res.status !== 402) {
-        logger?.info('fetchPaid: facilitator-paid request completed', { url, status: res.status });
-        return {
-          status: res.status,
-          body: res.body,
-          paid: true,
-          settlement: res.settlement,
-          deployHash: res.settlement?.transaction,
-          facilitator,
-        };
-      }
-      if (res.retryAfterMs === undefined || pendingRetries >= MAX_PENDING_RETRIES) {
-        logger?.warn('fetchPaid: facilitator payment not settled', { url, status: res.status, pendingRetries });
-        return {
-          status: res.status,
-          body: res.body,
-          paid: false,
-          settlement: res.settlement,
-          deployHash: res.settlement?.transaction,
-          facilitator,
-        };
-      }
-      pendingRetries += 1;
-      await sleep(res.retryAfterMs);
     }
   }
 

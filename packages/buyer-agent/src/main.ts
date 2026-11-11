@@ -1,17 +1,17 @@
 /**
- * CLI entry for `npm run agent -- --task "..." [--budget 5]` (root forwarder, SPEC §8).
+ * CLI entry for `npm run agent -- --task "..." [--budget 5]` (root forwarder).
  * Builds its dependencies from loadConfig() + createChainClient() and runs the loop once.
  */
-import { createLogger, csprToMotes, isAgentGateError, loadConfig } from '@agentgate/shared';
+import { createLogger, isAgentGateError, loadConfig, nearToYocto } from '@agentgate/shared';
 import { createChainClient } from '@agentgate/chain';
 import { AnthropicLlm, MockLlm, defaultBuyerSigner, runBuyerAgent } from './index';
 import type { LlmClient } from './index';
 
-const USAGE = 'usage: npm run agent -- --task "<task>" [--budget <cspr>]';
+const USAGE = 'usage: npm run agent -- --task "<task>" [--budget <near>]';
 
-function parseArgs(argv: string[]): { task: string; budgetCspr?: string } {
+function parseArgs(argv: string[]): { task: string; budgetNear?: string } {
   let task = '';
-  let budgetCspr: string | undefined;
+  let budgetNear: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === undefined) continue;
@@ -20,9 +20,9 @@ function parseArgs(argv: string[]): { task: string; budgetCspr?: string } {
     } else if (arg.startsWith('--task=')) {
       task = arg.slice('--task='.length);
     } else if (arg === '--budget') {
-      budgetCspr = argv[++i];
+      budgetNear = argv[++i];
     } else if (arg.startsWith('--budget=')) {
-      budgetCspr = arg.slice('--budget='.length);
+      budgetNear = arg.slice('--budget='.length);
     } else if (arg === '--help' || arg === '-h') {
       console.log(USAGE);
       process.exit(0);
@@ -35,19 +35,19 @@ function parseArgs(argv: string[]): { task: string; budgetCspr?: string } {
     console.error(USAGE);
     process.exit(2);
   }
-  if (budgetCspr !== undefined) {
+  if (budgetNear !== undefined) {
     try {
-      csprToMotes(budgetCspr);
+      nearToYocto(budgetNear);
     } catch {
-      console.error(`--budget must be a CSPR decimal string (e.g. "5" or "0.5"), got "${budgetCspr}"`);
+      console.error(`--budget must be a NEAR decimal string (e.g. "5" or "0.5"), got "${budgetNear}"`);
       process.exit(2);
     }
   }
-  return budgetCspr !== undefined ? { task, budgetCspr } : { task };
+  return budgetNear !== undefined ? { task, budgetNear } : { task };
 }
 
 async function main(): Promise<void> {
-  const { task, budgetCspr } = parseArgs(process.argv.slice(2));
+  const { task, budgetNear } = parseArgs(process.argv.slice(2));
   const logger = createLogger('buyer-agent');
 
   const config = loadConfig();
@@ -60,12 +60,12 @@ async function main(): Promise<void> {
   logger.info('buyer agent starting', {
     mode: config.mode,
     llm: llm.name,
-    budgetCspr: budgetCspr ?? config.buyerBudgetCspr,
+    budgetNear: budgetNear ?? config.buyerBudgetNear,
   });
 
   const report = await runBuyerAgent({
     task,
-    ...(budgetCspr !== undefined ? { budgetCspr } : {}),
+    ...(budgetNear !== undefined ? { budgetNear } : {}),
     chain,
     signer,
     llm,
@@ -73,15 +73,15 @@ async function main(): Promise<void> {
     config,
   });
 
-  if (!report.paid && report.deployHash === null && report.summary.startsWith('refused')) {
+  if (!report.paid && report.paymentTxHash === null && report.summary.startsWith('refused')) {
     // Budget refusal is a clean, intentional stop — exit 0 with the refusal already printed.
     logger.info('run finished: refused within budget policy');
   } else {
     logger.info('run finished', {
       serviceId: report.chosenServiceId,
-      deployHash: report.deployHash,
+      paymentTxHash: report.paymentTxHash,
       attestationTxHash: report.attestationTxHash,
-      spentMotes: report.spentMotes,
+      spentYocto: report.spentYocto,
     });
   }
 }

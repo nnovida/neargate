@@ -1,5 +1,5 @@
 import type { Logger, ServiceRecord, ServiceScore, TrustTier } from '@agentgate/shared';
-import { AgentGateError, compareMotes, formatCspr } from '@agentgate/shared';
+import { AgentGateError, compareYocto, formatNear } from '@agentgate/shared';
 
 /** One row of the on-chain catalog handed to the LLM. */
 export interface CatalogEntry {
@@ -66,7 +66,7 @@ export class MockLlm implements LlmClient {
     const pool = matched.length > 0 ? matched : active;
 
     const sorted = [...pool].sort((a, b) => {
-      const byPrice = compareMotes(a.service.priceMotes, b.service.priceMotes);
+      const byPrice = compareYocto(a.service.priceYocto, b.service.priceYocto);
       if (byPrice !== 0) return byPrice;
       const byTier = TIER_RANK[b.tier] - TIER_RANK[a.tier];
       if (byTier !== 0) return byTier;
@@ -83,9 +83,9 @@ export class MockLlm implements LlmClient {
     const reason =
       matched.length > 0
         ? `cheapest active service matching task keywords [${matchedKws.join(', ')}] at ` +
-          `${formatCspr(chosen.service.priceMotes)} (trust: ${chosen.tier})`
+          `${formatNear(chosen.service.priceYocto)} (trust: ${chosen.tier})`
         : `no service matched task keywords [${keywords.join(', ')}]; falling back to the ` +
-          `cheapest active service at ${formatCspr(chosen.service.priceMotes)} (trust: ${chosen.tier})`;
+          `cheapest active service at ${formatNear(chosen.service.priceYocto)} (trust: ${chosen.tier})`;
 
     return Promise.resolve({ serviceId: chosen.service.id, reason });
   }
@@ -249,8 +249,8 @@ export class AnthropicLlm implements LlmClient {
       serviceId: e.service.id,
       name: e.service.name,
       description: e.service.description,
-      priceMotes: e.service.priceMotes,
-      priceCspr: formatCspr(e.service.priceMotes),
+      priceYocto: e.service.priceYocto,
+      priceNear: formatNear(e.service.priceYocto),
       trustTier: e.tier,
       score: e.score,
       active: e.service.active,

@@ -2,21 +2,20 @@ import type {
   AgentGateMode,
   AnySigner,
   ChainClient,
-  Motes,
   RegisterServiceInput,
+  Yocto,
 } from '@agentgate/shared';
-import { AgentGateError, buildSelfMapMessage, csprToMotes, parseMotes } from '@agentgate/shared';
-import { signerAccountHash, signerPublicKeyHex, signMessage } from './identity';
+import { AgentGateError, buildSelfMapMessage, nearToYocto, parseYocto } from '@agentgate/shared';
+import { signerAccountId, signMessage } from './identity';
 import type { FetchLike } from './types';
 import {
   MAX_DESCRIPTION_LENGTH,
   MAX_NAME_LENGTH,
   normalizeBaseUrl,
   optionalSafeText,
-  requireAccountHash,
+  requireAccountId,
   requireHttpUrl,
   requireNonEmpty,
-  requirePublicKeyHex,
   requireSafeText,
 } from './validate';
 
@@ -29,15 +28,15 @@ export const DEFAULT_WRAP_FETCH_TIMEOUT_MS = 15_000;
 export interface WrapServiceOpts {
   /** Upstream API URL to wrap. Kept private — only ever sent to the gateway admin API. */
   upstreamUrl: string;
-  /** Price per call in CSPR (decimal string, max 9 dp, must be > 0). */
-  priceCspr: string;
+  /** Price per call in NEAR (decimal string, max 24 dp, must be > 0). */
+  priceNear: string;
   name: string;
   description?: string;
   /** Gateway base URL; the canonical public endpoint becomes `<gateway>/svc/<id>`. */
   gateway: string;
-  /** "account-hash-<64hex>"; defaults to the one derived from the signer. */
+  /** NEAR account id that receives the price; defaults to the signer's account. */
   paymentTarget?: string;
-  /** Public key hex allowed to record attestations; defaults to the signer's public key. */
+  /** NEAR account id allowed to record attestations; defaults to the signer's account. */
   attestor?: string;
   /** Base URL for the printed dashboard link (default http://localhost:3000). */
   dashboardBaseUrl?: string;
@@ -47,7 +46,7 @@ export interface WrapServiceOpts {
   adminToken: string;
   /** Runtime mode; in 'live' a non-localhost gateway must use https:// (token safety). */
   mode?: AgentGateMode;
-  /** Casper network name (live self-map signature). Defaults to '' (mock ignores it). */
+  /** `chain.network`, bound into the live self-map signature. Defaults to '' (mock ignores it). */
   network?: string;
   /** Timeout (ms) for the admin-mapping POST. Defaults to DEFAULT_WRAP_FETCH_TIMEOUT_MS. */
   timeoutMs?: number;
@@ -89,9 +88,9 @@ export function adminRetryCurl(adminUrl: string, serviceId: number, upstreamUrl:
 /**
  * Programmatic `agentgate wrap` (used by scripts/demo.ts and the bin):
  *
- * 1. Registers the service on-chain FIRST. Per SPEC §9 (final decision) the
- *    `endpointUrl` sent to the registry is the **gateway base URL**; the registry
- *    stores it and every reader computes `endpointUrl = <gateway>/svc/<id>`.
+ * 1. Registers the service on-chain FIRST. The registry stores the **gateway
+ *    base URL** (`gatewayBaseUrl`) and every reader computes
+ *    `endpointUrl = <gateway>/svc/<id>`.
  * 2. POSTs `{serviceId, upstreamUrl}` to `<gateway>/admin/services` with the admin
  *    Bearer token. If this step fails the on-chain registration is NOT rolled back:
  *    a precise warning (with the exact retry curl) is printed to stderr and
@@ -115,30 +114,30 @@ export async function wrapService(opts: WrapServiceOpts): Promise<WrapServiceRes
   );
   const adminToken = requireNonEmpty(opts.adminToken, 'adminToken');
 
-  const priceMotes: Motes = csprToMotes(opts.priceCspr);
-  if (parseMotes(priceMotes) <= 0n) {
+  const priceYocto: Yocto = nearToYocto(opts.priceNear);
+  if (parseYocto(priceYocto) <= 0n) {
     throw new AgentGateError(
       'INVALID_PRICE',
-      `price must be > 0 CSPR, got ${JSON.stringify(opts.priceCspr)}`,
+      `price must be > 0 NEAR, got ${JSON.stringify(opts.priceNear)}`,
       400,
     );
   }
 
   const paymentTarget =
     opts.paymentTarget !== undefined
-      ? requireAccountHash(opts.paymentTarget, 'paymentTarget')
-      : await signerAccountHash(opts.signer);
+      ? requireAccountId(opts.paymentTarget, 'paymentTarget')
+      : signerAccountId(opts.signer);
   const attestor =
     opts.attestor !== undefined
-      ? requirePublicKeyHex(opts.attestor, 'attestor')
-      : await signerPublicKeyHex(opts.signer);
+      ? requireAccountId(opts.attestor, 'attestor')
+      : signerAccountId(opts.signer);
 
   // -- step 1: on-chain registration -----------------------------------------
   const input: RegisterServiceInput = {
     name,
     description,
-    endpointUrl: gatewayBase, // gateway base; readers compute <base>/svc/<id> (SPEC §9)
-    priceMotes,
+    gatewayBaseUrl: gatewayBase, // readers compute <base>/svc/<id>
+    priceYocto,
     paymentTarget,
     attestor,
   };
@@ -149,12 +148,12 @@ export async function wrapService(opts: WrapServiceOpts): Promise<WrapServiceRes
   const adminUrl = `${gatewayBase}/admin/services`;
 
   // -- step 2: gateway upstream mapping ---------------------------------------
-  // pem signer → owner-signature self-map (no admin token): sign a canonical
+  // near signer → owner-signature self-map (no admin token): sign a canonical
   //   challenge with the seller key and POST it to <gateway>/services/<id>/map.
   // mock signer → shared admin token POST to <gateway>/admin/services.
-  // (In production pem ⟺ live and mock ⟺ mock; keying off the signer keeps a
+  // (In production near ⟺ live and mock ⟺ mock; keying off the signer keeps a
   //  mock signer out of the self-map path even when mode is forced to 'live'.)
-  const useSelfMap = opts.signer.kind === 'pem';
+  const useSelfMap = opts.signer.kind === 'near';
   const mapUrl = useSelfMap ? `${gatewayBase}/services/${serviceId}/map` : adminUrl;
   const fetchImpl: FetchLike = opts.fetchImpl ?? ((u, i) => fetch(u, i));
   const timeoutMs = opts.timeoutMs ?? DEFAULT_WRAP_FETCH_TIMEOUT_MS;
@@ -169,11 +168,17 @@ export async function wrapService(opts: WrapServiceOpts): Promise<WrapServiceRes
         upstreamUrl,
         timestamp,
       });
-      const { publicKeyHex, signatureHex } = await signMessage(opts.signer, message);
+      const { publicKey, signature } = await signMessage(opts.signer, message);
       init = {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ upstreamUrl, publicKeyHex, timestamp, signatureHex }),
+        body: JSON.stringify({
+          upstreamUrl,
+          accountId: opts.signer.accountId,
+          publicKey,
+          signature,
+          timestamp,
+        }),
         signal: AbortSignal.timeout(timeoutMs),
       };
     } else {

@@ -10,12 +10,13 @@ function catalog(): CatalogEntry[] {
     name: 'Gold Spot Feed',
     description: 'XAU/USD spot',
     endpointUrl: 'http://gateway/svc/7',
-    priceMotes: '500000000',
-    paymentTarget: `account-hash-${'a'.repeat(64)}`,
-    owner: '01aa',
-    attestor: '01bb',
+    priceYocto: '500000000000000000000000',
+    paymentTarget: 'seller.mock',
+    owner: 'owner.mock',
+    attestor: 'attestor.mock',
     active: true,
     createdAt: 0,
+    accepts: [],
   };
   const score = { totalCalls: 10, successCalls: 10 };
   return [{ service, score, tier: trustTier(score) }];

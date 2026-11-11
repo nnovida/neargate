@@ -9,7 +9,7 @@ describe('MemoryInvoiceStore', () => {
   it('stores and retrieves invoices by nonce (copies, not references)', async () => {
     const store = new MemoryInvoiceStore();
     try {
-      await store.put({ nonce: '42', serviceId: 1, priceMotes: '100', expiresAt: Date.now() + 1000, used: false });
+      await store.put({ nonce: '42', serviceId: 1, priceYocto: '100', expiresAt: Date.now() + 1000, used: false });
       const got = await store.get('42');
       expect(got).toMatchObject({ nonce: '42', serviceId: 1, used: false });
       if (got) got.used = true; // mutating the copy must not affect the store
@@ -23,7 +23,7 @@ describe('MemoryInvoiceStore', () => {
   it('markUsed is single-winner: exactly one of two competing calls succeeds', async () => {
     const store = new MemoryInvoiceStore();
     try {
-      await store.put({ nonce: '7', serviceId: 1, priceMotes: '100', expiresAt: Date.now() + 1000, used: false });
+      await store.put({ nonce: '7', serviceId: 1, priceYocto: '100', expiresAt: Date.now() + 1000, used: false });
       const [a, b] = await Promise.all([store.markUsed('7'), store.markUsed('7')]);
       expect([a, b].filter(Boolean)).toHaveLength(1);
       expect(await store.markUsed('missing')).toBe(false);
@@ -35,8 +35,8 @@ describe('MemoryInvoiceStore', () => {
   it('TTL sweep evicts long-expired invoices', async () => {
     const store = new MemoryInvoiceStore(25);
     try {
-      await store.put({ nonce: '1', serviceId: 1, priceMotes: '100', expiresAt: Date.now() - 100, used: false });
-      await store.put({ nonce: '2', serviceId: 1, priceMotes: '100', expiresAt: Date.now() + 60_000, used: false });
+      await store.put({ nonce: '1', serviceId: 1, priceYocto: '100', expiresAt: Date.now() - 100, used: false });
+      await store.put({ nonce: '2', serviceId: 1, priceYocto: '100', expiresAt: Date.now() + 60_000, used: false });
       await until(() => store.size === 1, 2_000);
       expect(await store.get('1')).toBeNull();
       expect(await store.get('2')).not.toBeNull();
@@ -59,7 +59,7 @@ describe('FileInvoiceStore', () => {
     const file = await tmpFile();
     const a = new FileInvoiceStore(file);
     try {
-      await a.put({ nonce: '42', serviceId: 1, priceMotes: '100', expiresAt: Date.now() + 60_000, used: false });
+      await a.put({ nonce: '42', serviceId: 1, priceYocto: '100', expiresAt: Date.now() + 60_000, used: false });
     } finally {
       a.close();
     }
@@ -75,7 +75,7 @@ describe('FileInvoiceStore', () => {
     const file = await tmpFile();
     const a = new FileInvoiceStore(file);
     try {
-      await a.put({ nonce: '7', serviceId: 1, priceMotes: '100', expiresAt: Date.now() + 60_000, used: false });
+      await a.put({ nonce: '7', serviceId: 1, priceYocto: '100', expiresAt: Date.now() + 60_000, used: false });
       expect(await a.markUsed('7')).toBe(true);
     } finally {
       a.close();

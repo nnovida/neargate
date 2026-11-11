@@ -10,9 +10,6 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@agentgate/shared": "*",
-    "@make-software/casper-x402": "^1.0.0",
-    "@x402/core": "^2.19.0",
-    "casper-js-sdk": "^5.0.12"
+    "@agentgate/shared": "*"
   }
 }

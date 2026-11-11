@@ -23,7 +23,7 @@ describe('createLogger — secret redaction', () => {
     const line = captureLine(() =>
       log.info('boot', {
         adminToken: 'super-secret-admin-token-value',
-        csprCloudApiKey: 'abcd-1234-secret-key',
+        anthropicApiKey: 'abcd-1234-secret-key',
         Authorization: 'Bearer xyz',
         privateKey: 'deadbeef'.repeat(8),
         port: 4021,
@@ -32,7 +32,7 @@ describe('createLogger — secret redaction', () => {
     );
     expect(String(line.adminToken)).toContain('[redacted');
     expect(String(line.adminToken)).not.toContain('super-secret');
-    expect(String(line.csprCloudApiKey)).toContain('[redacted');
+    expect(String(line.anthropicApiKey)).toContain('[redacted');
     expect(String(line.Authorization)).toContain('[redacted');
     expect(String(line.privateKey)).toContain('[redacted');
     // Non-sensitive fields pass through untouched.

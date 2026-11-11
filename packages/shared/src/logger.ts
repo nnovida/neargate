@@ -18,8 +18,8 @@ export interface Logger {
 }
 
 // Field keys whose values must never be logged in cleartext. Matched
-// case-insensitively as a substring so e.g. `adminToken`, `csprCloudApiKey`,
-// `Authorization`, `gateSignerPem`, `privateKey` all redact.
+// case-insensitively as a substring so e.g. `adminToken`, `anthropicApiKey`,
+// `Authorization`, `gatewayPrivateKey`, `secretKey` all redact.
 const SENSITIVE_KEY_RE =
   /(token|secret|api[-_]?key|password|passwd|authorization|private[-_]?key|privatekey|pem|mnemonic|seed|credential|signature|bearer)/i;
 

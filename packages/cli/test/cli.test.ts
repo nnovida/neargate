@@ -20,10 +20,12 @@ import {
 // fakes
 // ---------------------------------------------------------------------------
 
-const HEX64 = (c: string): string => c.repeat(64);
-const SIGNER: AnySigner = { kind: 'mock', publicKey: `01${HEX64('a')}` };
-const PAYMENT_TARGET = `account-hash-${HEX64('1')}`;
-const REGISTER_TX = HEX64('f');
+/** A base58 string of NEAR tx-hash length. */
+const TX = (c: string): string => c.repeat(44);
+const SIGNER: AnySigner = { kind: 'mock', accountId: 'owner.mock' };
+const PAYMENT_TARGET = 'seller.mock';
+const REGISTER_TX = TX('F');
+const PRICE = '500000000000000000000000'; // 0.5 NEAR
 
 interface FakeChain extends ChainClient {
   registered: Array<{ input: RegisterServiceInput; signer: AnySigner }>;
@@ -35,12 +37,13 @@ function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceReco
     name: `svc-${id}`,
     description: 'a service',
     endpointUrl: `http://gw.example:4021/svc/${id}`,
-    priceMotes: '500000000',
+    priceYocto: PRICE,
     paymentTarget: PAYMENT_TARGET,
-    owner: SIGNER.kind === 'mock' ? SIGNER.publicKey : '',
-    attestor: `01${HEX64('a')}`,
+    owner: SIGNER.accountId,
+    attestor: 'owner.mock',
     active: true,
     createdAt: 1_700_000_000_000,
+    accepts: [{ asset: 'near', amount: PRICE, decimals: 24, symbol: 'NEAR' }],
     ...over,
   };
 }
@@ -49,6 +52,7 @@ function makeFakeChain(hooks: { onRegister?: () => void } = {}): FakeChain {
   const registered: FakeChain['registered'] = [];
   const chain: FakeChain = {
     network: 'mock',
+    registryId: 'registry.mock',
     registered,
     async getService() {
       return null;
@@ -68,22 +72,28 @@ function makeFakeChain(hooks: { onRegister?: () => void } = {}): FakeChain {
     async getBalance() {
       return '0';
     },
-    async verifyTransfer() {
+    async getPayment() {
+      return null;
+    },
+    async verifyPayment() {
       return { ok: false, reason: 'not_found' } as const;
+    },
+    async isFullAccessKey() {
+      return false;
     },
     async registerService(input, signer) {
       hooks.onRegister?.();
       registered.push({ input, signer });
       return { serviceId: 7, txHash: REGISTER_TX };
     },
+    async pay() {
+      return { txHash: TX('D') };
+    },
     async recordAttestation() {
-      return { txHash: HEX64('b') };
+      return { txHash: TX('B') };
     },
     async setActive() {
-      return { txHash: HEX64('c') };
-    },
-    async transfer() {
-      return { deployHash: HEX64('d') };
+      return { txHash: TX('C') };
     },
   };
   return chain;
@@ -127,7 +137,7 @@ afterEach(() => {
 function baseWrapOpts(chain: FakeChain, fetchImpl: (url: string, init?: RequestInit) => Promise<Response>) {
   return {
     upstreamUrl: 'http://localhost:4010/feed',
-    priceCspr: '0.5',
+    priceNear: '0.5',
     name: 'FX Oracle',
     description: 'USD/IDR + gold spot',
     gateway: 'http://gw.example:4021/', // trailing slash on purpose
@@ -165,15 +175,15 @@ describe('wrapService', () => {
     // ordering: on-chain registration happens before the admin POST
     expect(order).toEqual(['register', 'admin']);
 
-    // on-chain input: endpointUrl is the gateway BASE (SPEC §9 final decision)
+    // on-chain input: the registry stores the gateway BASE url
     expect(chain.registered).toHaveLength(1);
     const reg = chain.registered[0]!;
-    expect(reg.input.endpointUrl).toBe('http://gw.example:4021');
+    expect(reg.input.gatewayBaseUrl).toBe('http://gw.example:4021');
     expect(reg.input.name).toBe('FX Oracle');
     expect(reg.input.description).toBe('USD/IDR + gold spot');
-    expect(reg.input.priceMotes).toBe('500000000'); // 0.5 CSPR, bigint-derived
+    expect(reg.input.priceYocto).toBe(PRICE); // 0.5 NEAR, bigint-derived
     expect(reg.input.paymentTarget).toBe(PAYMENT_TARGET);
-    expect(reg.input.attestor).toBe(SIGNER.kind === 'mock' ? SIGNER.publicKey : '');
+    expect(reg.input.attestor).toBe(SIGNER.accountId);
     expect(reg.signer).toEqual(SIGNER);
 
     // admin POST: URL, auth header, JSON body
@@ -189,7 +199,7 @@ describe('wrapService', () => {
   it('uses an explicit attestor when provided', async () => {
     const chain = makeFakeChain();
     const { impl } = makeFakeFetch(() => new Response(null, { status: 204 }));
-    const attestor = `01${HEX64('9')}`;
+    const attestor = 'attestor.testnet';
     await wrapService({ ...baseWrapOpts(chain, impl), attestor });
     expect(chain.registered[0]!.input.attestor).toBe(attestor);
   });
@@ -244,10 +254,10 @@ describe('wrapService', () => {
   // -------------------------------------------------------------------------
 
   const rejectionCases: Array<{ title: string; patch: Record<string, string>; code: string }> = [
-    { title: 'price of 0', patch: { priceCspr: '0' }, code: 'INVALID_PRICE' },
-    { title: 'non-numeric price', patch: { priceCspr: 'abc' }, code: 'INVALID_AMOUNT' },
-    { title: 'negative price', patch: { priceCspr: '-1' }, code: 'INVALID_AMOUNT' },
-    { title: 'price with 10 decimals', patch: { priceCspr: '0.1234567891' }, code: 'INVALID_AMOUNT' },
+    { title: 'price of 0', patch: { priceNear: '0' }, code: 'INVALID_PRICE' },
+    { title: 'non-numeric price', patch: { priceNear: 'abc' }, code: 'INVALID_AMOUNT' },
+    { title: 'negative price', patch: { priceNear: '-1' }, code: 'INVALID_AMOUNT' },
+    { title: 'price with 25 decimals', patch: { priceNear: `0.${'1'.repeat(25)}` }, code: 'INVALID_AMOUNT' },
     { title: 'blank name', patch: { name: '   ' }, code: 'INVALID_INPUT' },
     { title: 'non-http upstream', patch: { upstreamUrl: 'ftp://x.test/a' }, code: 'INVALID_URL' },
     { title: 'garbage upstream', patch: { upstreamUrl: 'not a url' }, code: 'INVALID_URL' },
@@ -259,10 +269,10 @@ describe('wrapService', () => {
     },
     {
       title: 'malformed payment target',
-      patch: { paymentTarget: 'deadbeef' },
-      code: 'INVALID_ACCOUNT_HASH',
+      patch: { paymentTarget: 'Not An Account' },
+      code: 'INVALID_ACCOUNT_ID',
     },
-    { title: 'malformed attestor', patch: { attestor: 'zz' }, code: 'INVALID_PUBLIC_KEY' },
+    { title: 'malformed attestor', patch: { attestor: 'bad..dots' }, code: 'INVALID_ACCOUNT_ID' },
     { title: 'empty admin token', patch: { adminToken: ' ' }, code: 'INVALID_INPUT' },
     // name/description sanitization (these go on-chain unmodified)
     { title: 'name with a control char', patch: { name: 'bad\x01name' }, code: 'INVALID_INPUT' },
@@ -356,10 +366,9 @@ describe('wrapService', () => {
 // ---------------------------------------------------------------------------
 
 describe('createDemoAccounts', () => {
-  it('faucets 1000 CSPR to two fresh mock public keys and returns export lines', async () => {
-    const { impl, calls } = makeFakeFetch(() =>
-      Response.json({ balanceMotes: '1000000000000' }),
-    );
+  it('faucets 1000 NEAR to two fresh mock accounts and returns export lines', async () => {
+    const THOUSAND_NEAR = `1000${'0'.repeat(24)}`;
+    const { impl, calls } = makeFakeFetch(() => Response.json({ balanceYocto: THOUSAND_NEAR }));
 
     const result = await createDemoAccounts({
       devnetUrl: 'http://localhost:4030/',
@@ -371,24 +380,24 @@ describe('createDemoAccounts', () => {
     for (const call of calls) {
       expect(call.url).toBe('http://localhost:4030/faucet');
       expect(call.init?.method).toBe('POST');
-      expect(bodyOf(call)['amountMotes']).toBe('1000000000000'); // 1000 CSPR in motes
+      expect(bodyOf(call)['amountYocto']).toBe(THOUSAND_NEAR); // 1000 NEAR in yocto
     }
-    expect(bodyOf(calls[0]!)['account']).toBe(result.buyer.publicKey);
-    expect(bodyOf(calls[1]!)['account']).toBe(result.seller.publicKey);
+    expect(bodyOf(calls[0]!)['account']).toBe(result.buyer.accountId);
+    expect(bodyOf(calls[1]!)['account']).toBe(result.seller.accountId);
 
-    // key shape: "01" + 64 random hex chars, distinct per account
-    expect(result.buyer.publicKey).toMatch(/^01[0-9a-f]{64}$/);
-    expect(result.seller.publicKey).toMatch(/^01[0-9a-f]{64}$/);
-    expect(result.seller.publicKey).not.toBe(result.buyer.publicKey);
+    // account shape: "<role>-<8 random hex>.mock", distinct per account
+    expect(result.buyer.accountId).toMatch(/^buyer-[0-9a-f]{8}\.mock$/);
+    expect(result.seller.accountId).toMatch(/^seller-[0-9a-f]{8}\.mock$/);
+    expect(result.seller.accountId).not.toBe(result.buyer.accountId);
 
     // balances + roles surfaced
-    expect(result.buyer).toMatchObject({ role: 'buyer', balanceMotes: '1000000000000' });
-    expect(result.seller).toMatchObject({ role: 'seller', balanceMotes: '1000000000000' });
+    expect(result.buyer).toMatchObject({ role: 'buyer', balanceYocto: THOUSAND_NEAR });
+    expect(result.seller).toMatchObject({ role: 'seller', balanceYocto: THOUSAND_NEAR });
 
     // export lines, exact shape
     expect(result.exportLines).toEqual([
-      `export MOCK_BUYER_ACCOUNT=${result.buyer.publicKey}`,
-      `export MOCK_SELLER_ACCOUNT=${result.seller.publicKey}`,
+      `export MOCK_BUYER_ACCOUNT=${result.buyer.accountId}`,
+      `export MOCK_SELLER_ACCOUNT=${result.seller.accountId}`,
     ]);
   });
 
@@ -400,7 +409,7 @@ describe('createDemoAccounts', () => {
   });
 
   it('rejects when the faucet returns a malformed body', async () => {
-    const { impl } = makeFakeFetch(() => Response.json({ balanceMotes: 12345 }));
+    const { impl } = makeFakeFetch(() => Response.json({ balanceYocto: 12345 }));
     await expect(
       createDemoAccounts({ devnetUrl: 'http://localhost:4030', fetchImpl: impl }),
     ).rejects.toMatchObject({ code: 'FAUCET_FAILED' });
@@ -443,10 +452,10 @@ describe('serviceStatus', () => {
     const chain = makeFakeChain();
     const attestation: AttestationRecord = {
       serviceId: 1,
-      paymentDeployHash: HEX64('e'),
+      nonce: '42',
+      paymentTxHash: TX('E'),
       success: true,
       timestamp: 1_700_000_001_000,
-      recordTxHash: HEX64('b'),
     };
     chain.getService = async (id) => (id === 1 ? makeService(1) : null);
     chain.getScore = async () => ({ totalCalls: 10, successCalls: 10 });
@@ -497,7 +506,7 @@ describe('serviceStatus', () => {
 // ---------------------------------------------------------------------------
 
 describe('setServiceActive', () => {
-  const SET_ACTIVE_TX = HEX64('c');
+  const SET_ACTIVE_TX = TX('C');
 
   /** Stateful fake: setActive mutates the stored record, getService reads it back. */
   function makeToggleChain(initialActive: boolean): {

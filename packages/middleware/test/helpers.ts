@@ -6,7 +6,9 @@ import type { AddressInfo } from 'node:net';
 import { encodeXPayment, type AgentGateConfig, type Logger, type PaymentRequiredResponse } from '@agentgate/shared';
 import { startServer, type MiddlewareStartOpts, type RunningServer } from '../src/index';
 import { FakeChainClient } from './fake-chain';
-import type { FacilitatorClient } from '@x402/core/http';
+
+/** The account the test buyer pays from. */
+export const TEST_BUYER = 'buyer.mock';
 
 /** Silent logger so test output stays readable. */
 export const silentLogger: Logger = {
@@ -28,28 +30,30 @@ export function testConfig(overrides: Partial<AgentGateConfig> = {}): AgentGateC
     middlewarePort: 0,
     dashboardPort: 0,
     devnetUrl: 'http://localhost:4030',
-    mockBuyerAccount: '',
-    mockSellerAccount: '',
+    mockBuyerAccount: 'buyer.mock',
+    mockSellerAccount: 'seller.mock',
     adminToken: 'test-admin-token',
     invoiceTtlMs: 300_000,
     upstreamTimeoutMs: 5_000,
     trustProxy: 0,
-    casperNodeUrl: 'https://node.testnet.casper.network/rpc',
-    csprCloudApiUrl: 'https://api.testnet.cspr.cloud',
-    csprCloudApiKey: '',
-    csprCloudStreamingUrl: 'wss://streaming.testnet.cspr.cloud',
-    casperNetwork: 'casper-test',
-    registryContractPackageHash: '',
-    gateSignerPemPath: '',
-    buyerSignerPemPath: '',
-    sellerSignerPemPath: '',
+    nearNetwork: 'testnet',
+    nearRpcUrl: 'https://rpc.testnet.near.org',
+    nearExplorerUrl: 'https://testnet.nearblocks.io',
+    registryContractId: '',
+    gatewayAccountId: '',
+    gatewayPrivateKey: '',
+    gatewayKeyPath: '',
+    buyerAccountId: '',
+    buyerPrivateKey: '',
+    buyerKeyPath: '',
+    sellerAccountId: '',
+    sellerPrivateKey: '',
+    sellerKeyPath: '',
     anthropicApiKey: '',
     llmModel: 'claude-sonnet-4-6',
     oracleStatic: false,
-    buyerBudgetCspr: '5',
-    facilitatorUrl: 'https://x402-facilitator.cspr.cloud',
-    buyerKeyAlgo: 'secp256k1',
-    facilitatorServices: {},
+    buyerBudgetNear: '1',
+    relayerEnabled: false,
     ...overrides,
   };
 }
@@ -71,7 +75,6 @@ export async function bootGateway(
     attestationRetryDelayMs?: number;
     attestationMaxAttempts?: number;
     attestationQueuePath?: string;
-    facilitatorClient?: FacilitatorClient;
   } = {},
 ): Promise<TestGateway> {
   const config = opts.config ?? testConfig();
@@ -94,9 +97,6 @@ export async function bootGateway(
   }
   if (opts.attestationQueuePath !== undefined) {
     startOpts.attestationQueuePath = opts.attestationQueuePath;
-  }
-  if (opts.facilitatorClient !== undefined) {
-    startOpts.facilitatorClient = opts.facilitatorClient;
   }
   const server: RunningServer = await startServer(startOpts);
   return {
@@ -196,25 +196,35 @@ export async function adminMap(
 export async function payInvoice(
   gw: TestGateway,
   serviceId: number,
-  opts: { amountMotes?: string; pendingReads?: number } = {},
-): Promise<{ deployHash: string; nonce: string; network: string }> {
+  opts: { amountYocto?: string; pendingReads?: number; payer?: string } = {},
+): Promise<{ txHash: string; nonce: string; network: string; payer: string }> {
   const challenge = await fetch(`${gw.baseUrl}/svc/${serviceId}`);
   if (challenge.status !== 402) throw new Error(`expected 402 challenge, got ${challenge.status}`);
   const body = (await challenge.json()) as PaymentRequiredResponse;
   const req = body.accepts[0]!;
-  const { deployHash } = await gw.fake.transfer(
-    { to: req.payTo, amountMotes: opts.amountMotes ?? req.maxAmountRequired, transferId: req.extra.nonce },
-    { kind: 'mock', publicKey: '01buyer' },
+  const payer = opts.payer ?? TEST_BUYER;
+  const { txHash } = await gw.fake.pay(
+    {
+      serviceId: req.extra.serviceId,
+      nonce: req.extra.nonce,
+      depositYocto: opts.amountYocto ?? req.maxAmountRequired,
+    },
+    { kind: 'mock', accountId: payer },
   );
-  if (opts.pendingReads !== undefined) gw.fake.setPending(deployHash, opts.pendingReads);
-  return { deployHash, nonce: req.extra.nonce, network: req.network };
+  if (opts.pendingReads !== undefined) gw.fake.setPending(txHash, opts.pendingReads);
+  return { txHash, nonce: req.extra.nonce, network: req.network, payer };
 }
 
-export function proofHeaders(proof: { deployHash: string; nonce: string; network: string }): Record<string, string> {
+export function proofHeaders(proof: {
+  txHash: string;
+  nonce: string;
+  network: string;
+  payer?: string;
+}): Record<string, string> {
   return {
     'x-payment': encodeXPayment({
       x402Version: 1, scheme: 'exact', network: proof.network,
-      payload: { transaction: proof.deployHash, transferId: proof.nonce },
+      payload: { kind: 'tx', transaction: proof.txHash, nonce: proof.nonce, payer: proof.payer ?? TEST_BUYER },
     }),
   };
 }

@@ -1,25 +1,45 @@
 import { createHash } from 'node:crypto';
 import {
-  compareMotes,
+  compareYocto,
   type ActivityEvent,
   type AnySigner,
   type AttestationRecord,
   type ChainClient,
-  type Motes,
+  type PaymentRecord,
   type RegisterServiceInput,
   type ServiceRecord,
   type ServiceScore,
+  type VerifyPaymentQuery,
   type VerifyResult,
-  type VerifyTransferQuery,
+  type Yocto,
 } from '@agentgate/shared';
 
-interface FakeTransfer {
-  to: string;
-  amountMotes: Motes;
-  transferId: string;
+const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+/** Base58 of a 32-byte digest — the shape of a NEAR tx hash (43–44 chars). */
+function base58(bytes: Uint8Array): string {
+  let n = BigInt(`0x${Buffer.from(bytes).toString('hex')}`);
+  let out = '';
+  while (n > 0n) {
+    out = BASE58[Number(n % 58n)] + out;
+    n /= 58n;
+  }
+  for (const b of bytes) {
+    if (b !== 0) break;
+    out = `1${out}`;
+  }
+  return out;
+}
+
+interface FakePayment {
+  txHash: string;
+  serviceId: number;
+  nonce: string;
+  /** The full attached deposit (the fake keeps no storage fee). */
+  amountYocto: Yocto;
+  payer: string;
   timestamp: number;
-  from: string;
-  /** While > 0, verifyTransfer returns 'pending' and decrements. */
+  /** While > 0, verifyPayment returns 'pending' and decrements. */
   pendingReads: number;
 }
 
@@ -27,43 +47,48 @@ interface FakeTransfer {
  * Minimal in-memory ChainClient fake for middleware tests.
  * Depends ONLY on the ChainClient interface from @agentgate/shared —
  * no devnet, no chain impl details.
+ * TODO(Task 4): mirror the registry rules (fee kept, `already_attested`, `selfPaid` from the contract).
  */
 export class FakeChainClient implements ChainClient {
   readonly network = 'mock';
+  readonly registryId = 'registry.mock';
   readonly services = new Map<number, ServiceRecord>();
   readonly attestations: AttestationRecord[] = [];
-  readonly transfers = new Map<string, FakeTransfer>();
+  /** Payments keyed by tx hash. */
+  readonly payments = new Map<string, FakePayment>();
   /** When > 0, recordAttestation throws and decrements (retry testing). */
   failAttestations = 0;
   private counter = 0;
 
   private nextHash(seed: string): string {
     this.counter += 1;
-    return createHash('sha256').update(`${seed}:${this.counter}`).digest('hex');
+    return base58(createHash('sha256').update(`${seed}:${this.counter}`).digest());
   }
 
   addService(partial: Partial<ServiceRecord> & { id: number }): ServiceRecord {
+    const priceYocto = partial.priceYocto ?? '500000000000000000000000';
     const record: ServiceRecord = {
       name: `service-${partial.id}`,
       description: 'test service',
       endpointUrl: `http://gateway.test/svc/${partial.id}`,
-      priceMotes: '500000000',
-      paymentTarget: `account-hash-${'ab'.repeat(32)}`,
-      owner: `01${'aa'.repeat(32)}`,
-      attestor: `01${'bb'.repeat(32)}`,
+      priceYocto,
+      paymentTarget: 'seller.mock',
+      owner: 'owner.mock',
+      attestor: 'attestor.mock',
       active: true,
       createdAt: Date.now(),
+      accepts: [{ asset: 'near', amount: priceYocto, decimals: 24, symbol: 'NEAR' }],
       ...partial,
     };
     this.services.set(record.id, record);
     return record;
   }
 
-  /** Marks an existing transfer as settling for the next `reads` verify calls. */
-  setPending(deployHash: string, reads: number): void {
-    const transfer = this.transfers.get(deployHash);
-    if (!transfer) throw new Error(`no such transfer: ${deployHash}`);
-    transfer.pendingReads = reads;
+  /** Marks an existing payment as settling for the next `reads` verify calls. */
+  setPending(txHash: string, reads: number): void {
+    const payment = this.payments.get(txHash);
+    if (!payment) throw new Error(`no such payment: ${txHash}`);
+    payment.pendingReads = reads;
   }
 
   getService(id: number): Promise<ServiceRecord | null> {
@@ -95,26 +120,54 @@ export class FakeChainClient implements ChainClient {
     return Promise.resolve([]);
   }
 
-  getBalance(): Promise<Motes> {
+  getBalance(): Promise<Yocto> {
     return Promise.resolve('0');
   }
 
-  verifyTransfer(q: VerifyTransferQuery): Promise<VerifyResult> {
-    const t = this.transfers.get(q.deployHash);
-    if (!t) return Promise.resolve({ ok: false, reason: 'not_found' });
-    if (t.pendingReads > 0) {
-      t.pendingReads -= 1;
+  getPayment(nonce: string): Promise<PaymentRecord | null> {
+    const p = [...this.payments.values()].find((x) => x.nonce === nonce);
+    if (!p) return Promise.resolve(null);
+    const service = this.services.get(p.serviceId);
+    return Promise.resolve({
+      nonce: p.nonce,
+      serviceId: p.serviceId,
+      payer: p.payer,
+      amountYocto: p.amountYocto,
+      timestamp: p.timestamp,
+      blockHeight: 0,
+      selfPaid: service !== undefined && (p.payer === service.owner || p.payer === service.paymentTarget),
+      attested: this.attestations.some((a) => a.nonce === p.nonce),
+    });
+  }
+
+  verifyPayment(q: VerifyPaymentQuery): Promise<VerifyResult> {
+    const p =
+      q.txHash !== undefined
+        ? this.payments.get(q.txHash)
+        : [...this.payments.values()].find((x) => x.nonce === q.nonce);
+    if (!p) return Promise.resolve({ ok: false, reason: 'not_found' });
+    if (p.pendingReads > 0) {
+      p.pendingReads -= 1;
       return Promise.resolve({ ok: false, reason: 'pending' });
     }
-    if (t.to !== q.expectedTarget) return Promise.resolve({ ok: false, reason: 'wrong_target' });
-    if (t.transferId !== q.expectedTransferId) {
-      return Promise.resolve({ ok: false, reason: 'wrong_transfer_id' });
-    }
-    if (compareMotes(t.amountMotes, q.minAmountMotes) < 0) {
+    if (p.nonce !== q.nonce) return Promise.resolve({ ok: false, reason: 'tx_mismatch' });
+    if (p.serviceId !== q.serviceId) return Promise.resolve({ ok: false, reason: 'wrong_service' });
+    if (compareYocto(p.amountYocto, q.minAmountYocto) < 0) {
       return Promise.resolve({ ok: false, reason: 'amount_too_low' });
     }
-    if (Date.now() - t.timestamp > q.maxAgeMs) return Promise.resolve({ ok: false, reason: 'expired' });
-    return Promise.resolve({ ok: true, amountMotes: t.amountMotes, from: t.from, timestamp: t.timestamp });
+    if (Date.now() - p.timestamp > q.maxAgeMs) return Promise.resolve({ ok: false, reason: 'expired' });
+    const service = this.services.get(p.serviceId);
+    return Promise.resolve({
+      ok: true,
+      amountYocto: p.amountYocto,
+      payer: p.payer,
+      timestamp: p.timestamp,
+      selfPaid: service !== undefined && (p.payer === service.owner || p.payer === service.paymentTarget),
+    });
+  }
+
+  isFullAccessKey(): Promise<boolean> {
+    return Promise.resolve(false);
   }
 
   registerService(input: RegisterServiceInput, signer: AnySigner): Promise<{ serviceId: number; txHash: string }> {
@@ -123,44 +176,47 @@ export class FakeChainClient implements ChainClient {
       id: serviceId,
       name: input.name,
       description: input.description,
-      priceMotes: input.priceMotes,
+      endpointUrl: `${input.gatewayBaseUrl}/svc/${serviceId}`,
+      priceYocto: input.priceYocto,
       paymentTarget: input.paymentTarget,
       attestor: input.attestor,
-      owner: signer.kind === 'mock' ? signer.publicKey : 'pem',
+      owner: signer.accountId,
     });
     return Promise.resolve({ serviceId, txHash: this.nextHash('register') });
   }
 
+  pay(
+    input: { serviceId: number; nonce: string; depositYocto: Yocto },
+    signer: AnySigner,
+  ): Promise<{ txHash: string }> {
+    const txHash = this.nextHash('pay');
+    this.payments.set(txHash, {
+      txHash,
+      serviceId: input.serviceId,
+      nonce: input.nonce,
+      amountYocto: input.depositYocto,
+      payer: signer.accountId,
+      timestamp: Date.now(),
+      pendingReads: 0,
+    });
+    return Promise.resolve({ txHash });
+  }
+
   recordAttestation(
-    input: { serviceId: number; paymentDeployHash: string; success: boolean },
+    input: { serviceId: number; nonce: string; paymentTxHash: string; success: boolean },
     _signer: AnySigner,
   ): Promise<{ txHash: string }> {
     if (this.failAttestations > 0) {
       this.failAttestations -= 1;
       return Promise.reject(new Error('injected attestation failure'));
     }
-    const txHash = this.nextHash('attest');
-    this.attestations.push({ ...input, timestamp: Date.now(), recordTxHash: txHash });
-    return Promise.resolve({ txHash });
+    this.attestations.push({ ...input, timestamp: Date.now() });
+    return Promise.resolve({ txHash: this.nextHash('attest') });
   }
 
   setActive(serviceId: number, active: boolean, _signer: AnySigner): Promise<{ txHash: string }> {
     const service = this.services.get(serviceId);
     if (service) service.active = active;
     return Promise.resolve({ txHash: this.nextHash('active') });
-  }
-
-  transfer(
-    input: { to: string; amountMotes: Motes; transferId: string },
-    signer: AnySigner,
-  ): Promise<{ deployHash: string }> {
-    const deployHash = this.nextHash('transfer');
-    this.transfers.set(deployHash, {
-      ...input,
-      timestamp: Date.now(),
-      from: signer.kind === 'mock' ? signer.publicKey : 'pem',
-      pendingReads: 0,
-    });
-    return Promise.resolve({ deployHash });
   }
 }

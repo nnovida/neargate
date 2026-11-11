@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { facilitatorConfigFromAccepts, parseMotes, trustTier, type Motes } from '@agentgate/shared';
+import { parseYocto, trustTier, type Yocto } from '@agentgate/shared';
 import { getChain, parseServiceId, toApiFailure } from '@/lib/server/chain';
 import type { ServiceDetailResponse } from '@/lib/api-types';
 
@@ -30,22 +30,20 @@ export async function GET(
     ]);
 
     // Money math stays bigint-backed: revenue = price × successCalls.
-    const revenueMotes: Motes = (
-      parseMotes(service.priceMotes) * BigInt(score.successCalls)
+    const revenueYocto: Yocto = (
+      parseYocto(service.priceYocto) * BigInt(score.successCalls)
     ).toString();
 
     // Mock-mode extra: live wallet balance of the payment target.
-    let balanceMotes: Motes | null = null;
+    let balanceYocto: Yocto | null = null;
     if (config.mode === 'mock') {
       try {
-        balanceMotes = await chain.getBalance(service.paymentTarget);
+        balanceYocto = await chain.getBalance(service.paymentTarget);
       } catch {
-        balanceMotes = null; // balance is a bonus surface — never fail the page for it
+        balanceYocto = null; // balance is a bonus surface — never fail the page for it
       }
     }
 
-    // Facilitator rail: env override first, else derived from on-chain accepts[].
-    const fac = config.facilitatorServices[id] ?? facilitatorConfigFromAccepts(service.accepts);
     const body: ServiceDetailResponse = {
       network: chain.network,
       mode: config.mode,
@@ -53,11 +51,8 @@ export async function GET(
       score,
       trustTier: trustTier(score),
       attestations,
-      revenueMotes,
-      balanceMotes,
-      ...(fac
-        ? { facilitator: { amount: fac.amount, symbol: fac.token.symbol, decimals: fac.token.decimals } }
-        : {}),
+      revenueYocto,
+      balanceYocto,
     };
     return NextResponse.json(body);
   } catch (err) {

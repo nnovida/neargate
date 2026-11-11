@@ -10,9 +10,11 @@ import type {
 } from '@agentgate/shared';
 import { buildAgentGateMcpServer, type McpServerDeps } from '../src/mcp';
 
-const HEX64 = (c: string): string => c.repeat(64);
-const BUYER: AnySigner = { kind: 'mock', publicKey: `01${HEX64('b')}` };
-const PAY_TO = `account-hash-${HEX64('1')}`;
+/** A base58 string of NEAR tx-hash length. */
+const TX = (c: string): string => c.repeat(44);
+const BUYER: AnySigner = { kind: 'mock', accountId: 'buyer.mock' };
+const SELLER = 'seller.mock';
+const PRICE = '2500000000000000000000000'; // 2.5 NEAR
 
 function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceRecord {
   return {
@@ -20,12 +22,13 @@ function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceReco
     name: `svc-${id}`,
     description: 'a service',
     endpointUrl: `http://gw.example:4021/svc/${id}`,
-    priceMotes: '2500000000',
-    paymentTarget: PAY_TO,
-    owner: `01${HEX64('a')}`,
-    attestor: `01${HEX64('a')}`,
+    priceYocto: PRICE,
+    paymentTarget: SELLER,
+    owner: 'owner.mock',
+    attestor: 'owner.mock',
     active: true,
     createdAt: 1_700_000_000_000,
+    accepts: [{ asset: 'near', amount: PRICE, decimals: 24, symbol: 'NEAR' }],
     ...over,
   };
 }
@@ -42,6 +45,7 @@ function makeChain(): ChainClient {
   ]);
   return {
     network: 'mock',
+    registryId: 'registry.mock',
     async getService(id: number) {
       return services.get(id) ?? null;
     },
@@ -60,20 +64,26 @@ function makeChain(): ChainClient {
     async getBalance() {
       return '0';
     },
-    async verifyTransfer() {
+    async getPayment() {
+      return null;
+    },
+    async verifyPayment() {
       return { ok: false, reason: 'not_found' } as const;
+    },
+    async isFullAccessKey() {
+      return false;
     },
     async registerService() {
       throw new Error('not used');
     },
+    async pay() {
+      return { txHash: TX('D') };
+    },
     async recordAttestation() {
-      return { txHash: HEX64('b') };
+      return { txHash: TX('B') };
     },
     async setActive() {
-      return { txHash: HEX64('c') };
-    },
-    async transfer() {
-      return { deployHash: HEX64('d') };
+      return { txHash: TX('C') };
     },
   } as ChainClient;
 }

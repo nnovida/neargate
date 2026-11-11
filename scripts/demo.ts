@@ -1,14 +1,15 @@
 #!/usr/bin/env -S npx tsx
 /**
- * scripts/demo.ts — one-shot scripted demo of the full PRD §2 loop (SPEC §12).
+ * scripts/demo.ts — one-shot scripted demo of the full register → pay → attest loop.
  *
  * Offline, mock mode, in-process:
  *   devnet → oracle (static fixture) → middleware → demo accounts (faucet)
- *   → wrap the oracle behind the 402 paywall (0.5 CSPR, via the CLI's wrapService)
+ *   → wrap the oracle behind the 402 paywall (0.5 NEAR, via the CLI's wrapService)
  *   → buyer agent (MockLlm): discover → 402 → pay → consume → summarize
  *   → attestation lands on-chain → score updates.
  *
- * Prints both tx hashes (payment deploy + attestation) and exits 0.
+ * Prints both tx hashes (payment + attestation) and exits 0.
+ * TODO(Task 5): the six-line demo output of the plan, price + storage fee.
  */
 import { rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -19,14 +20,14 @@ import { MockLlm, runBuyerAgent } from '@agentgate/buyer-agent';
 import { startServer as startDevnet } from '@agentgate/devnet';
 import { startServer as startMiddleware } from '@agentgate/middleware';
 import { startServer as startOracle } from '@agentgate/oracle';
-import { formatCspr, loadConfig, type AnySigner } from '@agentgate/shared';
+import { formatNear, loadConfig, type AnySigner } from '@agentgate/shared';
 
 // The demo is self-contained and must work offline: mock chain + fixture oracle.
 process.env.AGENTGATE_MODE = 'mock';
 process.env.ORACLE_STATIC = '1';
 
 const TASK = 'Get today\'s USD/IDR rate and gold price, summarize for a treasury report';
-const PRICE_CSPR = '0.5';
+const PRICE_NEAR = '0.5';
 const LINE = '═'.repeat(72);
 
 interface Closeable {
@@ -51,7 +52,7 @@ async function main(): Promise<void> {
 
   const config = loadConfig();
 
-  // 1. Boot the stack in-process (ports from env, SPEC §12).
+  // 1. Boot the stack in-process (ports from env).
   const devnet = await startDevnet({ config });
   running.push({ name: 'devnet', close: devnet.close });
   const devnetUrl = `http://127.0.0.1:${devnet.port}`;
@@ -68,18 +69,18 @@ async function main(): Promise<void> {
     `\nstack up: devnet :${devnet.port} · oracle :${oracle.port} (static fixture) · middleware :${middleware.port}\n`,
   );
 
-  // 2. Demo accounts: buyer + seller, faucet-funded 1000 CSPR each.
+  // 2. Demo accounts: buyer + seller, faucet-funded 1000 NEAR each.
   const accounts = await createDemoAccounts({ devnetUrl });
-  const sellerSigner: AnySigner = { kind: 'mock', publicKey: accounts.seller.publicKey };
-  const buyerSigner: AnySigner = { kind: 'mock', publicKey: accounts.buyer.publicKey };
-  console.log(`seller: ${accounts.seller.publicKey.slice(0, 18)}… (${formatCspr(accounts.seller.balanceMotes)})`);
-  console.log(`buyer:  ${accounts.buyer.publicKey.slice(0, 18)}… (${formatCspr(accounts.buyer.balanceMotes)})\n`);
+  const sellerSigner: AnySigner = { kind: 'mock', accountId: accounts.seller.accountId };
+  const buyerSigner: AnySigner = { kind: 'mock', accountId: accounts.buyer.accountId };
+  console.log(`seller: ${accounts.seller.accountId} (${formatNear(accounts.seller.balanceYocto)})`);
+  console.log(`buyer:  ${accounts.buyer.accountId} (${formatNear(accounts.buyer.balanceYocto)})\n`);
 
   // 3. Seller wraps the oracle behind the paywall (on-chain registration +
   //    gateway upstream mapping) via the CLI's programmatic API.
   const wrapped = await wrapService({
     upstreamUrl: `http://127.0.0.1:${oracle.port}/feed`,
-    priceCspr: PRICE_CSPR,
+    priceNear: PRICE_NEAR,
     name: 'RWA FX & Gold Oracle',
     description: 'USD/IDR exchange rate and gold (XAU/USD) spot price feed with confidence scoring',
     gateway: `http://127.0.0.1:${middleware.port}`,
@@ -97,14 +98,14 @@ async function main(): Promise<void> {
   //    → 402 → pay on-chain → retry with proof → summarize → attestation receipt.
   const report = await runBuyerAgent({
     task: TASK,
-    budgetCspr: cfg.buyerBudgetCspr,
+    budgetNear: cfg.buyerBudgetNear,
     chain,
     signer: buyerSigner,
     llm: new MockLlm(),
     config: cfg,
   });
 
-  if (!report.paid || report.deployHash === null) {
+  if (!report.paid || report.paymentTxHash === null) {
     throw new Error(`buyer agent did not complete the paid loop: ${report.summary}`);
   }
   if (report.attestationTxHash === null) {
@@ -114,9 +115,9 @@ async function main(): Promise<void> {
   // 5. Final proof block.
   const score = await chain.getScore(report.chosenServiceId);
   console.log(`\n${LINE}\n  DEMO COMPLETE in ${((Date.now() - startedAt) / 1000).toFixed(1)}s — full loop verified on the mock chain\n${LINE}`);
-  console.log(`  payment deploy hash : ${report.deployHash}`);
+  console.log(`  payment tx hash     : ${report.paymentTxHash}`);
   console.log(`  attestation tx hash : ${report.attestationTxHash}`);
-  console.log(`  amount paid         : ${formatCspr(report.spentMotes)}`);
+  console.log(`  amount paid         : ${formatNear(report.spentYocto)}`);
   console.log(`  final score         : ${score.successCalls}/${score.totalCalls} (success/total)`);
   console.log(`  service public URL  : ${wrapped.publicUrl}`);
   console.log(`  dashboard           : ${wrapped.dashboardUrl}  (start it with \`npm run dev:dashboard\`)`);

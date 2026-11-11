@@ -1,11 +1,5 @@
 import type { AgentGateMode } from '@agentgate/shared';
-import { AgentGateError, stripTrailingSlashes } from '@agentgate/shared';
-
-/** `account-hash-` + 64 hex chars (SPEC §2 ServiceRecord.paymentTarget). */
-const ACCOUNT_HASH_RE = /^account-hash-[0-9a-fA-F]{64}$/;
-
-/** Casper public key hex: ed25519 = "01"+64 hex, secp256k1 = "02"+66 hex. */
-const PUBLIC_KEY_RE = /^(?:01[0-9a-fA-F]{64}|02[0-9a-fA-F]{66})$/;
+import { AgentGateError, isNearAccountId, stripTrailingSlashes } from '@agentgate/shared';
 
 /** Control characters (C0 range + DEL) rejected from on-chain text fields. */
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
@@ -117,25 +111,13 @@ export function normalizeBaseUrl(
   return stripTrailingSlashes(value.trim());
 }
 
-/** Validates an `account-hash-<64 hex>` string and returns it trimmed. */
-export function requireAccountHash(value: string, label: string): string {
+/** Validates a NEAR account id (e.g. `seller.testnet`) and returns it trimmed. */
+export function requireAccountId(value: string, label: string): string {
   const trimmed = requireNonEmpty(value, label);
-  if (!ACCOUNT_HASH_RE.test(trimmed)) {
+  if (!isNearAccountId(trimmed)) {
     throw invalid(
-      'INVALID_ACCOUNT_HASH',
-      `${label} must look like "account-hash-<64 hex chars>", got ${JSON.stringify(value)}`,
-    );
-  }
-  return trimmed;
-}
-
-/** Validates a Casper public key hex ("01…"/"02…") and returns it trimmed. */
-export function requirePublicKeyHex(value: string, label: string): string {
-  const trimmed = requireNonEmpty(value, label);
-  if (!PUBLIC_KEY_RE.test(trimmed)) {
-    throw invalid(
-      'INVALID_PUBLIC_KEY',
-      `${label} must be a Casper public key hex ("01"+64 hex or "02"+66 hex), got ${JSON.stringify(value)}`,
+      'INVALID_ACCOUNT_ID',
+      `${label} must be a NEAR account id (e.g. "seller.testnet"), got ${JSON.stringify(value)}`,
     );
   }
   return trimmed;

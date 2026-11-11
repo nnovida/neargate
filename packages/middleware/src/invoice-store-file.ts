@@ -82,7 +82,7 @@ export class FileInvoiceStore implements InvoiceStore {
           inv &&
           typeof inv.nonce === 'string' &&
           typeof inv.serviceId === 'number' &&
-          typeof inv.priceMotes === 'string' &&
+          typeof inv.priceYocto === 'string' &&
           typeof inv.expiresAt === 'number' &&
           typeof inv.used === 'boolean'
         ) {

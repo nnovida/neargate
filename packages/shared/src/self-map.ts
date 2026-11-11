@@ -2,7 +2,7 @@
 export const SELF_MAP_WINDOW_MS = 120_000;
 
 export interface SelfMapMessageInput {
-  /** Casper network name (e.g. "casper-test") — prevents cross-network replay. */
+  /** The chain network (`chain.network`, e.g. "near-testnet") — prevents cross-network replay. */
   network: string;
   /** On-chain service id being mapped — prevents cross-service replay. */
   serviceId: number;
@@ -12,17 +12,21 @@ export interface SelfMapMessageInput {
   timestamp: number;
 }
 
+/** Domain-separation prefix of the self-map message. */
+export const SELF_MAP_PREFIX = 'NearGate/self-map/v1';
+
 /**
- * Canonical, domain-separated bytes a service owner signs to authorize an
- * upstream mapping on the gateway. THE single source of truth: the CLI signs
- * these exact bytes and the gateway rebuilds+verifies them, so both sides must
- * call this one function. The `AgentGate/self-map/v1` prefix + `network` +
- * `serviceId` block cross-protocol / cross-network / cross-service replay;
- * `timestamp` bounds freshness; `upstreamUrl` binds the payload.
+ * Canonical, domain-separated bytes a service owner signs (with a full-access
+ * key of the owner account) to authorize an upstream mapping on the gateway.
+ * THE single source of truth: the CLI signs these exact bytes and the gateway
+ * rebuilds+verifies them, so both sides must call this one function. The
+ * `NearGate/self-map/v1` prefix + `network` + `serviceId` block cross-protocol /
+ * cross-network / cross-service replay; `timestamp` bounds freshness;
+ * `upstreamUrl` binds the payload.
  */
 export function buildSelfMapMessage(input: SelfMapMessageInput): Uint8Array {
   const text = [
-    'AgentGate/self-map/v1',
+    SELF_MAP_PREFIX,
     input.network,
     String(input.serviceId),
     input.upstreamUrl,

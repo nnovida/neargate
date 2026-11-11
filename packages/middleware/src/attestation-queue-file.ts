@@ -9,7 +9,7 @@ import type { AttestationQueue, PendingAttestation } from './attestation-queue';
  * restart — so a served-and-paid call whose on-chain attestation never confirmed
  * before a deploy/crash is replayed on the next boot instead of being silently
  * dropped from the trust ledger (finding F7). Replay is idempotent: the registry
- * dedups by `(service_id, payment_deploy_hash)`, so re-recording is a no-op.
+ * attests each payment nonce at most once, so re-recording is a no-op.
  *
  * Single-instance only; for a multi-instance deployment use a shared store (the
  * async interface is designed for a Redis-backed one).
@@ -30,13 +30,13 @@ export class FileAttestationQueue implements AttestationQueue {
   }
 
   enqueue(item: PendingAttestation): Promise<void> {
-    this.items.set(item.paymentDeployHash, { ...item });
+    this.items.set(item.nonce, { ...item });
     this.persist();
     return Promise.resolve();
   }
 
-  remove(paymentDeployHash: string): Promise<void> {
-    if (this.items.delete(paymentDeployHash)) this.persist();
+  remove(nonce: string): Promise<void> {
+    if (this.items.delete(nonce)) this.persist();
     return Promise.resolve();
   }
 
@@ -63,12 +63,13 @@ export class FileAttestationQueue implements AttestationQueue {
         const p = entry as Partial<PendingAttestation>;
         if (
           p &&
-          typeof p.paymentDeployHash === 'string' &&
+          typeof p.nonce === 'string' &&
+          typeof p.paymentTxHash === 'string' &&
           typeof p.serviceId === 'number' &&
           typeof p.success === 'boolean' &&
           typeof p.enqueuedAt === 'number'
         ) {
-          this.items.set(p.paymentDeployHash, p as PendingAttestation);
+          this.items.set(p.nonce, p as PendingAttestation);
         }
       }
     } catch {

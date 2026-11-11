@@ -1,109 +1,70 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { KeyAlgorithm, PrivateKey } from 'casper-js-sdk';
-import {
-  buildSelfMapMessage,
-  type AnySigner,
-  type ChainClient,
-  type RegisterServiceInput,
-} from '@agentgate/shared';
-import { verifyOwnerSignature } from '@agentgate/chain';
+import { describe, expect, it, vi } from 'vitest';
+import type { AnySigner, ChainClient, RegisterServiceInput } from '@agentgate/shared';
 import { signMessage, wrapService } from '../src/index';
 
-let dir: string;
-let pemPath: string;
-let ownerAcct: string;
+// TODO(Task 5): NEAR-key self-map — sign `buildSelfMapMessage` with the seller's
+// full-access key and assert the base64 signature verifies under the transmitted
+// publicKey; the POST body is {upstreamUrl, accountId, publicKey, signature, timestamp}.
 
-beforeAll(async () => {
-  const priv = PrivateKey.generate(KeyAlgorithm.SECP256K1);
-  ownerAcct = priv.publicKey.accountHash().toPrefixedString();
-  dir = await mkdtemp(join(tmpdir(), 'agentgate-pem-'));
-  pemPath = join(dir, 'seller.pem');
-  await writeFile(pemPath, priv.toPem(), { mode: 0o600 });
-});
-
-afterAll(async () => {
-  await rm(dir, { recursive: true, force: true });
-});
+const NEAR_SIGNER: AnySigner = {
+  kind: 'near',
+  accountId: 'seller.testnet',
+  keyPath: '/nonexistent/seller.testnet.json',
+};
 
 /** Minimal ChainClient: wrapService only calls registerService in these tests. */
 function fakeChain(): ChainClient {
   return {
-    network: 'casper-test',
+    network: 'near-testnet',
+    registryId: 'registry.testnet',
     registerService: async (_input: RegisterServiceInput, _signer: AnySigner) => ({
       serviceId: 1,
-      txHash: 'a'.repeat(64),
+      txHash: 'F'.repeat(44),
     }),
   } as unknown as ChainClient;
 }
 
-describe('signMessage (pem signer)', () => {
-  it('produces a signature verifyOwnerSignature accepts under the derived owner', async () => {
-    const msg = buildSelfMapMessage({
-      network: 'casper-test',
-      serviceId: 7,
-      upstreamUrl: 'https://api.example.com/x',
-      timestamp: 111,
-    });
-    const { publicKeyHex, signatureHex } = await signMessage({ kind: 'pem', pemPath }, msg);
-    const res = verifyOwnerSignature(publicKeyHex, msg, signatureHex);
-    expect(res.valid).toBe(true);
-    expect(res.accountHash).toBe(ownerAcct);
-  });
-
+describe('signMessage', () => {
   it('rejects a mock signer (self-map needs a real key)', async () => {
     await expect(
-      signMessage({ kind: 'mock', publicKey: `01${'a'.repeat(64)}` }, new Uint8Array([1])),
+      signMessage({ kind: 'mock', accountId: 'seller.mock' }, new Uint8Array([1])),
     ).rejects.toMatchObject({ code: 'SIGNER_UNSUPPORTED' });
+  });
+
+  it('does not sign with a NEAR key yet (lands in Task 5)', async () => {
+    await expect(signMessage(NEAR_SIGNER, new Uint8Array([1]))).rejects.toMatchObject({
+      code: 'NOT_IMPLEMENTED',
+      httpStatus: 501,
+    });
   });
 });
 
-describe('wrapService self-map path (pem signer)', () => {
-  it('POSTs a valid owner-signed body to /services/:id/map (no admin token)', async () => {
-    let capturedUrl = '';
-    let capturedBody: {
-      upstreamUrl: string;
-      publicKeyHex: string;
-      timestamp: number;
-      signatureHex: string;
-    } | null = null;
-    let sawAuthHeader = true;
-
-    const result = await wrapService({
-      upstreamUrl: 'https://api.example.com/gold',
-      priceCspr: '0.5',
-      name: 'Gold',
-      gateway: 'https://gw.example',
-      chain: fakeChain(),
-      signer: { kind: 'pem', pemPath },
-      adminToken: 'dev-admin-token',
-      mode: 'live',
-      network: 'casper-test',
-      fetchImpl: async (url, init) => {
-        capturedUrl = String(url);
-        sawAuthHeader = 'authorization' in ((init?.headers as Record<string, string>) ?? {});
-        capturedBody = JSON.parse(String(init?.body));
-        return new Response(null, { status: 204 });
-      },
-    });
-
-    expect(result.adminOk).toBe(true);
-    expect(capturedUrl).toBe('https://gw.example/services/1/map');
-    expect(sawAuthHeader).toBe(false); // no bearer token on the self-map path
-    expect(capturedBody).not.toBeNull();
-
-    // Rebuild the challenge from the transmitted body and verify the signature.
-    const body = capturedBody!;
-    const msg = buildSelfMapMessage({
-      network: 'casper-test',
-      serviceId: 1,
-      upstreamUrl: body.upstreamUrl,
-      timestamp: body.timestamp,
-    });
-    const res = verifyOwnerSignature(body.publicKeyHex, msg, body.signatureHex);
-    expect(res.valid).toBe(true);
-    expect(res.accountHash).toBe(ownerAcct);
+describe('wrapService self-map path (NEAR key signer)', () => {
+  it('never falls back to the admin-token POST and keeps the registration', async () => {
+    const calls: string[] = [];
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const result = await wrapService({
+        upstreamUrl: 'https://api.example.com/gold',
+        priceNear: '0.5',
+        name: 'Gold',
+        gateway: 'https://gw.example',
+        chain: fakeChain(),
+        signer: NEAR_SIGNER,
+        adminToken: 'dev-admin-token',
+        mode: 'live',
+        network: 'near-testnet',
+        fetchImpl: async (url) => {
+          calls.push(String(url));
+          return new Response(null, { status: 204 });
+        },
+      });
+      expect(result.serviceId).toBe(1);
+      expect(result.adminOk).toBe(false);
+      expect(result.adminWarning).toContain('self-map signing');
+      expect(calls).toEqual([]);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });

@@ -11,11 +11,12 @@ describe('randomNonce', () => {
   });
 
   it('is a positive safe integer that survives a JSON float64 round-trip exactly', () => {
-    // Regression: CSPR.cloud returns a transfer's `id` as a JS number, so a
-    // nonce above Number.MAX_SAFE_INTEGER loses its low digits and can never be
-    // matched on verification. Every nonce must round-trip through float64.
+    // A nonce above Number.MAX_SAFE_INTEGER would lose its low digits in any
+    // consumer that parses it as a JS number. Every nonce must round-trip
+    // through float64 and satisfy the registry's `^[0-9]{1,20}$` rule.
     for (let i = 0; i < 2000; i++) {
       const n = randomNonce();
+      expect(n).toMatch(/^[0-9]{1,20}$/);
       const v = BigInt(n);
       expect(v >= 1n).toBe(true);
       expect(v <= MAX_SAFE).toBe(true);

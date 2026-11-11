@@ -1,8 +1,8 @@
 /**
- * e2e/loop.test.ts — the full mock-mode loop, in-process (SPEC §12).
+ * e2e/loop.test.ts — the full mock-mode loop, in-process.
  *
  * Boots devnet + oracle (static fixture) + middleware on port 0 (parallel-safe,
- * no fixed ports), then walks the entire PRD §2 economy:
+ * no fixed ports), then walks the entire register → pay → attest economy:
  *
  *   faucet → wrap (on-chain register + gateway admin mapping)
  *   → unpaid GET = 402 with a valid PaymentRequiredResponse
@@ -12,6 +12,10 @@
  *   → attestation recorded on-chain (poll ≤5s) → score (1,1)
  *   → activity feed holds all three event kinds
  *   plus: expired-invoice (TTL 100ms) and inactive-service tests.
+ *
+ * TODO(Task 5): mechanically ported; red until the devnet mirrors the registry
+ * (Task 3: base58 tx hashes, `pay` keeps the storage fee) and the loop is re-asserted
+ * on balances (seller +0.5 NEAR, buyer −0.502 NEAR).
  */
 import { rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -25,15 +29,19 @@ import { startServer as startOracle } from '@agentgate/oracle';
 import {
   decodeXPaymentResponse,
   encodeXPayment,
+  isNearAccountId,
   loadConfig,
   X402_SCHEME,
   X402_VERSION,
-  type AnySigner,
-  type PaymentRequiredResponse,
   type AgentGateConfig,
+  type AttestationRecord,
+  type MockSigner,
+  type PaymentRequiredResponse,
 } from '@agentgate/shared';
 
-const PRICE_MOTES = '500000000'; // 0.5 CSPR
+const PRICE_YOCTO = '500000000000000000000000'; // 0.5 NEAR
+/** Price + the 0.002 NEAR storage fee: what a NEAR invoice asks for. */
+const MAX_AMOUNT_YOCTO = '502000000000000000000000';
 const HASH_RE = /^[0-9a-f]{64}$/;
 
 interface Running {
@@ -63,8 +71,8 @@ describe('full mock-mode loop (e2e)', () => {
   let middleware: Running;
   let cfg: AgentGateConfig;
   let chain: MockChainHttpClient;
-  let buyer: AnySigner;
-  let seller: AnySigner;
+  let buyer: MockSigner;
+  let seller: MockSigner;
   let gateway: string;
   let oracleFeedUrl: string;
 
@@ -77,7 +85,7 @@ describe('full mock-mode loop (e2e)', () => {
   // Handed from test to test (the loop is inherently sequential).
   let challenge: PaymentRequiredResponse; // from the unpaid GET
   let freshAfterUnderpay: PaymentRequiredResponse; // fresh invoice issued with the underpay rejection
-  let paidDeployHash: string;
+  let paidTxHash: string;
   let paidNonce: string;
 
   beforeAll(async () => {
@@ -99,8 +107,8 @@ describe('full mock-mode loop (e2e)', () => {
     gateway = `http://127.0.0.1:${middleware.port}`;
 
     const accounts = await createDemoAccounts({ devnetUrl });
-    buyer = { kind: 'mock', publicKey: accounts.buyer.publicKey };
-    seller = { kind: 'mock', publicKey: accounts.seller.publicKey };
+    buyer = { kind: 'mock', accountId: accounts.buyer.accountId };
+    seller = { kind: 'mock', accountId: accounts.seller.accountId };
   });
 
   afterAll(async () => {
@@ -114,7 +122,7 @@ describe('full mock-mode loop (e2e)', () => {
   it('wraps the oracle: on-chain registration + gateway admin mapping', async () => {
     const wrapped = await wrapService({
       upstreamUrl: oracleFeedUrl,
-      priceCspr: '0.5',
+      priceNear: '0.5',
       name: 'RWA FX & Gold Oracle',
       description: 'USD/IDR exchange rate and gold (XAU/USD) spot price feed',
       gateway,
@@ -132,14 +140,15 @@ describe('full mock-mode loop (e2e)', () => {
     registerTxHash = wrapped.txHash;
     publicUrl = wrapped.publicUrl;
 
-    // The on-chain record computes endpointUrl = <gateway>/svc/<id> (SPEC §9).
+    // The on-chain record computes endpointUrl = <gateway>/svc/<id>.
     const record = await chain.getService(serviceId);
     expect(record).not.toBeNull();
     expect(record!.endpointUrl).toBe(publicUrl);
-    expect(record!.priceMotes).toBe(PRICE_MOTES);
+    expect(record!.priceYocto).toBe(PRICE_YOCTO);
     expect(record!.active).toBe(true);
     paymentTarget = record!.paymentTarget;
-    expect(paymentTarget).toMatch(/^account-hash-[0-9a-f]{64}$/);
+    expect(isNearAccountId(paymentTarget)).toBe(true);
+    expect(paymentTarget).toBe(seller.accountId);
   });
 
   it('unpaid GET → 402 with a valid PaymentRequiredResponse body', async () => {
@@ -157,8 +166,9 @@ describe('full mock-mode loop (e2e)', () => {
     expect(req.network).toBe('mock');
     expect(req.extra.serviceId).toBe(serviceId);
     expect(req.description).toBe('RWA FX & Gold Oracle');
-    expect(req.maxAmountRequired).toBe(PRICE_MOTES);
-    expect(req.payTo).toBe(paymentTarget);
+    expect(req.maxAmountRequired).toBe(MAX_AMOUNT_YOCTO);
+    expect(req.payTo).toBe(chain.registryId);
+    expect(req.extra.seller).toBe(paymentTarget);
     expect(req.extra.nonce).toMatch(/^\d{1,20}$/);
     expect(req.extra.expiresAtMs).toBeGreaterThan(Date.now());
     expect(req.scheme).toBe(X402_SCHEME);
@@ -166,10 +176,11 @@ describe('full mock-mode loop (e2e)', () => {
     challenge = body;
   });
 
-  it('underpaid transfer → 402 amount_too_low with a fresh invoice', async () => {
-    // 1 mote short of the price, but with the correct transfer_id.
-    const { deployHash } = await chain.transfer(
-      { to: paymentTarget, amountMotes: '499999999', transferId: challenge.accepts[0]!.extra.nonce },
+  it('underpaid payment → 402 amount_too_low with a fresh invoice', async () => {
+    // 1 yocto short of the price, but with the correct invoice nonce.
+    const nonce = challenge.accepts[0]!.extra.nonce;
+    const { txHash } = await chain.pay(
+      { serviceId, nonce, depositYocto: '499999999999999999999999' },
       buyer,
     );
 
@@ -177,7 +188,7 @@ describe('full mock-mode loop (e2e)', () => {
       x402Version: X402_VERSION,
       scheme: X402_SCHEME,
       network: chain.network,
-      payload: { transaction: deployHash, transferId: challenge.accepts[0]!.extra.nonce },
+      payload: { kind: 'tx', transaction: txHash, nonce, payer: buyer.accountId },
     });
     const res = await fetch(publicUrl, {
       headers: { 'X-PAYMENT': xPayment },
@@ -188,14 +199,15 @@ describe('full mock-mode loop (e2e)', () => {
     expect(body.error).toBe('amount_too_low');
     // Rejections come with a FRESH invoice so the buyer can recover.
     expect(body.accepts[0]!.extra.nonce).not.toBe(challenge.accepts[0]!.extra.nonce);
-    expect(body.accepts[0]!.maxAmountRequired).toBe(PRICE_MOTES);
+    expect(body.accepts[0]!.maxAmountRequired).toBe(MAX_AMOUNT_YOCTO);
 
     freshAfterUnderpay = body;
   });
 
   it('exact payment → 200 with the oracle JSON proxied through the gateway', async () => {
-    const { deployHash } = await chain.transfer(
-      { to: paymentTarget, amountMotes: PRICE_MOTES, transferId: freshAfterUnderpay.accepts[0]!.extra.nonce },
+    const nonce = freshAfterUnderpay.accepts[0]!.extra.nonce;
+    const { txHash } = await chain.pay(
+      { serviceId, nonce, depositYocto: MAX_AMOUNT_YOCTO },
       buyer,
     );
 
@@ -203,7 +215,7 @@ describe('full mock-mode loop (e2e)', () => {
       x402Version: X402_VERSION,
       scheme: X402_SCHEME,
       network: chain.network,
-      payload: { transaction: deployHash, transferId: freshAfterUnderpay.accepts[0]!.extra.nonce },
+      payload: { kind: 'tx', transaction: txHash, nonce, payer: buyer.accountId },
     });
     const res = await fetch(publicUrl, {
       headers: { 'X-PAYMENT': xPayment },
@@ -225,11 +237,11 @@ describe('full mock-mode loop (e2e)', () => {
     expect(xPaymentResponse, 'x-payment-response header should be present').not.toBeNull();
     const settlement = decodeXPaymentResponse(xPaymentResponse!);
     expect(settlement.success).toBe(true);
-    expect(settlement.transaction).toBe(deployHash);
+    expect(settlement.transaction).toBe(txHash);
     expect(settlement.network).toBe(chain.network);
 
-    paidDeployHash = deployHash;
-    paidNonce = freshAfterUnderpay.accepts[0]!.extra.nonce;
+    paidTxHash = txHash;
+    paidNonce = nonce;
   });
 
   it('replaying the same proof → 402 invoice_used', async () => {
@@ -237,7 +249,7 @@ describe('full mock-mode loop (e2e)', () => {
       x402Version: X402_VERSION,
       scheme: X402_SCHEME,
       network: chain.network,
-      payload: { transaction: paidDeployHash, transferId: paidNonce },
+      payload: { kind: 'tx', transaction: paidTxHash, nonce: paidNonce, payer: buyer.accountId },
     });
     const res = await fetch(publicUrl, {
       headers: { 'X-PAYMENT': xPayment },
@@ -249,16 +261,16 @@ describe('full mock-mode loop (e2e)', () => {
 
   it('the gateway records a success attestation on-chain within 5s', async () => {
     const deadline = Date.now() + 5_000;
-    let found: { success: boolean; recordTxHash: string; paymentDeployHash: string } | undefined;
+    let found: AttestationRecord | undefined;
     for (;;) {
       const attestations = await chain.listAttestations(serviceId, 50);
-      found = attestations.find((a) => a.paymentDeployHash === paidDeployHash);
+      found = attestations.find((a) => a.paymentTxHash === paidTxHash);
       if (found !== undefined || Date.now() >= deadline) break;
       await sleep(200);
     }
-    expect(found, 'attestation for the payment deploy hash').toBeDefined();
+    expect(found, 'attestation for the payment tx hash').toBeDefined();
     expect(found!.success).toBe(true);
-    expect(found!.recordTxHash).toMatch(HASH_RE);
+    expect(found!.nonce).toBe(paidNonce);
   });
 
   it('the service score is exactly (totalCalls 1, successCalls 1)', async () => {
@@ -278,9 +290,10 @@ describe('full mock-mode loop (e2e)', () => {
     );
     expect(registered, 'registration event for the wrap tx').toBeDefined();
 
-    const payment = events.find((e) => e.kind === 'payment' && e.txHash === paidDeployHash);
-    expect(payment, 'payment event for the exact-pay deploy').toBeDefined();
-    expect(payment!.amountMotes).toBe(PRICE_MOTES);
+    const payment = events.find((e) => e.kind === 'payment' && e.txHash === paidTxHash);
+    expect(payment, 'payment event for the exact-pay tx').toBeDefined();
+    expect(payment!.amountYocto).toBe(MAX_AMOUNT_YOCTO);
+    expect(payment!.nonce).toBe(paidNonce);
 
     const attestation = events.find(
       (e) => e.kind === 'attestation' && e.serviceId === serviceId && e.success === true,
@@ -314,8 +327,8 @@ describe('full mock-mode loop (e2e)', () => {
 
       // Pay correctly… but present the proof only after the invoice has expired.
       const invoiceNonce = invoice.accepts[0]!.extra.nonce;
-      const { deployHash } = await chain.transfer(
-        { to: paymentTarget, amountMotes: PRICE_MOTES, transferId: invoiceNonce },
+      const { txHash } = await chain.pay(
+        { serviceId, nonce: invoiceNonce, depositYocto: MAX_AMOUNT_YOCTO },
         buyer,
       );
       await sleep(250); // > 100ms TTL (the store keeps expired invoices around long enough)
@@ -324,7 +337,7 @@ describe('full mock-mode loop (e2e)', () => {
         x402Version: X402_VERSION,
         scheme: X402_SCHEME,
         network: chain.network,
-        payload: { transaction: deployHash, transferId: invoiceNonce },
+        payload: { kind: 'tx', transaction: txHash, nonce: invoiceNonce, payer: buyer.accountId },
       });
       const res = await fetch(`${shortGateway}/svc/${serviceId}`, {
         headers: { 'X-PAYMENT': xPayment },
@@ -340,7 +353,7 @@ describe('full mock-mode loop (e2e)', () => {
   it('inactive service → 403 service_inactive before any invoice is issued', async () => {
     const second = await wrapService({
       upstreamUrl: oracleFeedUrl,
-      priceCspr: '0.25',
+      priceNear: '0.25',
       name: 'Soon-to-be-paused Oracle',
       description: 'gets deactivated by its owner',
       gateway,

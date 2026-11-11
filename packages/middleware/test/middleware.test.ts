@@ -27,7 +27,7 @@ describe('paywall flow (mock mode)', () => {
   beforeAll(async () => {
     gw = await bootGateway();
     upstream = await startUpstream();
-    gw.fake.addService({ id: 1, name: 'Gold Spot Feed', priceMotes: '500000000' });
+    gw.fake.addService({ id: 1, name: 'Gold Spot Feed', priceYocto: '500000000000000000000000' });
     gw.fake.addService({ id: 2, name: 'Broken Feed' });
     gw.fake.addService({ id: 3, name: 'Echo Feed' });
     gw.fake.addService({ id: 4, name: 'Sleeping Feed', active: false });
@@ -58,17 +58,23 @@ describe('paywall flow (mock mode)', () => {
     expect(body.error).toBe('X-PAYMENT header is required');
     const req = body.accepts[0]!;
     expect(req.scheme).toBe('exact');
-    expect(req.asset).toBe('CSPR');
+    expect(req.asset).toBe('NEAR');
     expect(req.network).toBe(gw.fake.network);
     expect(req.description).toBe('Gold Spot Feed');
-    expect(req.maxAmountRequired).toBe('500000000');
-    expect(req.payTo).toMatch(/^account-hash-[0-9a-f]{64}$/);
+    // price + the registry's 0.002 NEAR storage fee
+    expect(req.maxAmountRequired).toBe('502000000000000000000000');
+    expect(req.payTo).toBe(gw.fake.registryId);
     expect(req.resource).toContain('/svc/1');
     expect(req.maxTimeoutSeconds).toBe(Math.floor(gw.config.invoiceTtlMs / 1000));
     expect(req.extra.nonce).toMatch(/^\d+$/);
     expect(BigInt(req.extra.nonce) < 2n ** 64n).toBe(true);
     expect(req.extra.expiresAtMs).toBeGreaterThanOrEqual(before + gw.config.invoiceTtlMs - 1000);
-    expect(req.extra.settlement).toBe('casper-native-transfer');
+    expect(req.extra.settlement).toBe('neargate-registry-pay');
+    expect(req.extra.contractId).toBe(gw.fake.registryId);
+    expect(req.extra.method).toBe('pay');
+    expect(req.extra.priceYocto).toBe('500000000000000000000000');
+    expect(req.extra.storageFeeYocto).toBe('2000000000000000000000');
+    expect(req.extra.caip2).toBe('near:mock');
     // no X-AgentGate-* headers anymore
     expect(res.headers.get('x-agentgate-price')).toBeNull();
   });
@@ -106,7 +112,7 @@ describe('paywall flow (mock mode)', () => {
     expect(resp).not.toBeNull();
     const settlement = decodeXPaymentResponse(resp!);
     expect(settlement.success).toBe(true);
-    expect(settlement.transaction).toBe(proof.deployHash);
+    expect(settlement.transaction).toBe(proof.txHash);
     expect(settlement.network).toBe(gw.fake.network);
     expect(res.headers.get('content-type')).toContain('application/json');
     expect(await res.json()).toEqual({ hello: 'world', query: { symbol: 'XAU', fmt: 'json' } });
@@ -115,7 +121,8 @@ describe('paywall flow (mock mode)', () => {
     const attestation = gw.fake.attestations[attestationsBefore];
     expect(attestation).toMatchObject({
       serviceId: 1,
-      paymentDeployHash: proof.deployHash,
+      nonce: proof.nonce,
+      paymentTxHash: proof.txHash,
       success: true,
     });
   });
@@ -153,9 +160,9 @@ describe('paywall flow (mock mode)', () => {
   it('unknown nonce → 402 unknown_nonce; no x-payment header → fresh challenge; malformed x-payment → invalid_payment_header', async () => {
     const proof = await payInvoice(gw, 1);
 
-    // valid x-payment but transferId matches no invoice → unknown_nonce
+    // valid x-payment but the nonce matches no invoice → unknown_nonce
     const wrongNonce = await fetch(`${gw.baseUrl}/svc/1`, {
-      headers: proofHeaders({ deployHash: proof.deployHash, nonce: '12345', network: proof.network }),
+      headers: proofHeaders({ txHash: proof.txHash, nonce: '12345', network: proof.network }),
     });
     expect(wrongNonce.status).toBe(402);
     expect(((await wrongNonce.json()) as PaymentRequiredResponse).error).toBe('unknown_nonce');
@@ -183,7 +190,7 @@ describe('paywall flow (mock mode)', () => {
       x402Version: 1,
       scheme: 'exact',
       network: 'some-other-net',
-      payload: { transaction: 'a'.repeat(64), transferId: nonce },
+      payload: { kind: 'tx', transaction: '1'.repeat(44), nonce, payer: 'buyer.mock' },
     });
     const res = await fetch(`${gw.baseUrl}/svc/1`, {
       headers: { 'x-payment': wrongNetworkProof },
@@ -199,8 +206,8 @@ describe('paywall flow (mock mode)', () => {
     expect(((await res.json()) as PaymentRequiredResponse).error).toBe('unknown_nonce');
   });
 
-  it('underpayment → 402 with verifyTransfer reason amount_too_low', async () => {
-    const proof = await payInvoice(gw, 1, { amountMotes: '499999999' });
+  it('underpayment → 402 with verifyPayment reason amount_too_low', async () => {
+    const proof = await payInvoice(gw, 1, { amountYocto: '499999999999999999999999' });
     const res = await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
     expect(res.status).toBe(402);
     const body = (await res.json()) as PaymentRequiredResponse;
@@ -208,13 +215,13 @@ describe('paywall flow (mock mode)', () => {
     expect(body.accepts[0]!.extra.nonce).not.toBe(proof.nonce);
   });
 
-  it('unknown deploy hash → 402 not_found', async () => {
+  it('unknown tx hash → 402 not_found', async () => {
     const challenge = await fetch(`${gw.baseUrl}/svc/1`);
     const body = (await challenge.json()) as PaymentRequiredResponse;
     const nonce = body.accepts[0]!.extra.nonce;
     const network = body.accepts[0]!.network;
     const res = await fetch(`${gw.baseUrl}/svc/1`, {
-      headers: proofHeaders({ deployHash: 'f'.repeat(64), nonce, network }),
+      headers: proofHeaders({ txHash: 'F'.repeat(44), nonce, network }),
     });
     expect(res.status).toBe(402);
     expect(((await res.json()) as PaymentRequiredResponse).error).toBe('not_found');
@@ -242,7 +249,8 @@ describe('paywall flow (mock mode)', () => {
     await until(() => gw.fake.attestations.length === before + 1);
     expect(gw.fake.attestations[before]).toMatchObject({
       serviceId: 2,
-      paymentDeployHash: proof.deployHash,
+      nonce: proof.nonce,
+      paymentTxHash: proof.txHash,
       success: false,
     });
   });
@@ -376,7 +384,8 @@ describe('attestation retry', () => {
       await until(() => gw.fake.attestations.length === 1);
       expect(gw.fake.attestations[0]).toMatchObject({
         serviceId: 1,
-        paymentDeployHash: proof.deployHash,
+        nonce: proof.nonce,
+        paymentTxHash: proof.txHash,
         success: true,
       });
     } finally {
@@ -439,7 +448,8 @@ describe('attestation retry', () => {
       await until(() => fake.attestations.length === 1);
       expect(fake.attestations[0]).toMatchObject({
         serviceId: 1,
-        paymentDeployHash: proof.deployHash,
+        nonce: proof.nonce,
+        paymentTxHash: proof.txHash,
         success: true,
       });
       // Confirmed attestations are removed from the durable queue.
@@ -538,10 +548,9 @@ describe('admin API', () => {
       config: testConfig({
         mode: 'live',
         adminToken: 'live-admin-secret',
-        csprCloudApiKey: 'test-key',
-        // Live mode now requires an attestor signer path (fail-closed); this
-        // test never attests, so a placeholder path is sufficient.
-        gateSignerPemPath: '/tmp/agentgate-test-gate-signer.pem',
+        // Live mode requires an attestor account (fail-closed); this test never
+        // attests, so a placeholder account is sufficient.
+        gatewayAccountId: 'gateway.testnet',
       }),
     });
     try {
@@ -624,14 +633,13 @@ describe('request hardening', () => {
     }
   });
 
-  it('refuses to build a live-mode app without a gate signer (fail closed)', () => {
+  it('refuses to build a live-mode app without a gateway account (fail closed)', () => {
     expect(() =>
       createApp({
         config: testConfig({
           mode: 'live',
-          csprCloudApiKey: 'k',
           adminToken: 'a-strong-unique-token',
-          gateSignerPemPath: '',
+          gatewayAccountId: '',
         }),
         chain: new FakeChainClient(),
         logger: silentLogger,

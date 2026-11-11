@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import useSWR from 'swr';
 import type { ActivityEvent } from '@agentgate/shared';
-import { addMotes, formatCspr, formatToken } from '@agentgate/shared';
+import { addYocto, formatNear } from '@agentgate/shared';
 import { fetcher, isChainDown, isRateLimited } from '@/lib/fetcher';
 import { formatDateTime, formatInt, svcLabel, timeAgo } from '@/lib/format';
 import type { ActivityResponse } from '@/lib/api-types';
@@ -43,11 +43,7 @@ function StatTile({ label, value, sub }: { label: string; value: string; sub: st
 function Summary({ events }: { events: ActivityEvent[] }) {
   const payments = events.filter((e) => e.kind === 'payment');
   const attests = events.filter((e) => e.kind === 'attestation');
-  // Native-CSPR volume only — token (WCSPR) payments carry the same 9-decimal
-  // scale but are a different asset, so summing them into a CSPR total would lie.
-  const volumeMotes = payments
-    .filter((e) => !e.assetSymbol)
-    .reduce((sum, e) => addMotes(sum, e.amountMotes ?? '0'), '0');
+  const volumeYocto = payments.reduce((sum, e) => addYocto(sum, e.amountYocto ?? '0'), '0');
   const attestOk = attests.filter((e) => e.success !== false).length;
   const rate = attests.length ? Math.round((attestOk / attests.length) * 100) : null;
   const services = new Set(events.map((e) => e.serviceId).filter((id): id is number => id !== null)).size;
@@ -55,7 +51,7 @@ function Summary({ events }: { events: ActivityEvent[] }) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
       <StatTile label="events" value={formatInt(events.length)} sub="on-chain, newest first" />
-      <StatTile label="payments" value={formatInt(payments.length)} sub={`${formatCspr(volumeMotes)} settled`} />
+      <StatTile label="payments" value={formatInt(payments.length)} sub={`${formatNear(volumeYocto)} settled`} />
       <StatTile
         label="attestations"
         value={formatInt(attests.length)}
@@ -110,7 +106,7 @@ function Tabs({
 
 /* ── pager ───────────────────────────────────────────────────────────────── */
 
-/** Rows per page. Client-side over the already-fetched window (no extra CSPR.cloud reads). */
+/** Rows per page. Client-side over the already-fetched window (no extra chain reads). */
 const PAGE_SIZE = 15;
 
 function Pager({
@@ -182,15 +178,7 @@ function Row({ event, network }: { event: ActivityEvent; network: string }) {
         </span>
       </td>
       <td className="whitespace-nowrap py-3 pr-4 text-right font-mono text-xs tabular-nums text-white">
-        {event.amountMotes ? (
-          event.assetSymbol ? (
-            formatToken(event.amountMotes, event.assetDecimals ?? 9, event.assetSymbol)
-          ) : (
-            formatCspr(event.amountMotes)
-          )
-        ) : (
-          <span className="text-mut">—</span>
-        )}
+        {event.amountYocto ? formatNear(event.amountYocto) : <span className="text-mut">—</span>}
       </td>
       <td className="whitespace-nowrap py-3 pr-4">
         <span className="inline-flex items-center gap-1.5 text-[11px] text-mut">
@@ -199,7 +187,11 @@ function Row({ event, network }: { event: ActivityEvent; network: string }) {
         </span>
       </td>
       <td className="whitespace-nowrap py-3 pr-4 text-right">
-        <TxHash hash={event.txHash} network={network} />
+        {event.txHash !== null ? (
+          <TxHash hash={event.txHash} network={network} />
+        ) : (
+          <span className="font-mono text-xs text-mut">—</span>
+        )}
       </td>
     </tr>
   );

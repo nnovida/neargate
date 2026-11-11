@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { buildSelfMapMessage, SELF_MAP_WINDOW_MS } from '../src/index';
 
-const BASE = { network: 'casper-test', serviceId: 1, upstreamUrl: 'https://api.example.com/x', timestamp: 123 };
+const BASE = { network: 'near-testnet', serviceId: 1, upstreamUrl: 'https://api.example.com/x', timestamp: 123 };
 const decode = (o: Parameters<typeof buildSelfMapMessage>[0]) =>
   new TextDecoder().decode(buildSelfMapMessage(o));
 
 describe('buildSelfMapMessage', () => {
+  it('starts with the NearGate domain-separation prefix', () => {
+    expect(decode(BASE).startsWith('NearGate/self-map/v1\n')).toBe(true);
+  });
+
   it('produces the exact domain-separated byte layout', () => {
     expect(decode(BASE)).toBe(
-      'AgentGate/self-map/v1\ncasper-test\n1\nhttps://api.example.com/x\n123',
+      'NearGate/self-map/v1\nnear-testnet\n1\nhttps://api.example.com/x\n123',
     );
   });
 
@@ -18,7 +22,7 @@ describe('buildSelfMapMessage', () => {
 
   it('changes when any signed field changes', () => {
     expect(decode(BASE)).not.toBe(decode({ ...BASE, serviceId: 2 }));
-    expect(decode(BASE)).not.toBe(decode({ ...BASE, network: 'casper' }));
+    expect(decode(BASE)).not.toBe(decode({ ...BASE, network: 'near-mainnet' }));
     expect(decode(BASE)).not.toBe(decode({ ...BASE, upstreamUrl: 'https://api.example.com/y' }));
     expect(decode(BASE)).not.toBe(decode({ ...BASE, timestamp: 124 }));
   });

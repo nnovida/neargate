@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { parseMotes } from '@agentgate/shared';
+import { parseYocto } from '@agentgate/shared';
 import { getChain, toApiFailure } from '@/lib/server/chain';
 import type { StatsResponse } from '@/lib/api-types';
 
@@ -15,13 +15,13 @@ export async function GET(): Promise<NextResponse> {
 
     let totalCalls = 0;
     let successCalls = 0;
-    let revenue = 0n; // motes, bigint — never float math on money
+    let revenue = 0n; // yocto, bigint — never float math on money
     services.forEach((service, i) => {
       const score = scores[i];
       if (!score) return;
       totalCalls += score.totalCalls;
       successCalls += score.successCalls;
-      revenue += parseMotes(service.priceMotes) * BigInt(score.successCalls);
+      revenue += parseYocto(service.priceYocto) * BigInt(score.successCalls);
     });
 
     const body: StatsResponse = {
@@ -30,7 +30,7 @@ export async function GET(): Promise<NextResponse> {
       activeServices: services.filter((s) => s.active).length,
       totalCalls,
       successCalls,
-      revenueMotes: revenue.toString(),
+      revenueYocto: revenue.toString(),
     };
     return NextResponse.json(body);
   } catch (err) {

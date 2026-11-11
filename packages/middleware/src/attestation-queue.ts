@@ -10,13 +10,15 @@
  * This queue closes that gap. Each pending attestation is enqueued *before* the
  * first on-chain attempt and removed only once the attempt confirms. Unconfirmed
  * entries survive a restart (file-backed variant) and are replayed on boot.
- * Replay is safe because the registry contract dedups by
- * `(service_id, payment_deploy_hash)` (`seen_payments`), so re-submitting an
- * already-recorded attestation is an idempotent no-op on-chain.
+ * Replay is safe because the registry contract attests each payment (nonce) at
+ * most once, so re-submitting an already-recorded attestation is rejected
+ * on-chain without changing the score.
  */
 export interface PendingAttestation {
-  /** Payment deploy hash — the idempotent key (on-chain `seen_payments` dedups replays). */
-  paymentDeployHash: string;
+  /** Payment nonce — the idempotent key (the registry attests a nonce at most once). */
+  nonce: string;
+  /** Hash of the `pay` transaction being attested. */
+  paymentTxHash: string;
   /** Service whose score this attestation feeds. */
   serviceId: number;
   /** Whether the served upstream response was a 2xx (success flag recorded on-chain). */
@@ -32,10 +34,10 @@ export interface PendingAttestation {
  * multi-instance deployment, exactly like {@link InvoiceStore}.
  */
 export interface AttestationQueue {
-  /** Record a pending attestation. Keyed by `paymentDeployHash` — enqueuing the same hash twice is idempotent. */
+  /** Record a pending attestation. Keyed by `nonce` — enqueuing the same nonce twice is idempotent. */
   enqueue(item: PendingAttestation): Promise<void>;
   /** Drop a confirmed attestation so it is never replayed. */
-  remove(paymentDeployHash: string): Promise<void>;
+  remove(nonce: string): Promise<void>;
   /** All still-pending attestations (used to replay on boot). */
   list(): Promise<PendingAttestation[]>;
   /** Release any resources (timers/handles). Idempotent. */
@@ -52,12 +54,12 @@ export class MemoryAttestationQueue implements AttestationQueue {
   }
 
   enqueue(item: PendingAttestation): Promise<void> {
-    this.items.set(item.paymentDeployHash, { ...item });
+    this.items.set(item.nonce, { ...item });
     return Promise.resolve();
   }
 
-  remove(paymentDeployHash: string): Promise<void> {
-    this.items.delete(paymentDeployHash);
+  remove(nonce: string): Promise<void> {
+    this.items.delete(nonce);
     return Promise.resolve();
   }
 

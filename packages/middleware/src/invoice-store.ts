@@ -1,10 +1,10 @@
-import type { Motes } from '@agentgate/shared';
+import type { Yocto } from '@agentgate/shared';
 
-/** One issued 402 invoice, keyed by its nonce (= Casper transfer_id). */
+/** One issued 402 invoice, keyed by its nonce (= the registry `pay` nonce). */
 export interface StoredInvoice {
   nonce: string;
   serviceId: number;
-  priceMotes: Motes;
+  priceYocto: Yocto;
   expiresAt: number; // unix ms
   used: boolean;
 }

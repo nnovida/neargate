@@ -1,6 +1,6 @@
 #!/usr/bin/env -S npx tsx
 /**
- * scripts/dev.ts — local dev stack (SPEC §12).
+ * scripts/dev.ts — local dev stack.
  *
  * Boots, in order: devnet (mock chain) → seeds two faucet-funded demo accounts →
  * oracle → middleware (402 paywall gateway), all in-process, mock mode.
@@ -12,9 +12,9 @@ import { MockLlm, runBuyerAgent } from '@agentgate/buyer-agent';
 import { startServer as startDevnet } from '@agentgate/devnet';
 import { startServer as startMiddleware } from '@agentgate/middleware';
 import { startServer as startOracle } from '@agentgate/oracle';
-import { formatCspr, loadConfig, type AnySigner } from '@agentgate/shared';
+import { formatNear, loadConfig, type AnySigner } from '@agentgate/shared';
 
-// The dev stack is the mock loop by definition (SPEC §0: "mock mode").
+// The dev stack is the mock loop by definition.
 process.env.AGENTGATE_MODE = 'mock';
 
 // `--seed` (or `npm run dev:seed`) pre-populates the running devnet with one
@@ -55,7 +55,7 @@ async function main(): Promise<void> {
   // Everything downstream must talk to the devnet we just booted.
   const cfg = { ...config, devnetUrl };
 
-  // 2. Demo accounts (buyer + seller, 1000 CSPR each).
+  // 2. Demo accounts (buyer + seller, 1000 NEAR each).
   const accounts = await createDemoAccounts({ devnetUrl });
 
   // 3. Oracle (RWA feed).
@@ -75,12 +75,12 @@ async function main(): Promise<void> {
   //    live data immediately (mirrors `npm run demo`, but the stack STAYS UP).
   if (SEED) {
     console.log('\nseeding the dashboard (wrap → 402 → pay → serve → attest)…');
-    const sellerSigner: AnySigner = { kind: 'mock', publicKey: accounts.seller.publicKey };
-    const buyerSigner: AnySigner = { kind: 'mock', publicKey: accounts.buyer.publicKey };
+    const sellerSigner: AnySigner = { kind: 'mock', accountId: accounts.seller.accountId };
+    const buyerSigner: AnySigner = { kind: 'mock', accountId: accounts.buyer.accountId };
 
     const wrapped = await wrapService({
       upstreamUrl: `http://localhost:${oracle.port}/feed`,
-      priceCspr: '0.5',
+      priceNear: '0.5',
       name: 'RWA FX & Gold Oracle',
       description: 'USD/IDR exchange rate and gold (XAU/USD) spot price feed with confidence scoring',
       gateway: `http://localhost:${middleware.port}`,
@@ -95,7 +95,7 @@ async function main(): Promise<void> {
 
     const report = await runBuyerAgent({
       task: SEED_TASK,
-      budgetCspr: cfg.buyerBudgetCspr,
+      budgetNear: cfg.buyerBudgetNear,
       chain,
       signer: buyerSigner,
       llm: new MockLlm(),
@@ -108,7 +108,7 @@ ${line}
 AgentGate dev stack is up (mock mode) — SEEDED and ready to view.
 
   service #${wrapped.serviceId}   ${wrapped.publicUrl}
-  paid call    ${report.paid ? formatCspr(report.spentMotes) + ' · deploy ' + String(report.deployHash).slice(0, 16) + '…' : 'FAILED'}
+  paid call    ${report.paid ? formatNear(report.spentYocto) + ' · tx ' + String(report.paymentTxHash).slice(0, 16) + '…' : 'FAILED'}
   attestation  ${report.attestationTxHash ? String(report.attestationTxHash).slice(0, 16) + '…' : 'pending'}
   score        ${score.successCalls}/${score.totalCalls} (success/total)
 

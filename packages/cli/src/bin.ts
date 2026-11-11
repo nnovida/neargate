@@ -5,12 +5,12 @@ import {
   AgentGateError,
   DEFAULT_DASHBOARD_URL,
   DEFAULT_GATEWAY_URL,
-  formatCspr,
-  formatToken,
+  formatNear,
   isAgentGateError,
   loadConfig,
   type AgentGateConfig,
   type AnySigner,
+  type NearKeySigner,
 } from '@agentgate/shared';
 import { buyService } from './buy';
 import { createDemoAccounts } from './demo-accounts';
@@ -30,7 +30,20 @@ interface WrapCmdOpts extends CliConfigFlags {
   attestor?: string;
 }
 
-/** Seller signer per mode: mock → MOCK_SELLER_ACCOUNT, live → SELLER_SIGNER_PEM_PATH. */
+/**
+ * A NEAR key signer for `accountId` carrying whichever key sources are set.
+ * TODO(Task 5): resolve keys via @agentgate/chain `loadNearSigner` (D4 order) and add `--account`.
+ */
+function nearSigner(accountId: string, keyPath: string, secretKey: string): NearKeySigner {
+  return {
+    kind: 'near',
+    accountId,
+    ...(keyPath.trim() !== '' ? { keyPath } : {}),
+    ...(secretKey.trim() !== '' ? { secretKey } : {}),
+  };
+}
+
+/** Seller signer per mode: mock → MOCK_SELLER_ACCOUNT, live → SELLER_ACCOUNT_ID + its key. */
 function sellerSigner(config: AgentGateConfig): AnySigner {
   if (config.mode === 'mock') {
     if (config.mockSellerAccount === '') {
@@ -40,20 +53,20 @@ function sellerSigner(config: AgentGateConfig): AnySigner {
         400,
       );
     }
-    return { kind: 'mock', publicKey: config.mockSellerAccount };
+    return { kind: 'mock', accountId: config.mockSellerAccount };
   }
-  if (config.sellerSignerPemPath === '') {
+  if (config.sellerAccountId === '') {
     throw new AgentGateError(
       'SIGNER_MISSING',
-      'live mode needs a seller key — pass --pem <path> or set SELLER_SIGNER_PEM_PATH',
+      'live mode needs a seller account — set SELLER_ACCOUNT_ID (key: --key-file <path>, SELLER_KEY_PATH or SELLER_PRIVATE_KEY)',
       400,
     );
   }
-  return { kind: 'pem', pemPath: config.sellerSignerPemPath };
+  return nearSigner(config.sellerAccountId, config.sellerKeyPath, config.sellerPrivateKey);
 }
 
-/** Buyer signer per mode: mock → MOCK_BUYER_ACCOUNT, live → --pem | BUYER_SIGNER_PEM_PATH. */
-function buyerSigner(config: AgentGateConfig, pemFlag?: string): AnySigner {
+/** Buyer signer per mode: mock → MOCK_BUYER_ACCOUNT, live → BUYER_ACCOUNT_ID + --key-file | BUYER_KEY_PATH | BUYER_PRIVATE_KEY. */
+function buyerSigner(config: AgentGateConfig, keyFileFlag?: string): AnySigner {
   if (config.mode === 'mock') {
     if (config.mockBuyerAccount === '') {
       throw new AgentGateError(
@@ -62,18 +75,18 @@ function buyerSigner(config: AgentGateConfig, pemFlag?: string): AnySigner {
         400,
       );
     }
-    return { kind: 'mock', publicKey: config.mockBuyerAccount };
+    return { kind: 'mock', accountId: config.mockBuyerAccount };
   }
-  const pemPath =
-    pemFlag !== undefined && pemFlag.trim() !== '' ? pemFlag : config.buyerSignerPemPath;
-  if (pemPath === '') {
+  if (config.buyerAccountId === '') {
     throw new AgentGateError(
       'SIGNER_MISSING',
-      'live mode needs a buyer key — pass --pem <path> or set BUYER_SIGNER_PEM_PATH',
+      'live mode needs a buyer account — set BUYER_ACCOUNT_ID (key: --key-file <path>, BUYER_KEY_PATH or BUYER_PRIVATE_KEY)',
       400,
     );
   }
-  return { kind: 'pem', pemPath };
+  const keyPath =
+    keyFileFlag !== undefined && keyFileFlag.trim() !== '' ? keyFileFlag : config.buyerKeyPath;
+  return nearSigner(config.buyerAccountId, keyPath, config.buyerPrivateKey);
 }
 
 /** Plain monospace table: pads every column to its widest cell. */
@@ -85,32 +98,29 @@ function renderTable(header: string[], rows: string[][]): string {
     .join('\n');
 }
 
-/** Attach the shared chain-config flags (mode/node/registry) to a command. */
+/** Attach the shared chain-config flags (mode/rpc/registry) to a command. */
 function withConfigFlags(cmd: Command): Command {
   return cmd
     .option('--mode <mode>', 'chain mode: mock | live (published CLI defaults to live)')
-    .option('--node-url <url>', 'Casper node RPC URL (default: Casper Testnet)')
-    .option('--registry <hash>', 'AgentGateRegistry package hash (default: the deployed one)')
-    .option('--key-algo <algo>', 'buyer key algorithm for the facilitator rail: ed25519 | secp256k1 (default secp256k1)');
+    .option('--rpc <url>', 'NEAR RPC URL (default: NEAR testnet)')
+    .option('--registry <contractId>', 'registry contract id (default: the deployed one)');
 }
 
 /**
- * Build runtime config from flags + env. The CLI needs neither a CSPR.cloud key
- * nor a strong admin token just to load — read commands run zero-env, and wrap
- * surfaces a token/gateway problem at the admin POST, not at config load.
+ * Build runtime config from flags + env. The CLI does not need a strong admin
+ * token just to load — read commands run zero-env, and wrap surfaces a
+ * token/gateway problem at the admin POST, not at config load.
  */
 function cliConfig(opts: CliConfigFlags): AgentGateConfig {
   return loadConfig(
     resolveCliEnv({
       mode: opts.mode,
-      nodeUrl: opts.nodeUrl,
+      rpc: opts.rpc,
       registry: opts.registry,
-      pem: opts.pem,
-      apiKey: opts.apiKey,
+      keyFile: opts.keyFile,
       adminToken: opts.adminToken,
-      keyAlgo: opts.keyAlgo,
     }),
-    { requireCloudKey: false, requireStrongAdminToken: false },
+    { requireStrongAdminToken: false },
   );
 }
 
@@ -125,19 +135,19 @@ withConfigFlags(
     .command('wrap')
     .description('Wrap an upstream API behind the AgentGate 402 paywall and register it on-chain')
     .argument('<upstreamUrl>', 'upstream API URL to wrap (kept private, only sent to the gateway)')
-    .requiredOption('--price <cspr>', 'price per call in CSPR (e.g. 0.5)')
+    .requiredOption('--price <near>', 'price per call in NEAR (e.g. 0.5)')
     .requiredOption('--name <name>', 'service name')
     .option('--description <d>', 'service description', '')
     .option('--gateway <url>', 'gateway base URL (default: http://localhost:<MIDDLEWARE_PORT|4021>)')
     .option(
-      '--payment-target <accountHash>',
-      'payment target account-hash (default: derived from the seller signer)',
+      '--payment-target <accountId>',
+      'account that receives the price (default: the seller account)',
     )
     .option(
-      '--attestor <publicKeyHex>',
-      'public key allowed to record attestations (default: the seller signer public key)',
+      '--attestor <accountId>',
+      'account allowed to record attestations (default: the seller account)',
     )
-    .option('--pem <path>', 'seller signer PEM path (required for live writes)')
+    .option('--key-file <path>', 'seller key file, near-cli credentials JSON (live writes)')
     .option('--admin-token <token>', 'gateway admin bearer token (leaks into shell history/ps)'),
 ).action(async (upstreamUrl: string, opts: WrapCmdOpts) => {
     const config = cliConfig(opts);
@@ -148,7 +158,7 @@ withConfigFlags(
       (config.mode === 'live' ? DEFAULT_GATEWAY_URL : `http://localhost:${config.middlewarePort}`);
     const result = await wrapService({
       upstreamUrl,
-      priceCspr: opts.price,
+      priceNear: opts.price,
       name: opts.name,
       description: opts.description,
       gateway,
@@ -162,7 +172,7 @@ withConfigFlags(
       signer,
       adminToken: config.adminToken,
       mode: config.mode,
-      network: config.casperNetwork,
+      network: chain.network,
       timeoutMs: config.upstreamTimeoutMs,
     });
     console.log(`service id:      ${result.serviceId}`);
@@ -192,7 +202,7 @@ withConfigFlags(
     const rows = listings.map(({ service, score, tier }) => [
       String(service.id),
       service.name,
-      formatCspr(service.priceMotes),
+      formatNear(service.priceYocto),
       tier,
       `${score.successCalls}/${score.totalCalls}`,
       service.active ? 'yes' : 'no',
@@ -212,14 +222,14 @@ withConfigFlags(
   program
     .command('buy')
     .description(
-      'Buy one call to a service: pay its 402 invoice with a native CSPR transfer and print the response (body → stdout, payment details → stderr)',
+      'Buy one call to a service: pay its 402 invoice with a registry `pay` call in NEAR and print the response (body → stdout, payment details → stderr)',
     )
     .argument('<id>', 'service id (see `agentgate list`)')
-    .option('--max <cspr>', 'refuse invoices priced above this many CSPR')
+    .option('--max <near>', 'refuse invoices priced above this many NEAR')
     .option('--method <method>', 'HTTP method for the paid request', 'GET')
     .option('--body <json>', 'JSON request body to send with the paid request')
     .option('--gateway <url>', "gateway base URL (default: the service's on-chain endpoint)")
-    .option('--pem <path>', 'buyer signer PEM path (live mode; or set BUYER_SIGNER_PEM_PATH)'),
+    .option('--key-file <path>', 'buyer key file (live mode; or set BUYER_KEY_PATH)'),
 ).action(async (idRaw: string, opts: BuyCmdOpts) => {
   // Service ids are 1-based, matching status/pause/resume.
   if (!/^\d+$/.test(idRaw.trim()) || Number(idRaw.trim()) < 1) {
@@ -229,18 +239,17 @@ withConfigFlags(
       400,
     );
   }
-  // The shared --pem flag means the SELLER key in cliConfig; for buy it is the
-  // buyer key, so keep it out of the config env and hand it to buyerSigner.
-  const config = cliConfig({ ...opts, pem: undefined });
+  // The shared --key-file flag means the SELLER key in cliConfig; for buy it is
+  // the buyer key, so keep it out of the config env and hand it to buyerSigner.
+  const config = cliConfig({ ...opts, keyFile: undefined });
   const chain = createChainClient(config);
-  const signer = buyerSigner(config, opts.pem);
+  const signer = buyerSigner(config, opts.keyFile);
   const { service, url, result } = await buyService({
     chain,
     signer,
     id: Number(idRaw.trim()),
     method: opts.method,
-    buyerKeyAlgo: config.buyerKeyAlgo,
-    ...(opts.max !== undefined ? { maxCspr: opts.max } : {}),
+    ...(opts.max !== undefined ? { maxNear: opts.max } : {}),
     ...(opts.body !== undefined ? { body: opts.body } : {}),
     ...(opts.gateway !== undefined ? { gateway: opts.gateway } : {}),
   });
@@ -249,16 +258,10 @@ withConfigFlags(
   console.error(`service:  #${service.id} ${service.name}`);
   console.error(`url:      ${url}`);
   if (result.paid) {
-    console.error(
-      `paid:     ${
-        result.facilitator
-          ? formatToken(result.facilitator.amount, result.facilitator.decimals, result.facilitator.symbol)
-          : formatCspr(result.priceMotes ?? service.priceMotes)
-      }`,
-    );
-    console.error(`payment:  ${result.deployHash}`);
-    if (config.mode === 'live' && config.casperNetwork === 'casper-test') {
-      console.error(`explorer: https://testnet.cspr.live/transaction/${result.deployHash}`);
+    console.error(`paid:     ${formatNear(result.priceYocto ?? service.priceYocto)}`);
+    console.error(`payment:  ${result.txHash}`);
+    if (config.mode === 'live' && result.txHash !== undefined) {
+      console.error(`explorer: ${config.nearExplorerUrl}/txns/${result.txHash}`);
     }
     if (result.settlement !== undefined) {
       const payer = result.settlement.payer !== undefined ? `  (payer ${result.settlement.payer})` : '';
@@ -281,11 +284,7 @@ withConfigFlags(
   program
     .command('status')
     .description('Show one service: record, score, trust tier and recent attestations')
-    .argument('<id>', 'service id')
-    .option(
-      '--api-key <key>',
-      'CSPR.cloud key to fetch attestation history (leaks into shell history/ps)',
-    ),
+    .argument('<id>', 'service id'),
 ).action(async (idRaw: string, opts: CliConfigFlags) => {
     // Service ids are 1-based (matches pause/resume); serviceStatus also enforces id >= 1.
     if (!/^\d+$/.test(idRaw.trim()) || Number(idRaw.trim()) < 1) {
@@ -297,26 +296,20 @@ withConfigFlags(
     }
     const config = cliConfig(opts);
     const chain = createChainClient(config);
-    const hasKey = config.csprCloudApiKey !== '';
     const { service, score, tier, attestations } = await serviceStatus({
       chain,
       id: Number(idRaw.trim()),
-      includeAttestations: hasKey,
     });
     console.log(
       `service:        #${service.id} ${service.name}${service.active ? '' : '  [INACTIVE]'}`,
     );
     if (service.description !== '') console.log(`description:    ${service.description}`);
     console.log(`endpoint:       ${service.endpointUrl}`);
-    console.log(`price:          ${formatCspr(service.priceMotes)}`);
+    console.log(`price:          ${formatNear(service.priceYocto)}`);
     console.log(`payment target: ${service.paymentTarget}`);
     console.log(`owner:          ${service.owner}`);
     console.log(`attestor:       ${service.attestor}`);
     console.log(`trust:          ${tier} (${score.successCalls}/${score.totalCalls} calls ok)`);
-    if (!hasKey) {
-      console.log('attestations:   (set CSPR_CLOUD_API_KEY or pass --api-key to view history)');
-      return;
-    }
     if (attestations.length === 0) {
       console.log('attestations:   none yet');
       return;
@@ -325,7 +318,7 @@ withConfigFlags(
     for (const a of attestations) {
       const when = new Date(a.timestamp).toISOString();
       console.log(
-        `  [${a.success ? 'ok  ' : 'FAIL'}] ${when}  payment ${a.paymentDeployHash}  tx ${a.recordTxHash}`,
+        `  [${a.success ? 'ok  ' : 'FAIL'}] ${when}  nonce ${a.nonce}  payment ${a.paymentTxHash}`,
       );
     }
   });
@@ -358,7 +351,7 @@ withConfigFlags(
     .command('pause')
     .description('Pause a service you own: set_active(false) on-chain, the paywall answers 403')
     .argument('<id>', 'service id')
-    .option('--pem <path>', 'seller signer PEM path (required for live writes)'),
+    .option('--key-file <path>', 'seller key file, near-cli credentials JSON (live writes)'),
 ).action(async (idRaw: string, opts: CliConfigFlags) => toggleActive(idRaw, false, opts));
 
 withConfigFlags(
@@ -366,7 +359,7 @@ withConfigFlags(
     .command('resume')
     .description('Resume a paused service you own: set_active(true) on-chain, calls flow again')
     .argument('<id>', 'service id')
-    .option('--pem <path>', 'seller signer PEM path (required for live writes)'),
+    .option('--key-file <path>', 'seller key file, near-cli credentials JSON (live writes)'),
 ).action(async (idRaw: string, opts: CliConfigFlags) => toggleActive(idRaw, true, opts));
 
 withConfigFlags(
@@ -386,8 +379,8 @@ withConfigFlags(
       devnetUrl: config.devnetUrl,
       timeoutMs: config.upstreamTimeoutMs,
     });
-    console.log(`buyer:  ${result.buyer.publicKey}  (${formatCspr(result.buyer.balanceMotes)})`);
-    console.log(`seller: ${result.seller.publicKey}  (${formatCspr(result.seller.balanceMotes)})`);
+    console.log(`buyer:  ${result.buyer.accountId}  (${formatNear(result.buyer.balanceYocto)})`);
+    console.log(`seller: ${result.seller.accountId}  (${formatNear(result.seller.balanceYocto)})`);
     console.log('');
     console.log('# paste into your shell (used by the buyer agent and `agentgate wrap`):');
     for (const line of result.exportLines) {
@@ -402,8 +395,8 @@ withConfigFlags(
       'Serve AgentGate as an MCP (Model Context Protocol) stdio server — any MCP-capable agent gets AgentGate discover/inspect/buy tools (run via `npx @neargate/cli mcp`)',
     )
     .option(
-      '--pem <path>',
-      'buyer signer PEM path for the agentgate_buy tool (live mode; or set BUYER_SIGNER_PEM_PATH)',
+      '--key-file <path>',
+      'buyer key file for the agentgate_buy tool (live mode; or set BUYER_KEY_PATH)',
     ),
 ).action(async (opts: CliConfigFlags) => {
   // stdio is the MCP JSON-RPC channel — never write to stdout here. The server
@@ -412,8 +405,7 @@ withConfigFlags(
   const chain = createChainClient(config);
   await startAgentGateMcpServer({
     chain,
-    signerProvider: () => buyerSigner(config, opts.pem),
-    buyerKeyAlgo: config.buyerKeyAlgo,
+    signerProvider: () => buyerSigner(config, opts.keyFile),
   });
 });
 

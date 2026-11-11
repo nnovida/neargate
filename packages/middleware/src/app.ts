@@ -11,38 +11,26 @@ import express, {
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import {
+  addYocto,
   AgentGateError,
-  buildSelfMapMessage,
+  caip2For,
   createLogger,
   decodeXPayment,
   encodeXPaymentResponse,
-  facilitatorConfigFromAccepts,
-  HEADER_PAYMENT_SIGNATURE,
-  payToFromAccountHash,
+  PAYMENT_STORAGE_FEE_YOCTO,
   randomNonce,
-  SELF_MAP_WINDOW_MS,
-  toCaip2Network,
   trustTier,
-  X402_ASSET_CSPR,
+  X402_ASSET_NEAR,
   X402_SCHEME,
   X402_VERSION,
-  X402_VERSION_V2,
   type AgentGateConfig,
   type AnySigner,
   type ChainClient,
-  type FacilitatorServiceConfig,
   type Logger,
   type PaymentRequiredResponse,
   type PaymentRequirements,
   type ServiceRecord,
-  type X402V2Requirements,
 } from '@agentgate/shared';
-import { verifyOwnerSignature } from '@agentgate/chain';
-import {
-  HTTPFacilitatorClient,
-  decodePaymentSignatureHeader,
-  type FacilitatorClient,
-} from '@x402/core/http';
 import { MemoryInvoiceStore, type InvoiceStore } from './invoice-store';
 import { FileInvoiceStore } from './invoice-store-file';
 import { MemoryAttestationQueue, type AttestationQueue } from './attestation-queue';
@@ -84,12 +72,6 @@ export interface MiddlewareDeps {
   attestationRetryDelayMs?: number;
   /** Total attestation attempts before giving up (1 = no retry). Default 4. */
   attestationMaxAttempts?: number;
-  /**
-   * Facilitator client for the official x402 rail (CEP-18 + EIP-712). Injected in
-   * tests; in live mode with FACILITATOR_SERVICES set, defaults to an
-   * HTTPFacilitatorClient pointed at config.facilitatorUrl (auth = CSPR.cloud key).
-   */
-  facilitatorClient?: FacilitatorClient;
 }
 
 /** Internal handles startServer() uses for graceful shutdown. */
@@ -143,12 +125,12 @@ function safeEqual(a: string, b: string): boolean {
 /**
  * True when the payer is the service's own owner or its payout account — a
  * self-paid call that must NOT feed the trust score (wash-trade guard, F1).
- * Identities compare case-insensitively with any `account-hash-` prefix
- * stripped, so live account-hashes and mock identities both compare cleanly.
+ * Account ids compare case-insensitively after trimming.
+ * TODO(Task 4): skip attestation on the registry's `selfPaid` verdict instead.
  */
-export function isSelfPayment(payerFrom: string, service: ServiceRecord): boolean {
-  const norm = (s: string): string => s.trim().toLowerCase().replace(/^account-hash-/, '');
-  const from = norm(payerFrom);
+export function isSelfPayment(payer: string, service: ServiceRecord): boolean {
+  const norm = (s: string): string => s.trim().toLowerCase();
+  const from = norm(payer);
   if (from === '') return false;
   return from === norm(service.paymentTarget) || from === norm(service.owner);
 }
@@ -169,12 +151,12 @@ export function createApp(deps: MiddlewareDeps): Express {
     throw new AgentGateError('BAD_DEPS', 'createApp requires { config, chain }', 500);
   }
   const { config, chain } = deps;
-  // Fail closed: live mode must use a real attestor key, never the mock-signer
-  // fallback (which would record attestations with no key material).
-  if (config.mode === 'live' && config.gateSignerPemPath.trim() === '') {
+  // Fail closed: live mode must use a real attestor account, never the
+  // mock-signer fallback (which would record attestations with no key material).
+  if (config.mode === 'live' && config.gatewayAccountId.trim() === '') {
     throw new AgentGateError(
       'CONFIG_INVALID',
-      'live mode requires GATE_SIGNER_PEM_PATH (the attestor signing key) — refusing the mock-signer fallback',
+      'live mode requires GATEWAY_ACCOUNT_ID (the attestor account) — refusing the mock-signer fallback',
       500,
     );
   }
@@ -209,21 +191,6 @@ export function createApp(deps: MiddlewareDeps): Express {
   const services = new ServiceCache(chain);
   const attestationRetryDelayMs = deps.attestationRetryDelayMs ?? DEFAULT_ATTESTATION_RETRY_DELAY_MS;
   const attestationMaxAttempts = deps.attestationMaxAttempts ?? DEFAULT_ATTESTATION_MAX_ATTEMPTS;
-  // Official x402 facilitator client (CEP-18 + EIP-712). Injected in tests; else
-  // built for live mode — a service becomes facilitator-enabled via the env map
-  // OR its on-chain accepts[], so the client must exist regardless of env. Auth
-  // reuses the CSPR.cloud key (raw Authorization header, no Bearer prefix).
-  const facilitator: FacilitatorClient | undefined =
-    deps.facilitatorClient ??
-    (config.mode === 'live'
-      ? new HTTPFacilitatorClient({
-          url: config.facilitatorUrl,
-          createAuthHeaders: async () => {
-            const h = { Authorization: config.csprCloudApiKey };
-            return { verify: h, settle: h, supported: h };
-          },
-        })
-      : undefined);
 
   const app = express();
   app.disable('x-powered-by');
@@ -254,25 +221,35 @@ export function createApp(deps: MiddlewareDeps): Express {
 
   // ---------------------------------------------------------------- helpers
 
-  /** Gate/attestor signer: PEM key in live mode, mock identity otherwise. */
+  /** Gateway/attestor signer: the gateway NEAR account in live mode, mock identity otherwise. */
   function gateSignerFor(service: ServiceRecord): AnySigner {
-    if (config.mode === 'live' && config.gateSignerPemPath !== '') {
-      return { kind: 'pem', pemPath: config.gateSignerPemPath };
+    if (config.mode === 'live') {
+      return {
+        kind: 'near',
+        accountId: config.gatewayAccountId,
+        ...(config.gatewayPrivateKey !== '' ? { secretKey: config.gatewayPrivateKey } : {}),
+        ...(config.gatewayKeyPath !== '' ? { keyPath: config.gatewayKeyPath } : {}),
+      };
     }
-    // Mock mode: the devnet authorizes by public key string; act as the
-    // service's registered attestor (mock signers carry no key material).
-    return { kind: 'mock', publicKey: service.attestor };
+    // Mock mode: the devnet authorizes by account id; act as the service's
+    // registered attestor (mock signers carry no key material).
+    return { kind: 'mock', accountId: service.attestor };
   }
 
+  /**
+   * The x402 requirement for one invoice: pay `price + storage fee` through the
+   * registry's `pay(service_id, nonce)`.
+   * TODO(Task 4): port the paywall tests to this body; `relayer` lands in Task 10.
+   */
   function buildRequirements(
     service: ServiceRecord, nonce: string, expiresAt: number, resource: string,
   ): PaymentRequirements {
     return {
       scheme: X402_SCHEME,
       network: chain.network,
-      maxAmountRequired: service.priceMotes,
-      asset: X402_ASSET_CSPR,
-      payTo: service.paymentTarget,
+      maxAmountRequired: addYocto(service.priceYocto, PAYMENT_STORAGE_FEE_YOCTO),
+      asset: X402_ASSET_NEAR,
+      payTo: chain.registryId,
       resource,
       description: service.name,
       maxTimeoutSeconds: Math.floor(config.invoiceTtlMs / 1000),
@@ -280,8 +257,13 @@ export function createApp(deps: MiddlewareDeps): Express {
         nonce,
         serviceId: service.id,
         expiresAtMs: expiresAt,
-        settlement: 'casper-native-transfer',
-        transferIdEncoding: 'u64-decimal',
+        settlement: 'neargate-registry-pay',
+        contractId: chain.registryId,
+        method: 'pay',
+        priceYocto: service.priceYocto,
+        storageFeeYocto: PAYMENT_STORAGE_FEE_YOCTO,
+        seller: service.paymentTarget,
+        caip2: caip2For(chain.network),
       },
     };
   }
@@ -300,42 +282,8 @@ export function createApp(deps: MiddlewareDeps): Express {
   ): Promise<void> {
     const nonce = randomNonce();
     const expiresAt = Date.now() + config.invoiceTtlMs;
-    await invoices.put({ nonce, serviceId: service.id, priceMotes: service.priceMotes, expiresAt, used: false });
+    await invoices.put({ nonce, serviceId: service.id, priceYocto: service.priceYocto, expiresAt, used: false });
     send402(res, error, buildRequirements(service, nonce, expiresAt, resource));
-  }
-
-  // --- official x402 facilitator rail (CEP-18 + EIP-712) helpers ---
-
-  /**
-   * Per-service facilitator config: the env `FACILITATOR_SERVICES` map is the
-   * operator override; otherwise derived from the service's on-chain registry-v2
-   * `accepts[]` (first CEP-18 option). Undefined → native rail.
-   */
-  function facilitatorConfigFor(service: ServiceRecord): FacilitatorServiceConfig | undefined {
-    return config.facilitatorServices[service.id] ?? facilitatorConfigFromAccepts(service.accepts);
-  }
-
-  /** Build the official x402 v2 PaymentRequirements for a facilitator-enabled service. */
-  function buildV2Requirements(
-    service: ServiceRecord, facCfg: FacilitatorServiceConfig,
-  ): X402V2Requirements {
-    return {
-      scheme: X402_SCHEME, // 'exact' — same identifier as the official spec
-      network: toCaip2Network(config.casperNetwork),
-      asset: facCfg.asset,
-      amount: facCfg.amount,
-      payTo: payToFromAccountHash(service.paymentTarget),
-      maxTimeoutSeconds: Math.floor(config.invoiceTtlMs / 1000),
-      extra: facCfg.token,
-    };
-  }
-
-  /** 402 for the facilitator rail (v2 body). Stateless here — no invoice persisted. */
-  function send402V2(
-    res: Response, error: string, requirements: X402V2Requirements, retryAfterSeconds?: number,
-  ): void {
-    if (retryAfterSeconds !== undefined) res.set('Retry-After', String(retryAfterSeconds));
-    res.status(402).json({ x402Version: X402_VERSION_V2, error, accepts: [requirements] });
   }
 
   /**
@@ -349,10 +297,11 @@ export function createApp(deps: MiddlewareDeps): Express {
    */
   function runAttestation(
     service: ServiceRecord,
-    paymentDeployHash: string,
+    nonce: string,
+    paymentTxHash: string,
     success: boolean,
   ): void {
-    const input = { serviceId: service.id, paymentDeployHash, success };
+    const input = { serviceId: service.id, nonce, paymentTxHash, success };
     const signer = gateSignerFor(service);
     const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
     const attempt = (n: number): void => {
@@ -364,7 +313,7 @@ export function createApp(deps: MiddlewareDeps): Express {
             txHash: r.txHash,
           });
           // Confirmed on-chain — drop it from the durable queue so it is not replayed.
-          void attestations.remove(paymentDeployHash);
+          void attestations.remove(nonce);
         },
         (err: unknown) => {
           if (n >= attestationMaxAttempts) {
@@ -396,29 +345,31 @@ export function createApp(deps: MiddlewareDeps): Express {
    */
   function scheduleAttestation(
     service: ServiceRecord,
-    paymentDeployHash: string,
+    nonce: string,
+    paymentTxHash: string,
     success: boolean,
   ): void {
     void attestations
-      .enqueue({ paymentDeployHash, serviceId: service.id, success, enqueuedAt: Date.now() })
-      .then(() => runAttestation(service, paymentDeployHash, success));
+      .enqueue({ nonce, paymentTxHash, serviceId: service.id, success, enqueuedAt: Date.now() })
+      .then(() => runAttestation(service, nonce, paymentTxHash, success));
   }
 
   /**
    * Replay attestations persisted from a previous run that never confirmed (F7).
-   * Idempotent on-chain (`seen_payments` dedup), so re-recording an already-scored
-   * payment is a harmless no-op. Fire-and-forget on boot.
+   * The registry attests a payment at most once (`ERR_ALREADY_ATTESTED`), so
+   * re-recording an already-scored payment is a harmless rejected no-op.
+   * Fire-and-forget on boot.
    */
   function replayPendingAttestations(): void {
     void attestations.list().then(async (pending) => {
       for (const p of pending) {
         const service = await services.get(p.serviceId).catch(() => null);
         if (service) {
-          runAttestation(service, p.paymentDeployHash, p.success);
+          runAttestation(service, p.nonce, p.paymentTxHash, p.success);
         } else {
           logger.warn('attestation_replay_skipped_unknown_service', {
             serviceId: p.serviceId,
-            paymentDeployHash: p.paymentDeployHash,
+            nonce: p.nonce,
           });
         }
       }
@@ -556,94 +507,6 @@ export function createApp(deps: MiddlewareDeps): Express {
 
       const resource = `${req.protocol}://${req.get('host') ?? 'localhost'}${req.originalUrl}`;
 
-      // 1d. Facilitator rail: a facilitator-enabled service runs the OFFICIAL
-      //     x402 loop (CEP-18 + EIP-712 via the CSPR.cloud facilitator) instead
-      //     of the native-transfer rail. Stateless here — replay protection lives
-      //     in the signed authorization + the facilitator + the token's used_nonces.
-      const facCfg = facilitatorConfigFor(service);
-      if (facCfg) {
-        if (!facilitator) {
-          logger.error('facilitator_not_configured', { serviceId: id });
-          res.status(503).json({ error: 'service_unavailable' });
-          return;
-        }
-        const v2reqs = buildV2Requirements(service, facCfg);
-        const sig = req.header(HEADER_PAYMENT_SIGNATURE)?.trim() ?? '';
-        if (sig === '') {
-          send402V2(res, 'PAYMENT-SIGNATURE header is required', v2reqs);
-          return;
-        }
-        let v2payload;
-        try {
-          v2payload = decodePaymentSignatureHeader(sig);
-        } catch {
-          send402V2(res, 'invalid_payment_header', v2reqs);
-          return;
-        }
-        // verify → settle BEFORE serving: once settle succeeds the payment is
-        // final and non-replayable, mirroring the native "burn nonce before proxy".
-        let verify;
-        try {
-          verify = await facilitator.verify(v2payload, v2reqs);
-        } catch (err) {
-          logger.warn('facilitator_verify_error', { serviceId: id, error: err instanceof Error ? err.message : String(err) });
-          send402V2(res, 'facilitator_unavailable', v2reqs, 2);
-          return;
-        }
-        if (!verify.isValid) {
-          send402V2(res, verify.invalidReason ?? 'invalid_payment', v2reqs);
-          return;
-        }
-        let settle;
-        try {
-          settle = await facilitator.settle(v2payload, v2reqs);
-        } catch (err) {
-          logger.warn('facilitator_settle_error', { serviceId: id, error: err instanceof Error ? err.message : String(err) });
-          send402V2(res, 'facilitator_unavailable', v2reqs, 2);
-          return;
-        }
-        if (!settle.success || !settle.transaction) {
-          send402V2(res, settle.errorReason ?? 'settlement_failed', v2reqs);
-          return;
-        }
-
-        // Proxy to the upstream, then respond + attest (settle tx = the payment id).
-        const outcome = await proxyToUpstream({
-          upstreamUrl,
-          req,
-          timeoutMs: config.upstreamTimeoutMs,
-          followRedirects: config.mode !== 'live',
-          pinToPublicIp: config.mode === 'live',
-        });
-        const v2success = isUpstreamSuccess(outcome);
-        const payer = settle.payer ?? '';
-        // x402 addresses are '00'+account-hash (66 hex); reduce to the 64-hex
-        // account-hash so the self-payment (wash-trade) guard compares cleanly.
-        const payerHash = payer.length === 66 ? payer.slice(2) : payer;
-        res.set(
-          HEADER_X_PAYMENT_RESPONSE,
-          encodeXPaymentResponse({ success: true, transaction: settle.transaction, network: v2reqs.network, payer }),
-        );
-        if (outcome.kind === 'response') {
-          res.status(outcome.status);
-          if (outcome.contentType) res.set('Content-Type', outcome.contentType);
-          res.send(outcome.body);
-        } else {
-          logger.warn('proxy_failed', { serviceId: id, error: outcome.error });
-          res.status(outcome.status).json({ error: outcome.error });
-        }
-        const v2selfPaid = isSelfPayment(payerHash, service);
-        if (outcome.kind === 'response' && !v2selfPaid) {
-          scheduleAttestation(service, settle.transaction, v2success);
-        } else {
-          logger.info('attestation_skipped', {
-            serviceId: id,
-            reason: v2selfPaid ? 'self_payment' : outcome.kind === 'failure' ? outcome.error : 'skipped',
-          });
-        }
-        return;
-      }
-
       // 2. No payment proof → fresh 402 challenge.
       const xPayment = req.header(HEADER_X_PAYMENT)?.trim() ?? '';
       if (xPayment === '') {
@@ -663,8 +526,13 @@ export function createApp(deps: MiddlewareDeps): Express {
         await respond402Fresh(res, service, resource, 'invalid_payment_header');
         return;
       }
-      const deployHashHeader = payment.payload.transaction;
-      const nonceHeader = payment.payload.transferId;
+      if (payment.payload.kind !== 'tx') {
+        // TODO(Task 4): the gasless delegate rail stays off until Task 10.
+        await respond402Fresh(res, service, resource, 'relayer_disabled');
+        return;
+      }
+      const txHashHeader = payment.payload.transaction;
+      const nonceHeader = payment.payload.nonce;
 
       // 3. Validate the invoice behind the presented nonce.
       const invoice = await invoices.get(nonceHeader);
@@ -672,13 +540,14 @@ export function createApp(deps: MiddlewareDeps): Express {
       if (invoice.used) { await respond402Fresh(res, service, resource, 'invoice_used'); return; }
       if (Date.now() > invoice.expiresAt) { await respond402Fresh(res, service, resource, 'invoice_expired'); return; }
 
-      // 3b. Verify the on-chain transfer.
-      const verdict = await chain.verifyTransfer({
-        deployHash: deployHashHeader,
-        expectedTarget: service.paymentTarget,
-        minAmountMotes: service.priceMotes,
-        expectedTransferId: nonceHeader,
+      // 3b. Verify the payment the registry holds for this nonce.
+      const verdict = await chain.verifyPayment({
+        nonce: nonceHeader,
+        serviceId: id,
+        minAmountYocto: service.priceYocto,
         maxAgeMs: config.invoiceTtlMs,
+        txHash: txHashHeader,
+        payer: payment.payload.payer,
       });
       if (!verdict.ok) {
         if (verdict.reason === 'pending') {
@@ -716,9 +585,9 @@ export function createApp(deps: MiddlewareDeps): Express {
         HEADER_X_PAYMENT_RESPONSE,
         encodeXPaymentResponse({
           success: true,
-          transaction: deployHashHeader,
+          transaction: txHashHeader,
           network: chain.network,
-          payer: verdict.from,
+          payer: verdict.payer,
         }),
       );
       if (outcome.kind === 'response') {
@@ -735,9 +604,9 @@ export function createApp(deps: MiddlewareDeps): Express {
       // is the seller's backend being unreachable, not a service outcome, so it
       // is not scored either way. And never let a self-paid call earn trust
       // (F1): a payer that is the owner or the payout account is wash-trading.
-      const selfPaid = isSelfPayment(verdict.from, service);
+      const selfPaid = isSelfPayment(verdict.payer, service);
       if (outcome.kind === 'response' && !selfPaid) {
-        scheduleAttestation(service, deployHashHeader, success);
+        scheduleAttestation(service, nonceHeader, txHashHeader, success);
       } else {
         logger.info('attestation_skipped', {
           serviceId: id,
@@ -806,96 +675,13 @@ export function createApp(deps: MiddlewareDeps): Express {
 
   // -------------------------------------------- self-service mapping (no token)
   //
-  // A service OWNER maps their upstream by signing a canonical challenge with
-  // the key whose account-hash equals the on-chain `owner` — no shared admin
-  // token needed. This is what lets `agentgate wrap --pem …` run against a
-  // hosted gateway in one line. Ordering is DoS-conscious: cheap rejects first,
-  // the signature/owner check only after the service is known to exist, and the
-  // SSRF check only for a verified owner.
-  const lastSelfMapTs = new Map<number, number>();
-
-  app.post(
-    '/services/:id/map',
-    wrap(async (req, res) => {
-      const id = parseServiceId(req.params.id);
-      if (id === null) {
-        res.status(400).json({ error: 'invalid_service_id' });
-        return;
-      }
-      const body: unknown = req.body;
-      if (body === null || typeof body !== 'object') {
-        res.status(400).json({ error: 'invalid_body' });
-        return;
-      }
-      const { upstreamUrl, publicKeyHex, timestamp, signatureHex } = body as {
-        upstreamUrl?: unknown;
-        publicKeyHex?: unknown;
-        timestamp?: unknown;
-        signatureHex?: unknown;
-      };
-      if (
-        typeof upstreamUrl !== 'string' ||
-        typeof publicKeyHex !== 'string' ||
-        typeof signatureHex !== 'string' ||
-        typeof timestamp !== 'number' ||
-        !Number.isSafeInteger(timestamp)
-      ) {
-        res.status(400).json({ error: 'invalid_body' });
-        return;
-      }
-
-      // Freshness — bounds replay independently of the per-service guard below.
-      if (Math.abs(Date.now() - timestamp) > SELF_MAP_WINDOW_MS) {
-        res.status(401).json({ error: 'stale_request' });
-        return;
-      }
-
-      const service = await services.get(id);
-      if (!service) {
-        res.status(404).json({ error: 'service_not_found' });
-        return;
-      }
-
-      // Verify the signature over the RAW transmitted upstreamUrl (byte-identical
-      // to what the owner signed) and bind the signing key to the on-chain owner.
-      const message = buildSelfMapMessage({
-        network: chain.network,
-        serviceId: id,
-        upstreamUrl,
-        timestamp,
-      });
-      const { accountHash, valid } = verifyOwnerSignature(publicKeyHex, message, signatureHex);
-      if (!valid) {
-        res.status(401).json({ error: 'invalid_signature' });
-        return;
-      }
-      if (accountHash.toLowerCase() !== service.owner.toLowerCase()) {
-        res.status(403).json({ error: 'not_service_owner' });
-        return;
-      }
-
-      // Per-service monotonic timestamp — reject stale/replayed authorized requests.
-      const last = lastSelfMapTs.get(id);
-      if (last !== undefined && timestamp <= last) {
-        res.status(409).json({ error: 'replayed' });
-        return;
-      }
-
-      // SSRF guard — same as the admin path; only reached for a verified owner.
-      const verdict = validateUpstreamUrl(upstreamUrl, {
-        rejectPrivateHosts: config.mode === 'live',
-      });
-      if (!verdict.ok) {
-        res.status(400).json({ error: verdict.error });
-        return;
-      }
-
-      lastSelfMapTs.set(id, timestamp);
-      await upstreams.set(id, verdict.url.toString());
-      logger.info('self_mapped', { serviceId: id });
-      res.status(204).end();
-    }),
-  );
+  // A service OWNER maps their upstream by signing a canonical challenge
+  // (`buildSelfMapMessage`) — no shared admin token needed.
+  // TODO(Task 4): verify an ed25519 signature by a full-access key of the
+  // on-chain owner (`chain.isFullAccessKey`); until then the route is disabled.
+  app.post('/services/:id/map', (_req, res) => {
+    res.status(501).json({ error: 'self_map_pending_task4' });
+  });
 
   // ------------------------------------------------------ fallbacks & errors
 

@@ -1,33 +1,40 @@
 import { AgentGateError } from './errors';
-import { csprToMotes } from './money';
-import type { FacilitatorServiceConfig } from './x402';
+import { nearToYocto } from './money';
+import { isNearAccountId } from './x402';
 
 export type AgentGateMode = 'mock' | 'live';
 
 /** The shipped default admin token. loadConfig() refuses it in live mode. */
 export const DEFAULT_ADMIN_TOKEN = 'dev-admin-token';
 
+export type NearNetwork = 'testnet' | 'mainnet';
+
 /**
- * The deployed AgentGateRegistry package hash on Casper Testnet — registry v2
- * (multi-asset `accepts[]`, unlocked/upgradable). The legacy locked v1 package
- * (`hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9`)
- * stays on-chain as the rollback target; readers still decode its layout.
+ * The deployed `neargate-registry` contract id on NEAR testnet.
+ * TODO(Task 7): set to the deployed contract id; empty until then.
  */
-export const DEFAULT_REGISTRY_PACKAGE_HASH =
-  'hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df';
+export const DEFAULT_REGISTRY_CONTRACT_ID = '';
 
 /**
  * Default hosted gateway the CLI targets in live mode when `--gateway` is unset.
  * The owner-signature self-map endpoint lives here; override with `--gateway`
  * for a local/self-hosted gateway.
+ * TODO(Task 9): point at the NearGate hosted gateway.
  */
 export const DEFAULT_GATEWAY_URL = 'https://gateway.example.org';
 
 /**
  * Default hosted dashboard the CLI links to in live mode when printing the
  * service detail URL; mock mode links to http://localhost:<DASHBOARD_PORT>.
+ * TODO(Task 9): point at the NearGate hosted dashboard.
  */
 export const DEFAULT_DASHBOARD_URL = 'https://agentgate.example.org';
+
+/** Per-network RPC and explorer defaults (overridable via NEAR_RPC_URL / NEAR_EXPLORER_URL). */
+const NEAR_DEFAULTS: Record<NearNetwork, { rpcUrl: string; explorerUrl: string }> = {
+  testnet: { rpcUrl: 'https://rpc.testnet.near.org', explorerUrl: 'https://testnet.nearblocks.io' },
+  mainnet: { rpcUrl: 'https://rpc.mainnet.near.org', explorerUrl: 'https://nearblocks.io' },
+};
 
 export interface AgentGateConfig {
   mode: AgentGateMode;
@@ -52,28 +59,30 @@ export interface AgentGateConfig {
    * or X-Forwarded-For becomes spoofable.
    */
   trustProxy: number;
-  // live mode (Casper Testnet)
-  casperNodeUrl: string;
-  csprCloudApiUrl: string;
-  csprCloudApiKey: string;
-  csprCloudStreamingUrl: string;
-  casperNetwork: string;
-  registryContractPackageHash: string;
-  gateSignerPemPath: string;
-  buyerSignerPemPath: string;
-  sellerSignerPemPath: string;
+  // live mode (NEAR)
+  nearNetwork: NearNetwork;
+  nearRpcUrl: string;
+  nearExplorerUrl: string;
+  registryContractId: string;
+  /** Gateway account: signs attestations (and relays delegate actions when enabled). */
+  gatewayAccountId: string;
+  gatewayPrivateKey: string;
+  gatewayKeyPath: string;
+  buyerAccountId: string;
+  buyerPrivateKey: string;
+  buyerKeyPath: string;
+  sellerAccountId: string;
+  sellerPrivateKey: string;
+  sellerKeyPath: string;
   // LLM
   anthropicApiKey: string;
   llmModel: string;
   // oracle
   oracleStatic: boolean;
   // buyer agent
-  buyerBudgetCspr: string;
-  // official x402 facilitator rail (CEP-18 + EIP-712 via CSPR.cloud facilitator)
-  facilitatorUrl: string;
-  buyerKeyAlgo: 'ed25519' | 'secp256k1';
-  /** Per-service facilitator config keyed by service id (from FACILITATOR_SERVICES). */
-  facilitatorServices: Record<number, FacilitatorServiceConfig>;
+  buyerBudgetNear: string;
+  /** Gasless rail: the gateway relays NEP-366 signed delegate actions. */
+  relayerEnabled: boolean;
 }
 
 type Env = Record<string, string | undefined>;
@@ -127,65 +136,26 @@ function readBool01(env: Env, key: string, fallback: boolean): boolean {
   throw configError(`${key} must be 0/1 (or true/false), got ${JSON.stringify(raw)}`);
 }
 
-/**
- * Parse the FACILITATOR_SERVICES env map: JSON object keyed by service id, each
- * `{ asset, amount, token: { name, version, decimals, symbol } }`. Empty → {}.
- * Throws CONFIG_INVALID on any malformed entry.
- */
-function parseFacilitatorServices(raw: string): Record<number, FacilitatorServiceConfig> {
-  if (raw === '') return {};
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw configError('FACILITATOR_SERVICES must be valid JSON');
+/** Read an optional NEAR account id; empty means unset, anything else must be valid. */
+function readAccountId(env: Env, key: string, fallback: string): string {
+  const raw = readStr(env, key, fallback);
+  if (raw !== '' && !isNearAccountId(raw)) {
+    throw configError(`${key} must be a NEAR account id, got ${JSON.stringify(raw)}`);
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw configError('FACILITATOR_SERVICES must be a JSON object keyed by service id');
-  }
-  const out: Record<number, FacilitatorServiceConfig> = {};
-  for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
-    const id = Number(key);
-    if (!Number.isInteger(id) || id < 1) {
-      throw configError(`FACILITATOR_SERVICES key must be a positive integer service id, got ${JSON.stringify(key)}`);
-    }
-    if (typeof val !== 'object' || val === null) {
-      throw configError(`FACILITATOR_SERVICES[${key}] must be an object`);
-    }
-    const v = val as Record<string, unknown>;
-    const asset = typeof v['asset'] === 'string' ? v['asset'] : '';
-    const amount = typeof v['amount'] === 'string' ? v['amount'] : '';
-    const token = typeof v['token'] === 'object' && v['token'] !== null ? (v['token'] as Record<string, unknown>) : {};
-    if (!/^[0-9a-f]{64}$/i.test(asset)) {
-      throw configError(`FACILITATOR_SERVICES[${key}].asset must be a 64-hex CEP-18 package hash`);
-    }
-    if (!/^\d+$/.test(amount)) {
-      throw configError(`FACILITATOR_SERVICES[${key}].amount must be a decimal atomic-unit string`);
-    }
-    const name = typeof token['name'] === 'string' ? token['name'] : '';
-    const version = typeof token['version'] === 'string' ? token['version'] : '';
-    const decimals = typeof token['decimals'] === 'number' ? token['decimals'] : NaN;
-    const symbol = typeof token['symbol'] === 'string' ? token['symbol'] : '';
-    if (name === '' || version === '' || !Number.isInteger(decimals) || symbol === '') {
-      throw configError(`FACILITATOR_SERVICES[${key}].token must have { name, version, decimals, symbol }`);
-    }
-    out[id] = { asset: asset.toLowerCase(), amount, token: { name, version, decimals, symbol } };
-  }
-  return out;
+  return raw;
 }
 
 /**
- * Reads and validates the AgentGate environment contract (SPEC §1) once.
+ * Reads and validates the AgentGate environment contract once.
  * Throws AgentGateError('CONFIG_INVALID') on invalid values or combos:
- * - unknown AGENTGATE_MODE
- * - live mode without CSPR_CLOUD_API_KEY
- * - live mode with the default admin token
+ * - unknown AGENTGATE_MODE or NEAR_NETWORK
+ * - malformed URLs, ports, amounts or NEAR account ids
+ * - live mode with the default admin token (unless `requireStrongAdminToken: false`)
  */
 export function loadConfig(
   env: Env = process.env,
-  opts: { requireCloudKey?: boolean; requireStrongAdminToken?: boolean } = {},
+  opts: { requireStrongAdminToken?: boolean } = {},
 ): AgentGateConfig {
-  const requireCloudKey = opts.requireCloudKey ?? true;
   const requireStrongAdminToken = opts.requireStrongAdminToken ?? true;
   const modeRaw = readStr(env, 'AGENTGATE_MODE', 'mock');
   if (modeRaw !== 'mock' && modeRaw !== 'live') {
@@ -205,66 +175,47 @@ export function loadConfig(
   const upstreamTimeoutMs = readInt(env, 'UPSTREAM_TIMEOUT_MS', 30_000, 1, Number.MAX_SAFE_INTEGER);
   const trustProxy = readInt(env, 'TRUST_PROXY', 0, 0, 10);
 
-  const casperNodeUrl = readUrl(
-    env,
-    'CASPER_NODE_URL',
-    'https://node.testnet.casper.network/rpc',
-    ['http:', 'https:'],
-  );
-  const csprCloudApiUrl = readUrl(env, 'CSPR_CLOUD_API_URL', 'https://api.testnet.cspr.cloud', [
+  const nearNetworkRaw = readStr(env, 'NEAR_NETWORK', 'testnet');
+  if (nearNetworkRaw !== 'testnet' && nearNetworkRaw !== 'mainnet') {
+    throw configError(`NEAR_NETWORK must be "testnet" or "mainnet", got ${JSON.stringify(nearNetworkRaw)}`);
+  }
+  const nearNetwork: NearNetwork = nearNetworkRaw;
+  const nearRpcUrl = readUrl(env, 'NEAR_RPC_URL', NEAR_DEFAULTS[nearNetwork].rpcUrl, ['http:', 'https:']);
+  const nearExplorerUrl = readUrl(env, 'NEAR_EXPLORER_URL', NEAR_DEFAULTS[nearNetwork].explorerUrl, [
     'http:',
     'https:',
   ]);
-  const csprCloudApiKey = readStr(env, 'CSPR_CLOUD_API_KEY', '');
-  const csprCloudStreamingUrl = readUrl(
-    env,
-    'CSPR_CLOUD_STREAMING_URL',
-    'wss://streaming.testnet.cspr.cloud',
-    ['ws:', 'wss:'],
-  );
-  const casperNetwork = readStr(env, 'CASPER_NETWORK', 'casper-test');
-  const registryContractPackageHash = readStr(env, 'REGISTRY_CONTRACT_PACKAGE_HASH', '');
-  const gateSignerPemPath = readStr(env, 'GATE_SIGNER_PEM_PATH', '');
-  const buyerSignerPemPath = readStr(env, 'BUYER_SIGNER_PEM_PATH', '');
-  const sellerSignerPemPath = readStr(env, 'SELLER_SIGNER_PEM_PATH', '');
+  const registryContractId = readAccountId(env, 'REGISTRY_CONTRACT_ID', DEFAULT_REGISTRY_CONTRACT_ID);
+  const gatewayAccountId = readAccountId(env, 'GATEWAY_ACCOUNT_ID', '');
+  const gatewayPrivateKey = readStr(env, 'GATEWAY_PRIVATE_KEY', '');
+  const gatewayKeyPath = readStr(env, 'GATEWAY_KEY_PATH', '');
+  const buyerAccountId = readAccountId(env, 'BUYER_ACCOUNT_ID', '');
+  const buyerPrivateKey = readStr(env, 'BUYER_PRIVATE_KEY', '');
+  const buyerKeyPath = readStr(env, 'BUYER_KEY_PATH', '');
+  const sellerAccountId = readAccountId(env, 'SELLER_ACCOUNT_ID', '');
+  const sellerPrivateKey = readStr(env, 'SELLER_PRIVATE_KEY', '');
+  const sellerKeyPath = readStr(env, 'SELLER_KEY_PATH', '');
 
   const anthropicApiKey = readStr(env, 'ANTHROPIC_API_KEY', '');
   const llmModel = readStr(env, 'LLM_MODEL', 'claude-sonnet-4-6');
 
   const oracleStatic = readBool01(env, 'ORACLE_STATIC', false);
 
-  const buyerBudgetCspr = readStr(env, 'BUYER_BUDGET_CSPR', '5');
+  const buyerBudgetNear = readStr(env, 'BUYER_BUDGET_NEAR', '1');
   try {
-    csprToMotes(buyerBudgetCspr);
+    nearToYocto(buyerBudgetNear);
   } catch {
     throw configError(
-      `BUYER_BUDGET_CSPR must be a non-negative CSPR decimal string (max 9 dp), got ${JSON.stringify(buyerBudgetCspr)}`,
+      `BUYER_BUDGET_NEAR must be a non-negative NEAR decimal string (max 24 dp), got ${JSON.stringify(buyerBudgetNear)}`,
     );
   }
+  const relayerEnabled = readBool01(env, 'RELAYER_ENABLED', false);
 
-  const mockBuyerAccount = readStr(env, 'MOCK_BUYER_ACCOUNT', '');
-  const mockSellerAccount = readStr(env, 'MOCK_SELLER_ACCOUNT', '');
+  const mockBuyerAccount = readAccountId(env, 'MOCK_BUYER_ACCOUNT', 'buyer.mock');
+  const mockSellerAccount = readAccountId(env, 'MOCK_SELLER_ACCOUNT', 'seller.mock');
 
-  const facilitatorUrl = readUrl(env, 'FACILITATOR_URL', 'https://x402-facilitator.cspr.cloud', [
-    'http:',
-    'https:',
-  ]);
-  const buyerKeyAlgoRaw = readStr(env, 'BUYER_KEY_ALGO', 'secp256k1');
-  if (buyerKeyAlgoRaw !== 'ed25519' && buyerKeyAlgoRaw !== 'secp256k1') {
-    throw configError(`BUYER_KEY_ALGO must be "ed25519" or "secp256k1", got ${JSON.stringify(buyerKeyAlgoRaw)}`);
-  }
-  const buyerKeyAlgo: 'ed25519' | 'secp256k1' = buyerKeyAlgoRaw;
-  const facilitatorServices = parseFacilitatorServices(readStr(env, 'FACILITATOR_SERVICES', ''));
-
-  if (mode === 'live') {
-    if (requireCloudKey && csprCloudApiKey === '') {
-      throw configError('live mode requires CSPR_CLOUD_API_KEY (get one at console.cspr.cloud)');
-    }
-    if (requireStrongAdminToken && adminToken === DEFAULT_ADMIN_TOKEN) {
-      throw configError(
-        'live mode refuses the default AGENTGATE_ADMIN_TOKEN — set a strong unique token',
-      );
-    }
+  if (mode === 'live' && requireStrongAdminToken && adminToken === DEFAULT_ADMIN_TOKEN) {
+    throw configError('live mode refuses the default AGENTGATE_ADMIN_TOKEN — set a strong unique token');
   }
 
   return {
@@ -280,21 +231,23 @@ export function loadConfig(
     invoiceTtlMs,
     upstreamTimeoutMs,
     trustProxy,
-    casperNodeUrl,
-    csprCloudApiUrl,
-    csprCloudApiKey,
-    csprCloudStreamingUrl,
-    casperNetwork,
-    registryContractPackageHash,
-    gateSignerPemPath,
-    buyerSignerPemPath,
-    sellerSignerPemPath,
+    nearNetwork,
+    nearRpcUrl,
+    nearExplorerUrl,
+    registryContractId,
+    gatewayAccountId,
+    gatewayPrivateKey,
+    gatewayKeyPath,
+    buyerAccountId,
+    buyerPrivateKey,
+    buyerKeyPath,
+    sellerAccountId,
+    sellerPrivateKey,
+    sellerKeyPath,
     anthropicApiKey,
     llmModel,
     oracleStatic,
-    buyerBudgetCspr,
-    facilitatorUrl,
-    buyerKeyAlgo,
-    facilitatorServices,
+    buyerBudgetNear,
+    relayerEnabled,
   };
 }

@@ -1,13 +1,13 @@
 import { createAgentGateClient, type PayAndFetchResult } from '@agentgate/client';
 import {
   AgentGateError,
-  compareMotes,
-  csprToMotes,
+  compareYocto,
+  nearToYocto,
   stripTrailingSlashes,
   type AnySigner,
   type ChainClient,
-  type Motes,
   type ServiceRecord,
+  type Yocto,
 } from '@agentgate/shared';
 
 export interface BuyServiceOpts {
@@ -15,8 +15,8 @@ export interface BuyServiceOpts {
   signer: AnySigner;
   /** Service id (1-based, as shown by `agentgate list`). */
   id: number;
-  /** Refuse invoices priced above this, in CSPR (e.g. "5"). */
-  maxCspr?: string;
+  /** Refuse invoices priced above this, in NEAR (e.g. "5"). */
+  maxNear?: string;
   /** HTTP method for the paid request. Default GET. */
   method?: string;
   /** JSON request body — validated up front, sent on both legs. */
@@ -27,8 +27,6 @@ export interface BuyServiceOpts {
   settleDelayMs?: number;
   fetchImpl?: typeof fetch;
   requestTimeoutMs?: number;
-  /** Buyer key algorithm for the facilitator (x402 v2) rail. Default secp256k1. */
-  buyerKeyAlgo?: 'ed25519' | 'secp256k1';
 }
 
 export interface BuyServiceResult {
@@ -42,8 +40,8 @@ export interface BuyServiceResult {
  * Programmatic `agentgate buy`: resolve the service on-chain, fail fast on
  * anything that would waste a payment (unknown/paused service, price above the
  * cap, malformed body), then run the full 402 → pay → retry-with-proof exchange
- * via the client's fetchPaid. No contract call is involved — payment is a
- * native transfer carrying the invoice nonce as transfer_id.
+ * via the client's fetchPaid. Payment is a registry `pay` call carrying the
+ * invoice nonce, with the price plus the storage fee attached.
  */
 export async function buyService(opts: BuyServiceOpts): Promise<BuyServiceResult> {
   const { chain, signer, id } = opts;
@@ -68,8 +66,8 @@ export async function buyService(opts: BuyServiceOpts): Promise<BuyServiceResult
     }
   }
 
-  const maxPriceMotes: Motes | undefined =
-    opts.maxCspr !== undefined ? csprToMotes(opts.maxCspr) : undefined;
+  const maxPriceYocto: Yocto | undefined =
+    opts.maxNear !== undefined ? nearToYocto(opts.maxNear) : undefined;
 
   const service = await chain.getService(id);
   if (service === null) {
@@ -83,10 +81,11 @@ export async function buyService(opts: BuyServiceOpts): Promise<BuyServiceResult
     );
   }
   // Fail fast before any HTTP when the on-chain price already exceeds the cap.
-  if (maxPriceMotes !== undefined && compareMotes(service.priceMotes, maxPriceMotes) > 0) {
+  // TODO(Task 5): cap price + storage fee (the invoice's maxAmountRequired) → BUDGET_EXCEEDED.
+  if (maxPriceYocto !== undefined && compareYocto(service.priceYocto, maxPriceYocto) > 0) {
     throw new AgentGateError(
       'PRICE_EXCEEDED',
-      `service price ${service.priceMotes} motes exceeds --max ${maxPriceMotes} motes`,
+      `service price ${service.priceYocto} yocto exceeds --max ${maxPriceYocto} yocto`,
       402,
     );
   }
@@ -99,11 +98,10 @@ export async function buyService(opts: BuyServiceOpts): Promise<BuyServiceResult
   const client = createAgentGateClient({
     chain,
     signer,
-    ...(maxPriceMotes !== undefined ? { maxPriceMotes } : {}),
+    ...(maxPriceYocto !== undefined ? { maxPriceYocto } : {}),
     ...(opts.settleDelayMs !== undefined ? { settleDelayMs: opts.settleDelayMs } : {}),
     ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
     ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
-    ...(opts.buyerKeyAlgo !== undefined ? { buyerKeyAlgo: opts.buyerKeyAlgo } : {}),
   });
 
   const init: RequestInit | undefined =

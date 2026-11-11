@@ -2,17 +2,19 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startServer } from '@agentgate/devnet';
 import type { RunningServer } from '@agentgate/devnet';
 import { AgentGateError, loadConfig } from '@agentgate/shared';
-import type { ChainClient, RegisterServiceInput, SignerRef } from '@agentgate/shared';
-import { LiveCasperClient, MockChainHttpClient, createChainClient, mockAccountHash } from '../src/index';
+import type { ChainClient, MockSigner, RegisterServiceInput } from '@agentgate/shared';
+import { MockChainHttpClient, createChainClient } from '../src/index';
 
-const OWNER: SignerRef = { kind: 'mock', publicKey: '01aa11'.padEnd(66, '0') };
-const ATTESTOR: SignerRef = { kind: 'mock', publicKey: '01bb22'.padEnd(66, '0') };
-const BUYER: SignerRef = { kind: 'mock', publicKey: '01cc33'.padEnd(66, '0') };
-const STRANGER: SignerRef = { kind: 'mock', publicKey: '01dd44'.padEnd(66, '0') };
+// TODO(Task 3): port to the NEAR registry rules (pay / getPayment / selfPaid / already_attested).
+
+const OWNER: MockSigner = { kind: 'mock', accountId: 'owner.mock' };
+const ATTESTOR: MockSigner = { kind: 'mock', accountId: 'attestor.mock' };
+const BUYER: MockSigner = { kind: 'mock', accountId: 'buyer.mock' };
+const STRANGER: MockSigner = { kind: 'mock', accountId: 'stranger.mock' };
 
 const GATEWAY = 'http://localhost:4021';
-const PRICE = '500000000'; // 0.5 CSPR
-const SELLER_TARGET = mockAccountHash('01ee55'.padEnd(66, '0'));
+const PRICE = '500000000000000000000000'; // 0.5 NEAR
+const SELLER_TARGET = 'seller.mock';
 
 let server: RunningServer;
 let base: string;
@@ -22,19 +24,19 @@ function registerInput(overrides: Partial<RegisterServiceInput> = {}): RegisterS
   return {
     name: 'USD/IDR Feed',
     description: 'Spot USD/IDR with confidence',
-    endpointUrl: GATEWAY,
-    priceMotes: PRICE,
+    gatewayBaseUrl: GATEWAY,
+    priceYocto: PRICE,
     paymentTarget: SELLER_TARGET,
-    attestor: ATTESTOR.publicKey,
+    attestor: ATTESTOR.accountId,
     ...overrides,
   };
 }
 
-async function faucet(account: string, amountMotes: string): Promise<void> {
+async function faucet(account: string, amountYocto: string): Promise<void> {
   const res = await fetch(`${base}/faucet`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ account, amountMotes }),
+    body: JSON.stringify({ account, amountYocto }),
   });
   expect(res.status).toBe(200);
   await res.json();
@@ -67,41 +69,25 @@ afterAll(async () => {
   await server.close();
 });
 
-describe('mockAccountHash', () => {
-  it('derives account-hash-<sha256 hex> deterministically', () => {
-    const hash = mockAccountHash('01abcd');
-    expect(hash).toMatch(/^account-hash-[0-9a-f]{64}$/);
-    expect(mockAccountHash('01abcd')).toBe(hash);
-    expect(mockAccountHash('01abce')).not.toBe(hash);
-  });
-
-  it('rejects empty public keys', () => {
-    expect(() => mockAccountHash('')).toThrowError(AgentGateError);
-  });
-});
-
 describe('createChainClient', () => {
   it('selects MockChainHttpClient in mock mode', () => {
     expect(chain).toBeInstanceOf(MockChainHttpClient);
     expect(chain.network).toBe('mock');
+    expect(chain.registryId).toBe('registry.mock');
   });
 
-  it('selects LiveCasperClient in live mode', () => {
-    const live = createChainClient(
-      loadConfig({
-        AGENTGATE_MODE: 'live',
-        CSPR_CLOUD_API_KEY: 'test-token',
-        AGENTGATE_ADMIN_TOKEN: 'strong-token-for-tests',
-      }),
-    );
-    expect(live).toBeInstanceOf(LiveCasperClient);
-    expect(live.network).toBe('casper-test');
+  it('refuses live mode until the live NEAR client lands (Task 6)', () => {
+    expect(() =>
+      createChainClient(
+        loadConfig({ AGENTGATE_MODE: 'live', AGENTGATE_ADMIN_TOKEN: 'strong-token-for-tests' }),
+      ),
+    ).toThrow(/Task 6/);
   });
 });
 
 describe('MockChainHttpClient — full surface against an in-process devnet', () => {
   let serviceId: number;
-  let deployHash: string;
+  let txHash: string;
   const nonce = '987654321';
 
   it('registerService returns the id and tx hash; reads see the computed endpointUrl', async () => {
@@ -116,10 +102,10 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
       id: serviceId,
       name: 'USD/IDR Feed',
       endpointUrl: `${GATEWAY}/svc/${serviceId}`,
-      priceMotes: PRICE,
+      priceYocto: PRICE,
       paymentTarget: SELLER_TARGET,
-      owner: OWNER.publicKey,
-      attestor: ATTESTOR.publicKey,
+      owner: OWNER.accountId,
+      attestor: ATTESTOR.accountId,
       active: true,
     });
 
@@ -131,39 +117,36 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
     expect(await chain.getService(424242)).toBeNull();
   });
 
-  it('getBalance + transfer move motes and verifyTransfer accepts the payment', async () => {
-    const buyerAccount = mockAccountHash(BUYER.publicKey);
-    await faucet(buyerAccount, '1000000000');
-    expect(await chain.getBalance(buyerAccount)).toBe('1000000000');
+  it('getBalance + pay move yocto and verifyPayment accepts the payment', async () => {
+    await faucet(BUYER.accountId, '1000000000000000000000000');
+    expect(await chain.getBalance(BUYER.accountId)).toBe('1000000000000000000000000');
 
-    const result = await chain.transfer(
-      { to: SELLER_TARGET, amountMotes: PRICE, transferId: nonce },
-      BUYER,
-    );
-    expect(result.deployHash).toMatch(/^[0-9a-f]{64}$/);
-    deployHash = result.deployHash;
+    const result = await chain.pay({ serviceId, nonce, depositYocto: PRICE }, BUYER);
+    expect(result.txHash).toMatch(/^[0-9a-f]{64}$/);
+    txHash = result.txHash;
 
-    expect(await chain.getBalance(buyerAccount)).toBe('500000000');
+    expect(await chain.getBalance(BUYER.accountId)).toBe('500000000000000000000000');
     expect(BigInt(await chain.getBalance(SELLER_TARGET))).toBeGreaterThanOrEqual(BigInt(PRICE));
 
-    const verdict = await chain.verifyTransfer({
-      deployHash,
-      expectedTarget: SELLER_TARGET,
-      minAmountMotes: PRICE,
-      expectedTransferId: nonce,
+    const verdict = await chain.verifyPayment({
+      nonce,
+      serviceId,
+      minAmountYocto: PRICE,
       maxAgeMs: 60_000,
+      txHash,
     });
     expect(verdict.ok).toBe(true);
     if (verdict.ok) {
-      expect(verdict.amountMotes).toBe(PRICE);
-      expect(verdict.from).toBe(buyerAccount);
+      expect(verdict.amountYocto).toBe(PRICE);
+      expect(verdict.payer).toBe(BUYER.accountId);
+      expect(verdict.selfPaid).toBe(false);
       expect(typeof verdict.timestamp).toBe('number');
     }
   });
 
-  it('transfer surfaces insufficient_balance as a 400 AgentGateError', async () => {
+  it('pay surfaces insufficient_balance as a 400 AgentGateError', async () => {
     await expectAgentGateError(
-      chain.transfer({ to: SELLER_TARGET, amountMotes: '999999999999999', transferId: '1' }, BUYER),
+      chain.pay({ serviceId, nonce: '1', depositYocto: '999999999999999999999999999' }, BUYER),
       'insufficient_balance',
       400,
     );
@@ -171,7 +154,7 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
 
   it('recordAttestation bumps the score and lists newest first', async () => {
     const result = await chain.recordAttestation(
-      { serviceId, paymentDeployHash: deployHash, success: true },
+      { serviceId, nonce, paymentTxHash: txHash, success: true },
       ATTESTOR,
     );
     expect(result.txHash).toMatch(/^[0-9a-f]{64}$/);
@@ -179,17 +162,18 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
     expect(await chain.getScore(serviceId)).toEqual({ totalCalls: 1, successCalls: 1 });
 
     await chain.recordAttestation(
-      { serviceId, paymentDeployHash: 'f'.repeat(64), success: false },
+      { serviceId, nonce: '2', paymentTxHash: 'f'.repeat(44), success: false },
       OWNER, // owner is also authorized
     );
     expect(await chain.getScore(serviceId)).toEqual({ totalCalls: 2, successCalls: 1 });
 
     const attestations = await chain.listAttestations(serviceId);
     expect(attestations).toHaveLength(2);
-    expect(attestations[0]?.paymentDeployHash).toBe('f'.repeat(64));
+    expect(attestations[0]?.paymentTxHash).toBe('f'.repeat(44));
     expect(attestations[1]).toMatchObject({
       serviceId,
-      paymentDeployHash: deployHash,
+      nonce,
+      paymentTxHash: txHash,
       success: true,
     });
     expect(await chain.listAttestations(serviceId, 1)).toHaveLength(1);
@@ -198,14 +182,14 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
   it('rejects stranger attestations (403) and duplicates (409)', async () => {
     await expectAgentGateError(
       chain.recordAttestation(
-        { serviceId, paymentDeployHash: '9'.repeat(64), success: true },
+        { serviceId, nonce: '3', paymentTxHash: '9'.repeat(44), success: true },
         STRANGER,
       ),
       'not_authorized',
       403,
     );
     await expectAgentGateError(
-      chain.recordAttestation({ serviceId, paymentDeployHash: deployHash, success: true }, ATTESTOR),
+      chain.recordAttestation({ serviceId, nonce, paymentTxHash: txHash, success: true }, ATTESTOR),
       'duplicate_attestation',
       409,
     );
@@ -220,7 +204,7 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
 
     await expectAgentGateError(
       chain.recordAttestation(
-        { serviceId, paymentDeployHash: '8'.repeat(64), success: true },
+        { serviceId, nonce: '4', paymentTxHash: '8'.repeat(44), success: true },
         ATTESTOR,
       ),
       'service_inactive',
@@ -247,9 +231,9 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
 
   it('rejects non-mock signers', async () => {
     await expectAgentGateError(
-      chain.transfer(
-        { to: SELLER_TARGET, amountMotes: '1000', transferId: '5' },
-        { kind: 'pem', pemPath: '/tmp/nope.pem' },
+      chain.pay(
+        { serviceId, nonce: '5', depositYocto: PRICE },
+        { kind: 'near', accountId: 'buyer.testnet', keyPath: '/tmp/nope.json' },
       ),
       'invalid_signer',
       400,
@@ -257,123 +241,87 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
   });
 });
 
-describe('MockChainHttpClient.verifyTransfer — every failure reason', () => {
-  let deployHash: string;
+describe('MockChainHttpClient.verifyPayment — every failure reason', () => {
+  let serviceId: number;
+  let txHash: string;
   const nonce = '777000777';
 
   beforeAll(async () => {
-    await faucet(mockAccountHash(BUYER.publicKey), '10000000000');
-    const result = await chain.transfer(
-      { to: SELLER_TARGET, amountMotes: PRICE, transferId: nonce },
-      BUYER,
-    );
-    deployHash = result.deployHash;
+    serviceId = (await chain.registerService(registerInput(), OWNER)).serviceId;
+    await faucet(BUYER.accountId, '10000000000000000000000000');
+    txHash = (await chain.pay({ serviceId, nonce, depositYocto: PRICE }, BUYER)).txHash;
   });
 
-  it('not_found for unknown deploy hashes', async () => {
-    const verdict = await chain.verifyTransfer({
-      deployHash: '1'.repeat(64),
-      expectedTarget: SELLER_TARGET,
-      minAmountMotes: PRICE,
-      expectedTransferId: nonce,
+  it('not_found for unknown tx hashes', async () => {
+    const verdict = await chain.verifyPayment({
+      nonce,
+      serviceId,
+      minAmountYocto: PRICE,
       maxAgeMs: 60_000,
+      txHash: '1'.repeat(44),
     });
     expect(verdict).toEqual({ ok: false, reason: 'not_found' });
   });
 
-  it('wrong_target when the transfer went elsewhere (checked before amount)', async () => {
-    const verdict = await chain.verifyTransfer({
-      deployHash,
-      expectedTarget: mockAccountHash('someone-else'),
-      minAmountMotes: '999999999999', // also too low — target must win the ordering
-      expectedTransferId: nonce,
+  it('wrong_service when the payment went to another service', async () => {
+    const other = (
+      await chain.registerService(registerInput({ paymentTarget: 'someone-else.mock' }), OWNER)
+    ).serviceId;
+    const verdict = await chain.verifyPayment({
+      nonce,
+      serviceId: other,
+      minAmountYocto: PRICE,
       maxAgeMs: 60_000,
+      txHash,
     });
-    expect(verdict).toEqual({ ok: false, reason: 'wrong_target' });
+    expect(verdict).toEqual({ ok: false, reason: 'wrong_service' });
   });
 
   it('amount_too_low when the paid amount is below the minimum', async () => {
-    const verdict = await chain.verifyTransfer({
-      deployHash,
-      expectedTarget: SELLER_TARGET,
-      minAmountMotes: (BigInt(PRICE) + 1n).toString(),
-      expectedTransferId: nonce,
+    const verdict = await chain.verifyPayment({
+      nonce,
+      serviceId,
+      minAmountYocto: (BigInt(PRICE) + 1n).toString(),
       maxAgeMs: 60_000,
+      txHash,
     });
     expect(verdict).toEqual({ ok: false, reason: 'amount_too_low' });
   });
 
-  it('wrong_transfer_id when the nonce does not match', async () => {
-    const verdict = await chain.verifyTransfer({
-      deployHash,
-      expectedTarget: SELLER_TARGET,
-      minAmountMotes: PRICE,
-      expectedTransferId: '123',
+  it('tx_mismatch when the nonce does not match the tx', async () => {
+    const verdict = await chain.verifyPayment({
+      nonce: '123',
+      serviceId,
+      minAmountYocto: PRICE,
       maxAgeMs: 60_000,
+      txHash,
     });
-    expect(verdict).toEqual({ ok: false, reason: 'wrong_transfer_id' });
+    expect(verdict).toEqual({ ok: false, reason: 'tx_mismatch' });
   });
 
-  it('expired when the transfer is older than maxAgeMs', async () => {
+  it('expired when the payment is older than maxAgeMs', async () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
-    const verdict = await chain.verifyTransfer({
-      deployHash,
-      expectedTarget: SELLER_TARGET,
-      minAmountMotes: PRICE,
-      expectedTransferId: nonce,
+    const verdict = await chain.verifyPayment({
+      nonce,
+      serviceId,
+      minAmountYocto: PRICE,
       maxAgeMs: 5,
+      txHash,
     });
     expect(verdict).toEqual({ ok: false, reason: 'expired' });
   });
 
-  // 'pending' is unreachable in mock mode: devnet transfers settle synchronously
-  // in the same request. The live client maps still-settling deploys to it.
-
   it('throws invalid_query on malformed queries instead of guessing', async () => {
     await expectAgentGateError(
-      chain.verifyTransfer({
-        deployHash,
-        expectedTarget: SELLER_TARGET,
-        minAmountMotes: '1.5',
-        expectedTransferId: nonce,
+      chain.verifyPayment({
+        nonce,
+        serviceId,
+        minAmountYocto: '1.5',
         maxAgeMs: 60_000,
+        txHash,
       }),
       'invalid_query',
       400,
     );
-  });
-});
-
-describe('LiveCasperClient — NOT_DEPLOYED guard (no contract hash configured)', () => {
-  const live = new LiveCasperClient(
-    loadConfig({
-      AGENTGATE_MODE: 'live',
-      CSPR_CLOUD_API_KEY: 'test-token',
-      AGENTGATE_ADMIN_TOKEN: 'strong-token-for-tests',
-    }),
-  );
-
-  const expectNotDeployed = (promise: Promise<unknown>) =>
-    expectAgentGateError(promise, 'NOT_DEPLOYED', 503);
-
-  it('throws 503 NOT_DEPLOYED from every contract-dependent path', async () => {
-    await expectNotDeployed(live.getService(1));
-    await expectNotDeployed(live.listServices());
-    await expectNotDeployed(live.getScore(1));
-    await expectNotDeployed(live.listAttestations(1));
-    await expectNotDeployed(live.listRecentActivity());
-    await expectNotDeployed(
-      live.registerService(registerInput({ attestor: ATTESTOR.publicKey }), {
-        kind: 'pem',
-        pemPath: '/tmp/unused.pem',
-      }),
-    );
-    await expectNotDeployed(
-      live.recordAttestation(
-        { serviceId: 1, paymentDeployHash: 'a'.repeat(64), success: true },
-        { kind: 'pem', pemPath: '/tmp/unused.pem' },
-      ),
-    );
-    await expectNotDeployed(live.setActive(1, true, { kind: 'pem', pemPath: '/tmp/unused.pem' }));
   });
 });

@@ -11,9 +11,7 @@
   },
   "dependencies": {
     "@agentgate/shared": "*",
-    "@ethersproject/bignumber": "^5.7.0",
-    "@noble/hashes": "^1.2.0",
-    "casper-js-sdk": "^5.0.12"
+    "@noble/hashes": "^1.2.0"
   },
   "devDependencies": {
     "@agentgate/devnet": "*"

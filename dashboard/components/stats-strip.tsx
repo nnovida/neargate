@@ -1,7 +1,7 @@
 'use client';
 
 import useSWR from 'swr';
-import { motesToCspr } from '@agentgate/shared';
+import { yoctoToNear } from '@agentgate/shared';
 import { fetcher, isChainDown } from '@/lib/fetcher';
 import { formatInt } from '@/lib/format';
 import type { StatsResponse } from '@/lib/api-types';
@@ -77,8 +77,8 @@ export function StatsStrip() {
           <Cell
             label="revenue settled"
             loading={loading}
-            value={data ? motesToCspr(data.revenueMotes) : null}
-            unit="CSPR"
+            value={data ? yoctoToNear(data.revenueYocto) : null}
+            unit="NEAR"
           />
           <Cell label="network" loading={loading} value={data ? data.network : null} />
         </div>

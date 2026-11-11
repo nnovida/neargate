@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { CopyButton } from './copy';
-import { DOCS_VERSION, REGISTRY_HASH_SHORT } from '@/lib/version';
+import { DOCS_VERSION, REGISTRY_ID_LABEL } from '@/lib/version';
 
 /* Server-side building blocks for the /docs section. The only interactive piece
    is the client CopyButton (from copy.tsx) embedded in CodeBlock and StepFlow;
@@ -27,7 +27,7 @@ export function DocHeader({
       <div className="mt-4 flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-400">
         <span className="border border-line px-2 py-0.5">CLI v{DOCS_VERSION.cli}</span>
         <span className="border border-line px-2 py-0.5">SDK v{DOCS_VERSION.sdk}</span>
-        <span className="border border-line px-2 py-0.5">registry {REGISTRY_HASH_SHORT}</span>
+        <span className="border border-line px-2 py-0.5">registry {REGISTRY_ID_LABEL}</span>
         <span className="border border-line px-2 py-0.5">{DOCS_VERSION.network}</span>
       </div>
     </header>

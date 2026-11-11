@@ -1,21 +1,28 @@
 import { createHash } from 'node:crypto';
-import { AgentGateError, formatCspr, stripTrailingSlashes } from '@agentgate/shared';
+import {
+  AgentGateError,
+  formatNear,
+  isNearAccountId,
+  MIN_PRICE_YOCTO,
+  stripTrailingSlashes,
+} from '@agentgate/shared';
 import type {
   ActivityEvent,
   AttestationRecord,
-  Motes,
   ServiceRecord,
   ServiceScore,
+  Yocto,
 } from '@agentgate/shared';
+
+// TODO(Task 3): mirror the neargate-registry pay-through rules (pay / payments by
+// nonce / storage fee / self-paid) instead of plain value transfers.
 
 /** Activity feed retains at most this many events (oldest dropped). SPEC §3. */
 export const ACTIVITY_LOG_CAP = 500;
 /** Mirrors the on-chain contract: last 100 attestations per service. SPEC §10. */
 export const ATTESTATIONS_PER_SERVICE_CAP = 100;
-/** Mirrors the on-chain contract: price must be ≥ 1000 motes. SPEC §10. */
-export const MIN_PRICE_MOTES = 1000n;
 /**
- * Transfer-lookup ring buffer cap (oldest deploy hash dropped). The mock chain's
+ * Transfer-lookup ring buffer cap (oldest tx hash dropped). The mock chain's
  * faucet/transfer are unauthenticated, so bound this map to keep memory finite.
  */
 export const TRANSFER_LOG_CAP = 2000;
@@ -25,58 +32,41 @@ export const TRANSFER_LOG_CAP = 2000;
  */
 export const MAX_SERVICES = 1000;
 
-const ACCOUNT_HASH_RE = /^account-hash-[0-9a-f]{64}$/;
-
-/** Mock account-hash derivation: `account-hash-<sha256(pubkey) hex>`. SPEC §3/§4. */
-export function deriveAccountHash(publicKey: string): string {
-  return `account-hash-${createHash('sha256').update(publicKey).digest('hex')}`;
-}
-
-/**
- * Normalizes any account identifier to the balance-map key:
- * already an account-hash → lowercased as-is; otherwise treated as a public key
- * and derived (mirrors how Casper addresses funds by account hash).
- */
-export function normalizeAccount(account: string): string {
-  const lower = account.toLowerCase();
-  return ACCOUNT_HASH_RE.test(lower) ? lower : deriveAccountHash(account);
-}
-
 export interface TransferRecord {
-  deployHash: string;
-  fromPublicKey: string;
-  /** Sender account-hash (derived from fromPublicKey). */
+  txHash: string;
+  /** Sender account id. */
   from: string;
-  /** Target account-hash. */
+  /** Target account id. */
   to: string;
-  amountMotes: Motes;
+  amountYocto: Yocto;
   transferId: string;
   timestamp: number;
 }
 
 export interface TransferInput {
-  fromPublicKey: string;
+  fromAccountId: string;
   to: string;
-  amountMotes: Motes;
+  amountYocto: Yocto;
   transferId: string;
 }
 
 export interface RegisterInput {
   name: string;
   description: string;
-  /** The GATEWAY BASE url; readers compute `<base>/svc/<id>` (SPEC §9 final decision). */
-  endpointUrl: string;
-  priceMotes: Motes;
+  /** The GATEWAY BASE url; readers compute `<base>/svc/<id>`. */
+  gatewayBaseUrl: string;
+  priceYocto: Yocto;
   paymentTarget: string;
   attestor: string;
-  ownerPublicKey: string;
+  ownerAccountId: string;
 }
 
 export interface AttestationInput {
   serviceId: number;
-  paymentDeployHash: string;
+  nonce: string;
+  paymentTxHash: string;
   success: boolean;
-  byPublicKey: string;
+  byAccountId: string;
 }
 
 interface InternalService {
@@ -84,7 +74,7 @@ interface InternalService {
   name: string;
   description: string;
   gatewayBaseUrl: string;
-  priceMotes: Motes;
+  priceYocto: Yocto;
   paymentTarget: string;
   owner: string;
   attestor: string;
@@ -97,10 +87,11 @@ function err(httpStatus: number, code: string, message: string): AgentGateError 
 }
 
 /**
- * In-memory mock of exactly what AgentGate uses on Casper: account balances in
- * motes, native transfers with transfer_id, the registry contract's state and
- * an activity log. Enforces the same rules as the Odra contract (attestor-or-owner
- * auth, duplicate payment hash, inactive service, owner-only set_active).
+ * In-memory mock chain: account balances in yocto (keyed by account id), value
+ * transfers tagged with a transfer id, the registry contract's state and an
+ * activity log. Enforces the registry's attestation rules (attestor-or-owner
+ * auth, one attestation per payment nonce, inactive service, owner-only
+ * set_active).
  */
 export class DevnetState {
   private readonly balances = new Map<string, bigint>();
@@ -117,7 +108,7 @@ export class DevnetState {
   private txCounter = 0;
   private nextServiceId = 1;
 
-  /** Deterministic-ish 64-char tx hash: sha256(JSON.stringify(payload) + monotonic counter). */
+  /** Deterministic-ish 64-char tx hash: sha256(JSON.stringify(payload) + monotonic counter). TODO(Task 3): base58. */
   private txHash(payload: unknown): string {
     this.txCounter += 1;
     return createHash('sha256')
@@ -136,50 +127,48 @@ export class DevnetState {
 
   // ---- balances & transfers -------------------------------------------------
 
-  faucet(account: string, amountMotes: Motes): { balanceMotes: Motes } {
-    const key = normalizeAccount(account);
-    const next = this.balanceOf(key) + BigInt(amountMotes);
-    this.balances.set(key, next);
-    return { balanceMotes: next.toString() };
+  faucet(account: string, amountYocto: Yocto): { balanceYocto: Yocto } {
+    const next = this.balanceOf(account) + BigInt(amountYocto);
+    this.balances.set(account, next);
+    return { balanceYocto: next.toString() };
   }
 
-  getBalance(account: string): Motes {
-    return this.balanceOf(normalizeAccount(account)).toString();
+  getBalance(account: string): Yocto {
+    return this.balanceOf(account).toString();
   }
 
-  transfer(input: TransferInput): { deployHash: string; timestamp: number } {
-    const from = deriveAccountHash(input.fromPublicKey);
-    const to = normalizeAccount(input.to);
-    const amount = BigInt(input.amountMotes);
+  transfer(input: TransferInput): { txHash: string; timestamp: number } {
+    const from = input.fromAccountId;
+    const to = input.to;
+    const amount = BigInt(input.amountYocto);
     const balance = this.balanceOf(from);
     if (balance < amount) {
       throw err(
         400,
         'insufficient_balance',
-        `account ${from} has ${balance} motes, needs ${amount} motes`,
+        `account ${from} has ${balance} yocto, needs ${amount} yocto`,
       );
     }
     const timestamp = Date.now();
-    const deployHash = this.txHash({
+    const txHash = this.txHash({
       kind: 'transfer',
       from,
       to,
-      amountMotes: input.amountMotes,
+      amountYocto: input.amountYocto,
       transferId: input.transferId,
     });
     this.balances.set(from, balance - amount);
     this.balances.set(to, this.balanceOf(to) + amount);
     const record: TransferRecord = {
-      deployHash,
-      fromPublicKey: input.fromPublicKey,
+      txHash,
       from,
       to,
-      amountMotes: amount.toString(),
+      amountYocto: amount.toString(),
       transferId: input.transferId,
       timestamp,
     };
-    this.transfers.set(deployHash, record);
-    this.transferOrder.push(deployHash);
+    this.transfers.set(txHash, record);
+    this.transferOrder.push(txHash);
     while (this.transferOrder.length > TRANSFER_LOG_CAP) {
       const evicted = this.transferOrder.shift();
       if (evicted !== undefined) this.transfers.delete(evicted);
@@ -188,38 +177,37 @@ export class DevnetState {
     const service = [...this.services.values()].find((s) => s.paymentTarget === to) ?? null;
     this.pushActivity({
       kind: 'payment',
-      txHash: deployHash,
       serviceId: service?.id ?? null,
-      amountMotes: amount.toString(),
+      account: from,
+      txHash,
+      blockHeight: this.txCounter,
+      amountYocto: amount.toString(),
+      nonce: input.transferId,
       timestamp,
-      detail: `payment of ${formatCspr(amount.toString())} to ${to} (transfer_id ${input.transferId})`,
+      detail: `payment of ${formatNear(amount.toString())} to ${to} (nonce ${input.transferId})`,
     });
-    return { deployHash, timestamp };
+    return { txHash, timestamp };
   }
 
-  getTransfer(deployHash: string): TransferRecord {
-    const record = this.transfers.get(deployHash);
-    if (!record) throw err(404, 'transfer_not_found', `no transfer with deploy hash ${deployHash}`);
+  getTransfer(txHash: string): TransferRecord {
+    const record = this.transfers.get(txHash);
+    if (!record) throw err(404, 'transfer_not_found', `no transfer with tx hash ${txHash}`);
     return record;
   }
 
-  // ---- registry (mirrors the Odra contract) ---------------------------------
+  // ---- registry (mirrors the registry contract) -----------------------------
 
   registerService(input: RegisterInput): { serviceId: number; txHash: string } {
     if (this.services.size >= MAX_SERVICES) {
       throw err(429, 'service_limit_reached', `mock chain caps the registry at ${MAX_SERVICES} services`);
     }
     if (input.name.trim() === '') throw err(400, 'empty_name', 'service name must not be empty');
-    if (BigInt(input.priceMotes) < MIN_PRICE_MOTES) {
-      throw err(400, 'invalid_price', `priceMotes must be ≥ ${MIN_PRICE_MOTES} motes`);
+    if (BigInt(input.priceYocto) < BigInt(MIN_PRICE_YOCTO)) {
+      throw err(400, 'invalid_price', `priceYocto must be ≥ ${MIN_PRICE_YOCTO} yocto`);
     }
-    const paymentTarget = input.paymentTarget.toLowerCase();
-    if (!ACCOUNT_HASH_RE.test(paymentTarget)) {
-      throw err(
-        400,
-        'invalid_payment_target',
-        'paymentTarget must be "account-hash-<64 hex chars>"',
-      );
+    const paymentTarget = input.paymentTarget;
+    if (!isNearAccountId(paymentTarget)) {
+      throw err(400, 'invalid_payment_target', 'paymentTarget must be a NEAR account id');
     }
 
     const serviceId = this.nextServiceId;
@@ -230,10 +218,10 @@ export class DevnetState {
       id: serviceId,
       name: input.name,
       description: input.description,
-      gatewayBaseUrl: stripTrailingSlashes(input.endpointUrl),
-      priceMotes: BigInt(input.priceMotes).toString(),
+      gatewayBaseUrl: stripTrailingSlashes(input.gatewayBaseUrl),
+      priceYocto: BigInt(input.priceYocto).toString(),
       paymentTarget,
-      owner: input.ownerPublicKey,
+      owner: input.ownerAccountId,
       attestor: input.attestor,
       active: true,
       createdAt,
@@ -244,10 +232,12 @@ export class DevnetState {
 
     this.pushActivity({
       kind: 'service_registered',
-      txHash,
       serviceId,
+      account: service.owner,
+      txHash,
+      blockHeight: this.txCounter,
       timestamp: createdAt,
-      detail: `service "${input.name}" registered (id ${serviceId}) at ${formatCspr(service.priceMotes)}/call`,
+      detail: `service "${input.name}" registered (id ${serviceId}) at ${formatNear(service.priceYocto)}/call`,
     });
     return { serviceId, txHash };
   }
@@ -255,7 +245,7 @@ export class DevnetState {
   recordAttestation(input: AttestationInput): { txHash: string } {
     const service = this.services.get(input.serviceId);
     if (!service) throw err(404, 'service_not_found', `no service with id ${input.serviceId}`);
-    if (input.byPublicKey !== service.attestor && input.byPublicKey !== service.owner) {
+    if (input.byAccountId !== service.attestor && input.byAccountId !== service.owner) {
       throw err(
         403,
         'not_authorized',
@@ -265,12 +255,12 @@ export class DevnetState {
     if (!service.active) {
       throw err(400, 'service_inactive', `service ${service.id} is inactive`);
     }
-    const dupKey = `${service.id}:${input.paymentDeployHash}`;
+    const dupKey = `${service.id}:${input.nonce}`;
     if (this.seenPayments.has(dupKey)) {
       throw err(
         409,
         'duplicate_attestation',
-        `payment ${input.paymentDeployHash} already attested for service ${service.id}`,
+        `payment ${input.nonce} already attested for service ${service.id}`,
       );
     }
     this.seenPayments.add(dupKey);
@@ -279,7 +269,8 @@ export class DevnetState {
     const txHash = this.txHash({
       kind: 'record_attestation',
       serviceId: service.id,
-      paymentDeployHash: input.paymentDeployHash,
+      nonce: input.nonce,
+      paymentTxHash: input.paymentTxHash,
       success: input.success,
     });
     const score = this.scores.get(service.id) ?? { total: 0, success: 0 };
@@ -290,29 +281,32 @@ export class DevnetState {
     const list = this.attestations.get(service.id) ?? [];
     list.unshift({
       serviceId: service.id,
-      paymentDeployHash: input.paymentDeployHash,
+      nonce: input.nonce,
+      paymentTxHash: input.paymentTxHash,
       success: input.success,
       timestamp,
-      recordTxHash: txHash,
     });
     if (list.length > ATTESTATIONS_PER_SERVICE_CAP) list.length = ATTESTATIONS_PER_SERVICE_CAP;
     this.attestations.set(service.id, list);
 
     this.pushActivity({
       kind: 'attestation',
-      txHash,
       serviceId: service.id,
+      account: input.byAccountId,
+      txHash,
+      blockHeight: this.txCounter,
       success: input.success,
+      nonce: input.nonce,
       timestamp,
-      detail: `attestation ${input.success ? 'success' : 'failure'} for service ${service.id} (payment ${input.paymentDeployHash.slice(0, 10)}…)`,
+      detail: `attestation ${input.success ? 'success' : 'failure'} for service ${service.id} (payment ${input.paymentTxHash.slice(0, 10)}…)`,
     });
     return { txHash };
   }
 
-  setActive(serviceId: number, active: boolean, byPublicKey: string): { txHash: string } {
+  setActive(serviceId: number, active: boolean, byAccountId: string): { txHash: string } {
     const service = this.services.get(serviceId);
     if (!service) throw err(404, 'service_not_found', `no service with id ${serviceId}`);
-    if (byPublicKey !== service.owner) {
+    if (byAccountId !== service.owner) {
       throw err(403, 'not_authorized', 'only the service owner may change the active flag');
     }
     service.active = active;
@@ -322,19 +316,20 @@ export class DevnetState {
 
   // ---- reads ----------------------------------------------------------------
 
-  /** SPEC §9 final decision: every reader computes endpointUrl = `<gateway base>/svc/<id>`. */
+  /** Every reader computes endpointUrl = `<gateway base>/svc/<id>`. */
   private toRecord(service: InternalService): ServiceRecord {
     return {
       id: service.id,
       name: service.name,
       description: service.description,
       endpointUrl: `${service.gatewayBaseUrl}/svc/${service.id}`,
-      priceMotes: service.priceMotes,
+      priceYocto: service.priceYocto,
       paymentTarget: service.paymentTarget,
       owner: service.owner,
       attestor: service.attestor,
       active: service.active,
       createdAt: service.createdAt,
+      accepts: [{ asset: 'near', amount: service.priceYocto, decimals: 24, symbol: 'NEAR' }],
     };
   }
 

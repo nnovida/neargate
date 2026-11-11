@@ -3,26 +3,31 @@ import type {
   AnySigner,
   AttestationRecord,
   ChainClient,
-  Motes,
   ServiceRecord,
   ServiceScore,
+  Yocto,
 } from '@agentgate/shared';
 import { buyService } from '../src/buy';
 
-type TransferInput = { to: string; amountMotes: Motes; transferId: string };
+type PayInput = { serviceId: number; nonce: string; depositYocto: Yocto };
 
 // ---------------------------------------------------------------------------
-// fakes — mirror cli.test.ts, plus transfer capture for the payment leg
+// fakes — mirror cli.test.ts, plus pay capture for the payment leg
 // ---------------------------------------------------------------------------
 
-const HEX64 = (c: string): string => c.repeat(64);
-const BUYER: AnySigner = { kind: 'mock', publicKey: `01${HEX64('b')}` };
-const PAY_TO = `account-hash-${HEX64('1')}`;
-const PAYMENT_TX = HEX64('d');
+/** A base58 string of NEAR tx-hash length. */
+const TX = (c: string): string => c.repeat(44);
+const BUYER: AnySigner = { kind: 'mock', accountId: 'buyer.mock' };
+const REGISTRY = 'registry.mock';
+const SELLER = 'seller.mock';
+const PAYMENT_TX = TX('D');
 const NONCE = '778899';
+const PRICE = '500000000000000000000000'; // 0.5 NEAR
+const STORAGE_FEE = '2000000000000000000000'; // 0.002 NEAR
+const MAX_AMOUNT = '502000000000000000000000'; // price + storage fee
 
 interface FakeChain extends ChainClient {
-  transfers: Array<{ input: TransferInput; signer: AnySigner }>;
+  payments: Array<{ input: PayInput; signer: AnySigner }>;
 }
 
 function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceRecord {
@@ -31,21 +36,23 @@ function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceReco
     name: `svc-${id}`,
     description: 'a service',
     endpointUrl: `http://gw.example:4021/svc/${id}`,
-    priceMotes: '500000000',
-    paymentTarget: PAY_TO,
-    owner: `01${HEX64('a')}`,
-    attestor: `01${HEX64('a')}`,
+    priceYocto: PRICE,
+    paymentTarget: SELLER,
+    owner: 'owner.mock',
+    attestor: 'owner.mock',
     active: true,
     createdAt: 1_700_000_000_000,
+    accepts: [{ asset: 'near', amount: PRICE, decimals: 24, symbol: 'NEAR' }],
     ...over,
   };
 }
 
 function makeFakeChain(service: ServiceRecord | null): FakeChain {
-  const transfers: FakeChain['transfers'] = [];
+  const payments: FakeChain['payments'] = [];
   return {
     network: 'mock',
-    transfers,
+    registryId: REGISTRY,
+    payments,
     async getService(id) {
       return service !== null && id === service.id ? service : null;
     },
@@ -64,21 +71,27 @@ function makeFakeChain(service: ServiceRecord | null): FakeChain {
     async getBalance() {
       return '0';
     },
-    async verifyTransfer() {
+    async getPayment() {
+      return null;
+    },
+    async verifyPayment() {
       return { ok: false, reason: 'not_found' } as const;
+    },
+    async isFullAccessKey() {
+      return false;
     },
     async registerService() {
       throw new Error('not used');
     },
+    async pay(input, signer) {
+      payments.push({ input, signer });
+      return { txHash: PAYMENT_TX };
+    },
     async recordAttestation() {
-      return { txHash: HEX64('b') };
+      return { txHash: TX('B') };
     },
     async setActive() {
-      return { txHash: HEX64('c') };
-    },
-    async transfer(input, signer) {
-      transfers.push({ input, signer });
-      return { deployHash: PAYMENT_TX };
+      return { txHash: TX('C') };
     },
   };
 }
@@ -93,9 +106,9 @@ function invoice402(over: Record<string, unknown> = {}): Response {
         {
           scheme: 'exact',
           network: 'mock',
-          maxAmountRequired: '500000000',
-          asset: 'CSPR',
-          payTo: PAY_TO,
+          maxAmountRequired: MAX_AMOUNT,
+          asset: 'NEAR',
+          payTo: REGISTRY,
           resource: 'http://gw.example:4021/svc/1',
           description: 'svc-1',
           maxTimeoutSeconds: 300,
@@ -103,8 +116,13 @@ function invoice402(over: Record<string, unknown> = {}): Response {
             nonce: NONCE,
             serviceId: 1,
             expiresAtMs: Date.now() + 300_000,
-            settlement: 'casper-native-transfer',
-            transferIdEncoding: 'u64-decimal',
+            settlement: 'neargate-registry-pay',
+            contractId: REGISTRY,
+            method: 'pay',
+            priceYocto: PRICE,
+            storageFeeYocto: STORAGE_FEE,
+            seller: SELLER,
+            caip2: 'near:mock',
           },
           ...over,
         },
@@ -153,13 +171,13 @@ describe('buyService', () => {
     expect(result.paid).toBe(true);
     expect(result.status).toBe(200);
     expect(result.body).toEqual({ rate: 16250 });
-    expect(result.deployHash).toBe(PAYMENT_TX);
-    expect(result.priceMotes).toBe('500000000');
+    expect(result.txHash).toBe(PAYMENT_TX);
+    expect(result.priceYocto).toBe(MAX_AMOUNT);
 
-    // exactly one payment: invoice amount to the invoice payTo, nonce as transfer_id
-    expect(chain.transfers).toEqual([
+    // exactly one registry `pay`: the invoice's service + nonce, price + storage fee attached
+    expect(chain.payments).toEqual([
       {
-        input: { to: PAY_TO, amountMotes: '500000000', transferId: NONCE },
+        input: { serviceId: 1, nonce: NONCE, depositYocto: MAX_AMOUNT },
         signer: BUYER,
       },
     ]);
@@ -171,42 +189,42 @@ describe('buyService', () => {
   });
 
   it('refuses to pay when the on-chain price exceeds --max, before any HTTP', async () => {
-    const chain = makeFakeChain(makeService(1)); // 0.5 CSPR
+    const chain = makeFakeChain(makeService(1)); // 0.5 NEAR
     const { impl, calls } = gatewayFetch(() => Response.json({}));
 
     await expect(
-      buyService({ ...baseOpts(chain, impl), maxCspr: '0.4' }),
+      buyService({ ...baseOpts(chain, impl), maxNear: '0.4' }),
     ).rejects.toMatchObject({ name: 'AgentGateError', code: 'PRICE_EXCEEDED' });
 
-    expect(chain.transfers).toHaveLength(0);
+    expect(chain.payments).toHaveLength(0);
     expect(calls).toHaveLength(0);
   });
 
   it('caps the invoice too: a 402 priced above --max is refused after the 402, unpaid', async () => {
     // on-chain price fits the cap, but the gateway invoice demands more
-    const chain = makeFakeChain(makeService(1, { priceMotes: '400000000' }));
+    const chain = makeFakeChain(makeService(1, { priceYocto: '400000000000000000000000' }));
     const calls: FetchCall[] = [];
     const impl = (async (url: unknown, init?: RequestInit) => {
       calls.push({ url: String(url), init });
-      return invoice402({ maxAmountRequired: '900000000' });
+      return invoice402({ maxAmountRequired: '900000000000000000000000' });
     }) as typeof fetch;
 
     await expect(
-      buyService({ ...baseOpts(chain, impl), maxCspr: '0.5' }),
+      buyService({ ...baseOpts(chain, impl), maxNear: '0.5' }),
     ).rejects.toMatchObject({ code: 'PRICE_EXCEEDED' });
 
-    expect(chain.transfers).toHaveLength(0); // never paid
+    expect(chain.payments).toHaveLength(0); // never paid
     expect(calls).toHaveLength(1); // only the bare 402 request
   });
 
-  it('passes a non-402 first response through unpaid, without transferring', async () => {
+  it('passes a non-402 first response through unpaid, without paying', async () => {
     const chain = makeFakeChain(makeService(1));
     const impl = (async () => Response.json({ free: true })) as typeof fetch;
 
     const { result } = await buyService(baseOpts(chain, impl));
 
     expect(result).toMatchObject({ status: 200, paid: false, body: { free: true } });
-    expect(chain.transfers).toHaveLength(0);
+    expect(chain.payments).toHaveLength(0);
   });
 
   it('uses the --gateway override instead of the on-chain endpoint', async () => {
@@ -247,7 +265,7 @@ describe('buyService', () => {
       buyService({ ...baseOpts(chain, impl), body: 'not json' }),
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
     expect(calls).toHaveLength(0);
-    expect(chain.transfers).toHaveLength(0);
+    expect(chain.payments).toHaveLength(0);
   });
 
   it('rejects unknown services with SERVICE_NOT_FOUND', async () => {
@@ -270,7 +288,7 @@ describe('buyService', () => {
       httpStatus: 403,
     });
     expect(calls).toHaveLength(0);
-    expect(chain.transfers).toHaveLength(0);
+    expect(chain.payments).toHaveLength(0);
   });
 
   it('rejects invalid ids with INVALID_SERVICE_ID without touching anything', async () => {
@@ -284,6 +302,6 @@ describe('buyService', () => {
       });
     }
     expect(calls).toHaveLength(0);
-    expect(chain.transfers).toHaveLength(0);
+    expect(chain.payments).toHaveLength(0);
   });
 });

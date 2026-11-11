@@ -1,14 +1,15 @@
-import { DEFAULT_REGISTRY_PACKAGE_HASH } from '@agentgate/shared';
+import { DEFAULT_REGISTRY_CONTRACT_ID } from '@agentgate/shared';
 
 /** Config-bearing CLI flags shared across commands (all optional). */
 export interface CliConfigFlags {
   mode?: string;
-  nodeUrl?: string;
+  /** NEAR RPC URL (`--rpc`). */
+  rpc?: string;
+  /** Registry contract id (`--registry`). */
   registry?: string;
-  pem?: string;
-  apiKey?: string;
+  /** Seller key file (`--key-file`, near-cli credentials JSON). */
+  keyFile?: string;
   adminToken?: string;
-  keyAlgo?: string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -27,8 +28,8 @@ function pick(
 /**
  * Builds the env overlay the CLI hands to `loadConfig`. Precedence per key:
  * explicit flag > process.env (non-empty) > CLI built-in default. The published
- * CLI targets live Testnet + the deployed registry by default; keys with no CLI
- * default are left to `loadConfig`'s own defaults (node URL, cloud URL, …).
+ * CLI targets live testnet + the deployed registry by default; keys with no CLI
+ * default are left to `loadConfig`'s own defaults (RPC URL, explorer URL, …).
  */
 export function resolveCliEnv(flags: CliConfigFlags, env: Env = process.env): Env {
   const overlay: Env = { ...env };
@@ -37,13 +38,11 @@ export function resolveCliEnv(flags: CliConfigFlags, env: Env = process.env): En
   };
   set('AGENTGATE_MODE', pick(flags.mode, env.AGENTGATE_MODE, 'live'));
   set(
-    'REGISTRY_CONTRACT_PACKAGE_HASH',
-    pick(flags.registry, env.REGISTRY_CONTRACT_PACKAGE_HASH, DEFAULT_REGISTRY_PACKAGE_HASH),
+    'REGISTRY_CONTRACT_ID',
+    pick(flags.registry, env.REGISTRY_CONTRACT_ID, DEFAULT_REGISTRY_CONTRACT_ID),
   );
-  set('CASPER_NODE_URL', pick(flags.nodeUrl, env.CASPER_NODE_URL));
-  set('SELLER_SIGNER_PEM_PATH', pick(flags.pem, env.SELLER_SIGNER_PEM_PATH));
-  set('CSPR_CLOUD_API_KEY', pick(flags.apiKey, env.CSPR_CLOUD_API_KEY));
+  set('NEAR_RPC_URL', pick(flags.rpc, env.NEAR_RPC_URL));
+  set('SELLER_KEY_PATH', pick(flags.keyFile, env.SELLER_KEY_PATH));
   set('AGENTGATE_ADMIN_TOKEN', pick(flags.adminToken, env.AGENTGATE_ADMIN_TOKEN));
-  set('BUYER_KEY_ALGO', pick(flags.keyAlgo, env.BUYER_KEY_ALGO));
   return overlay;
 }

@@ -5,8 +5,7 @@ import { z } from 'zod';
 import { parsePaymentRequired } from '@agentgate/client';
 import {
   AgentGateError,
-  formatCspr,
-  formatToken,
+  formatNear,
   isAgentGateError,
   trustTier,
   type AnySigner,
@@ -22,7 +21,7 @@ import { listServices } from './list';
  * the product, and this is its native binding.
  *
  * Read tools (`list`, `get_service`, `get_invoice`) need no key. Only
- * `agentgate_buy` spends CSPR, and it resolves the buyer signer lazily so the
+ * `agentgate_buy` spends NEAR, and it resolves the buyer signer lazily so the
  * read tools work with zero configuration.
  */
 export interface McpServerDeps {
@@ -35,8 +34,6 @@ export interface McpServerDeps {
   signerProvider: () => AnySigner;
   /** Injectable fetch (tests / get_invoice). Defaults to globalThis.fetch. */
   fetchImpl?: typeof fetch;
-  /** Buyer key algorithm for the facilitator (x402 v2) rail used by agentgate_buy. */
-  buyerKeyAlgo?: 'ed25519' | 'secp256k1';
 }
 
 const MCP_NAME = 'agentgate';
@@ -82,7 +79,7 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
           id: service.id,
           name: service.name,
           description: service.description,
-          price: formatCspr(service.priceMotes),
+          price: formatNear(service.priceYocto),
           tier,
           score: `${score.successCalls}/${score.totalCalls}`,
           active: service.active,
@@ -112,7 +109,7 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
           id: service.id,
           name: service.name,
           description: service.description,
-          price: formatCspr(service.priceMotes),
+          price: formatNear(service.priceYocto),
           endpoint: service.endpointUrl,
           paymentTarget: service.paymentTarget,
           owner: service.owner,
@@ -154,10 +151,11 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
           return { id, status: res.status, note: 'service did not return a 402 invoice', body: raw };
         }
         const req = parsePaymentRequired(raw, chain.network);
+        // TODO(Task 5): report price and storage fee separately (extra.priceYocto / storageFeeYocto).
         return {
           id,
-          price: formatCspr(req.maxAmountRequired),
-          priceMotes: req.maxAmountRequired,
+          price: formatNear(req.maxAmountRequired),
+          maxAmountYocto: req.maxAmountRequired,
           payTo: req.payTo,
           network: req.network,
           nonce: req.extra.nonce,
@@ -170,31 +168,30 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
   server.registerTool(
     'agentgate_buy',
     {
-      title: 'Buy one call to a service (pays native CSPR)',
+      title: 'Buy one call to a service (pays in NEAR)',
       description:
-        'Autonomously pay a service’s 402 invoice with a native CSPR transfer (the invoice nonce rides transfer_id) and return the response body. Spends real CSPR from the configured buyer key, capped by maxCspr. Fails fast — no spend — on unknown/paused services or when the price exceeds the cap.',
+        'Autonomously pay a service’s 402 invoice with a registry `pay` call in NEAR (the invoice nonce rides the call) and return the response body. Spends real NEAR from the configured buyer key, capped by maxNear. Fails fast — no spend — on unknown/paused services or when the price exceeds the cap.',
       inputSchema: {
         id: z.number().int().positive().describe('service id to buy'),
-        maxCspr: z
+        maxNear: z
           .string()
           .optional()
-          .describe('refuse invoices priced above this many CSPR (e.g. "3")'),
+          .describe('refuse invoices priced above this many NEAR (e.g. "3")'),
         method: z.string().optional().describe('HTTP method for the paid request (default GET)'),
         body: z.string().optional().describe('JSON request body to send with the paid request'),
       },
     },
-    ({ id, maxCspr, method, body }) =>
+    ({ id, maxNear, method, body }) =>
       toolResult(async () => {
         const signer = deps.signerProvider();
         const { service, url, result } = await buyService({
           chain,
           signer,
           id,
-          ...(maxCspr !== undefined ? { maxCspr } : {}),
+          ...(maxNear !== undefined ? { maxNear } : {}),
           ...(method !== undefined ? { method } : {}),
           ...(body !== undefined ? { body } : {}),
           ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
-          ...(deps.buyerKeyAlgo !== undefined ? { buyerKeyAlgo: deps.buyerKeyAlgo } : {}),
         });
         return {
           id: service.id,
@@ -202,10 +199,8 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
           url,
           paid: result.paid,
           status: result.status,
-          price: result.facilitator
-            ? formatToken(result.facilitator.amount, result.facilitator.decimals, result.facilitator.symbol)
-            : formatCspr(result.priceMotes ?? service.priceMotes),
-          deployHash: result.deployHash,
+          price: formatNear(result.priceYocto ?? service.priceYocto),
+          txHash: result.txHash,
           settlement: result.settlement,
           body: result.body,
         };

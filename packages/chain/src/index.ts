@@ -1,18 +1,17 @@
+import { AgentGateError } from '@agentgate/shared';
 import type { AgentGateConfig, ChainClient } from '@agentgate/shared';
 import { MockChainHttpClient } from './mock';
-import { LiveCasperClient } from './live';
 
-export { MockChainHttpClient, mockAccountHash } from './mock';
-export { LiveCasperClient } from './live';
-export { verifyOwnerSignature, type OwnerSignatureResult } from './signature';
+export { MockChainHttpClient } from './mock';
 
 /**
- * Picks the ChainClient implementation by `config.mode` (SPEC §4):
+ * Picks the ChainClient implementation by `config.mode`:
  * - 'mock' → MockChainHttpClient (REST against the local devnet at config.devnetUrl)
- * - 'live' → LiveCasperClient (casper-js-sdk v5 + CSPR.cloud REST)
+ * - 'live' → the NEAR live client (TODO(Task 6): LiveNearClient on near-api-js)
  */
 export function createChainClient(config: AgentGateConfig): ChainClient {
-  return config.mode === 'live'
-    ? new LiveCasperClient(config)
-    : new MockChainHttpClient(config.devnetUrl);
+  if (config.mode === 'live') {
+    throw new AgentGateError('CONFIG_INVALID', 'live mode lands in Task 6', 500);
+  }
+  return new MockChainHttpClient(config.devnetUrl);
 }

@@ -4,20 +4,21 @@ import type {
   AttestationRecord,
   ChainClient,
   Logger,
-  Motes,
+  NearKeySigner,
+  Yocto,
 } from '@agentgate/shared';
 import {
   AgentGateError,
-  addMotes,
-  compareMotes,
+  addYocto,
+  compareYocto,
   createLogger,
-  csprToMotes,
-  formatCspr,
+  formatNear,
   isAgentGateError,
   loadConfig,
-  motesToCspr,
-  parseMotes,
+  nearToYocto,
+  parseYocto,
   trustTier,
+  yoctoToNear,
 } from '@agentgate/shared';
 import { createChainClient } from '@agentgate/chain';
 import { createAgentGateClient } from '@agentgate/client';
@@ -34,11 +35,11 @@ export { DecisionLog, DEFAULT_DECISIONS_LOG } from './decision-log';
 export interface RunBuyerAgentOpts {
   /** Natural-language task, e.g. "Get today's USD/IDR rate and gold price, summarize for a treasury report". */
   task: string;
-  /** Budget cap in CSPR (decimal string). Defaults to config.buyerBudgetCspr (BUYER_BUDGET_CSPR). */
-  budgetCspr?: string;
+  /** Budget cap in NEAR (decimal string). Defaults to config.buyerBudgetNear (BUYER_BUDGET_NEAR). */
+  budgetNear?: string;
   /** ChainClient to use. Defaults to createChainClient(config). */
   chain?: ChainClient;
-  /** Buyer signer. Defaults per mode: mock → MOCK_BUYER_ACCOUNT, live → BUYER_SIGNER_PEM_PATH. */
+  /** Buyer signer. Defaults per mode: mock → MOCK_BUYER_ACCOUNT, live → BUYER_ACCOUNT_ID + its key. */
   signer?: AnySigner;
   /** LLM seam. Defaults to AnthropicLlm when ANTHROPIC_API_KEY is set, else MockLlm. */
   llm?: LlmClient;
@@ -64,10 +65,10 @@ export interface BuyerRunReport {
   chosenServiceId: number;
   reason: string;
   paid: boolean;
-  deployHash: string | null;
+  paymentTxHash: string | null;
   attestationTxHash: string | null;
   summary: string;
-  spentMotes: Motes;
+  spentYocto: Yocto;
 }
 
 const DEFAULT_ATTESTATION_TIMEOUT_MS = 5_000;
@@ -78,7 +79,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Derives the default buyer signer from config per mode (SPEC §1 env contract). */
+/** Derives the default buyer signer from config per mode. */
 export function defaultBuyerSigner(config: AgentGateConfig): AnySigner {
   if (config.mode === 'mock') {
     if (config.mockBuyerAccount === '') {
@@ -88,12 +89,19 @@ export function defaultBuyerSigner(config: AgentGateConfig): AnySigner {
         500,
       );
     }
-    return { kind: 'mock', publicKey: config.mockBuyerAccount };
+    return { kind: 'mock', accountId: config.mockBuyerAccount };
   }
-  if (config.buyerSignerPemPath === '') {
-    throw new AgentGateError('NO_SIGNER', 'live mode needs BUYER_SIGNER_PEM_PATH', 500);
+  if (config.buyerAccountId === '') {
+    throw new AgentGateError(
+      'NO_SIGNER',
+      'live mode needs BUYER_ACCOUNT_ID (key: BUYER_KEY_PATH or BUYER_PRIVATE_KEY)',
+      500,
+    );
   }
-  return { kind: 'pem', pemPath: config.buyerSignerPemPath };
+  const signer: NearKeySigner = { kind: 'near', accountId: config.buyerAccountId };
+  if (config.buyerKeyPath !== '') signer.keyPath = config.buyerKeyPath;
+  if (config.buyerPrivateKey !== '') signer.secretKey = config.buyerPrivateKey;
+  return signer;
 }
 
 function catalogTable(catalog: CatalogEntry[]): string[] {
@@ -104,7 +112,7 @@ function catalogTable(catalog: CatalogEntry[]): string[] {
     return (
       padCell(String(e.service.id), 4) +
       padCell(e.service.name + active, 28) +
-      padCell(formatCspr(e.service.priceMotes), 14) +
+      padCell(formatNear(e.service.priceYocto), 14) +
       padCell(e.tier, 10) +
       score
     );
@@ -113,7 +121,7 @@ function catalogTable(catalog: CatalogEntry[]): string[] {
 }
 
 /**
- * LLM decision loop (SPEC §8): list services → pick (AnthropicLlm or MockLlm) →
+ * LLM decision loop: list services → pick (AnthropicLlm or MockLlm) →
  * budget check BEFORE paying → fetchPaid → summarize → attestation receipt.
  * Each step is printed as a console block AND appended to logs/decisions.jsonl.
  */
@@ -146,11 +154,11 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
         })
       : new MockLlm());
 
-  const budgetCspr = opts.budgetCspr ?? getConfig().buyerBudgetCspr;
-  const budgetMotes: Motes = csprToMotes(budgetCspr); // throws INVALID_AMOUNT on garbage
-  let spentMotes: Motes = '0';
+  const budgetNear = opts.budgetNear ?? getConfig().buyerBudgetNear;
+  const budgetYocto: Yocto = nearToYocto(budgetNear); // throws INVALID_AMOUNT on garbage
+  let spentYocto: Yocto = '0';
 
-  decisions.append('run_start', { task, budgetCspr, network: chain.network, llm: llm.name });
+  decisions.append('run_start', { task, budgetNear, network: chain.network, llm: llm.name });
 
   // 1. Catalog: list services + scores + trust tiers.
   const services = await chain.listServices();
@@ -161,7 +169,7 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
   }
   print(
     renderBlock(`STEP 1 · CATALOG (${chain.network})`, [
-      `${catalog.length} service(s) on-chain · budget ${budgetCspr} CSPR`,
+      `${catalog.length} service(s) on-chain · budget ${budgetNear} NEAR`,
       ...catalogTable(catalog),
     ]),
   );
@@ -170,7 +178,7 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
     services: catalog.map((e) => ({
       id: e.service.id,
       name: e.service.name,
-      priceMotes: e.service.priceMotes,
+      priceYocto: e.service.priceYocto,
       tier: e.tier,
       active: e.service.active,
     })),
@@ -201,58 +209,60 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
   }
   print(
     renderBlock(`STEP 2 · DECISION (${llm.name})`, [
-      `chose #${chosen.service.id} "${chosen.service.name}" at ${formatCspr(chosen.service.priceMotes)}`,
+      `chose #${chosen.service.id} "${chosen.service.name}" at ${formatNear(chosen.service.priceYocto)}`,
       `reason: ${choice.reason}`,
     ]),
   );
   decisions.append('choice', {
     serviceId: chosen.service.id,
     serviceName: chosen.service.name,
-    priceMotes: chosen.service.priceMotes,
+    priceYocto: chosen.service.priceYocto,
     reason: choice.reason,
     llm: llm.name,
   });
 
   // 3. Budget enforcement BEFORE paying: cumulative spend + next price must fit the budget.
-  const price = chosen.service.priceMotes;
-  const projected = addMotes(spentMotes, price);
-  if (compareMotes(projected, budgetMotes) > 0) {
+  // TODO(Task 5): a NEAR invoice quotes price + PAYMENT_STORAGE_FEE_YOCTO (D3) — budget
+  // and the client cap below must include the fee, or every live invoice is refused.
+  const price = chosen.service.priceYocto;
+  const projected = addYocto(spentYocto, price);
+  if (compareYocto(projected, budgetYocto) > 0) {
     const refusal =
-      `refused: price ${formatCspr(price)} would exceed budget ` +
-      `${formatCspr(budgetMotes)} (already spent ${formatCspr(spentMotes)})`;
+      `refused: price ${formatNear(price)} would exceed budget ` +
+      `${formatNear(budgetYocto)} (already spent ${formatNear(spentYocto)})`;
     print(renderBlock('STEP 3 · BUDGET — REFUSED', [refusal]));
     decisions.append('budget_refusal', {
       serviceId: chosen.service.id,
-      priceMotes: price,
-      spentMotes,
-      budgetMotes,
+      priceYocto: price,
+      spentYocto,
+      budgetYocto,
     });
-    logger.warn('budget refusal', { priceMotes: price, budgetMotes });
+    logger.warn('budget refusal', { priceYocto: price, budgetYocto });
     return {
       chosenServiceId: chosen.service.id,
       reason: choice.reason,
       paid: false,
-      deployHash: null,
+      paymentTxHash: null,
       attestationTxHash: null,
       summary: refusal,
-      spentMotes: '0',
+      spentYocto: '0',
     };
   }
   print(
     renderBlock('STEP 3 · BUDGET — OK', [
-      `price ${formatCspr(price)} fits budget ${formatCspr(budgetMotes)} (spent so far ${formatCspr(spentMotes)})`,
+      `price ${formatNear(price)} fits budget ${formatNear(budgetYocto)} (spent so far ${formatNear(spentYocto)})`,
     ]),
   );
-  decisions.append('budget_ok', { priceMotes: price, budgetMotes, spentMotes });
+  decisions.append('budget_ok', { priceYocto: price, budgetYocto, spentYocto });
 
-  // 4. Pay & consume via the 402 client. maxPriceMotes is bound to the on-chain
+  // 4. Pay & consume via the 402 client. maxPriceYocto is bound to the on-chain
   // price the budget gate just approved — NOT the whole remaining budget — so a
   // 402 invoice that quotes more than the advertised price is refused instead of
   // silently charged up to the full budget.
   const client = createAgentGateClient({
     chain,
     signer,
-    maxPriceMotes: price,
+    maxPriceYocto: price,
     logger,
     ...(opts.settleDelayMs !== undefined ? { settleDelayMs: opts.settleDelayMs } : {}),
     ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
@@ -270,10 +280,10 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
         chosenServiceId: chosen.service.id,
         reason: choice.reason,
         paid: false,
-        deployHash: null,
+        paymentTxHash: null,
         attestationTxHash: null,
         summary: refusal,
-        spentMotes: '0',
+        spentYocto: '0',
       };
     }
     decisions.append('error', {
@@ -283,27 +293,27 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
     throw err;
   }
 
-  const deployHash = result.deployHash ?? null;
-  if (result.paid && result.priceMotes !== undefined) {
-    spentMotes = addMotes(spentMotes, result.priceMotes);
+  const paymentTxHash = result.txHash ?? null;
+  if (result.paid && result.priceYocto !== undefined) {
+    spentYocto = addYocto(spentYocto, result.priceYocto);
   }
-  const remainingAfter: Motes = (parseMotes(budgetMotes) - parseMotes(spentMotes)).toString();
+  const remainingAfter: Yocto = (parseYocto(budgetYocto) - parseYocto(spentYocto)).toString();
   print(
     renderBlock('STEP 4 · PAYMENT', [
       result.paid
-        ? `paid ${formatCspr(result.priceMotes ?? '0')} → deploy ${deployHash ?? '?'}`
+        ? `paid ${formatNear(result.priceYocto ?? '0')} → tx ${paymentTxHash ?? '?'}`
         : 'no payment was required',
       `upstream status: ${result.status}`,
-      `remaining budget: ${motesToCspr(remainingAfter)} CSPR`,
+      `remaining budget: ${yoctoToNear(remainingAfter)} NEAR`,
     ]),
   );
   decisions.append('payment', {
     serviceId: chosen.service.id,
     paid: result.paid,
-    deployHash,
-    priceMotes: result.priceMotes ?? null,
+    paymentTxHash,
+    priceYocto: result.priceYocto ?? null,
     status: result.status,
-    spentMotes,
+    spentYocto,
   });
 
   const ok = result.status >= 200 && result.status < 300;
@@ -322,37 +332,44 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
 
   // 6. Receipt: poll the chain (≤5 s) for the attestation our payment triggered.
   let attestationTxHash: string | null = null;
-  if (deployHash !== null) {
+  if (paymentTxHash !== null) {
     const timeoutMs = opts.attestationTimeoutMs ?? DEFAULT_ATTESTATION_TIMEOUT_MS;
     const pollMs = opts.attestationPollIntervalMs ?? DEFAULT_ATTESTATION_POLL_MS;
     const deadline = Date.now() + timeoutMs;
     let found: AttestationRecord | undefined;
     for (;;) {
       const attestations = await chain.listAttestations(chosen.service.id, 50);
-      found = attestations.find((a) => a.paymentDeployHash === deployHash);
+      found = attestations.find((a) => a.paymentTxHash === paymentTxHash);
       if (found !== undefined || Date.now() >= deadline) break;
       await sleep(pollMs);
     }
     if (found !== undefined) {
-      attestationTxHash = found.recordTxHash;
+      // An AttestationRecord carries no tx hash of its own: the attestation tx is
+      // the matching `attestation` event (same service + nonce) in the activity feed.
+      const nonce = found.nonce;
+      const activity = await chain.listRecentActivity(50);
+      const event = activity.find(
+        (e) => e.kind === 'attestation' && e.serviceId === chosen.service.id && e.nonce === nonce,
+      );
+      attestationTxHash = event?.txHash ?? null;
       print(
         renderBlock('STEP 6 · RECEIPT', [
-          `payment deploy: ${deployHash}`,
-          `attestation tx: ${found.recordTxHash} (success=${String(found.success)})`,
-          `remaining budget: ${motesToCspr(remainingAfter)} CSPR`,
+          `payment tx: ${paymentTxHash}`,
+          `attestation tx: ${attestationTxHash ?? '?'} (success=${String(found.success)})`,
+          `remaining budget: ${yoctoToNear(remainingAfter)} NEAR`,
         ]),
       );
     } else {
       print(
         renderBlock('STEP 6 · RECEIPT', [
-          `payment deploy: ${deployHash}`,
+          `payment tx: ${paymentTxHash}`,
           `attestation not observed within ${String(timeoutMs)} ms — check the dashboard feed`,
         ]),
       );
     }
     decisions.append('attestation', {
       serviceId: chosen.service.id,
-      paymentDeployHash: deployHash,
+      paymentTxHash,
       attestationTxHash,
       success: found?.success ?? null,
     });
@@ -362,10 +379,10 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
     chosenServiceId: chosen.service.id,
     reason: choice.reason,
     paid: result.paid,
-    deployHash,
+    paymentTxHash,
     attestationTxHash,
     summary,
-    spentMotes,
+    spentYocto,
   };
   decisions.append('run_end', { ...report });
   return report;

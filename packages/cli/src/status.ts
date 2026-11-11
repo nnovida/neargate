@@ -21,7 +21,7 @@ export interface ServiceStatusResult {
 export async function serviceStatus(opts: {
   chain: ChainClient;
   id: number;
-  /** When false, skip the CSPR.cloud attestation fetch and return []. Default true. */
+  /** When false, skip the attestation fetch and return []. Default true. */
   includeAttestations?: boolean;
 }): Promise<ServiceStatusResult> {
   const { chain, id } = opts;

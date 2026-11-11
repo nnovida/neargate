@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto';
-import type { Motes } from '@agentgate/shared';
-import { AgentGateError, csprToMotes } from '@agentgate/shared';
+import type { Yocto } from '@agentgate/shared';
+import { AgentGateError, nearToYocto } from '@agentgate/shared';
 import type { FetchLike } from './types';
 import { normalizeBaseUrl } from './validate';
 
-/** Each demo account is faucet-funded with this many CSPR. */
-export const DEMO_FAUCET_CSPR = '1000';
+/** Each demo account is faucet-funded with this many NEAR. */
+export const DEMO_FAUCET_NEAR = '1000';
 
 /** Fallback faucet timeout when no timeoutMs is supplied (ms). */
 export const DEFAULT_FAUCET_TIMEOUT_MS = 15_000;
@@ -20,9 +20,9 @@ export interface CreateDemoAccountsOpts {
 
 export interface DemoAccount {
   role: 'buyer' | 'seller';
-  /** Mock ed25519-style public key: "01" + 64 random hex chars. */
-  publicKey: string;
-  balanceMotes: Motes;
+  /** Mock account id: `<role>-<8 random hex>.mock`. */
+  accountId: string;
+  balanceYocto: Yocto;
 }
 
 export interface DemoAccountsResult {
@@ -32,14 +32,14 @@ export interface DemoAccountsResult {
   exportLines: [string, string];
 }
 
-/** "01" + 64 random hex chars (32 CSPRNG bytes) — a valid mock devnet account key. */
-export function generateMockPublicKey(): string {
-  return `01${randomBytes(32).toString('hex')}`;
+/** `<role>-<8 random hex>.mock` — a fresh, valid NEAR-style account id on the mock devnet. */
+export function generateMockAccountId(role: DemoAccount['role']): string {
+  return `${role}-${randomBytes(4).toString('hex')}.mock`;
 }
 
 /**
  * Programmatic `agentgate demo-accounts` (mock mode only): generates a buyer and
- * a seller mock public key and faucets 1000 CSPR to each via `POST <devnet>/faucet`.
+ * a seller mock account id and faucets 1000 NEAR to each via `POST <devnet>/faucet`.
  */
 export async function createDemoAccounts(
   opts: CreateDemoAccountsOpts,
@@ -47,16 +47,16 @@ export async function createDemoAccounts(
   const base = normalizeBaseUrl(opts.devnetUrl, 'devnetUrl');
   const fetchImpl: FetchLike = opts.fetchImpl ?? ((u, i) => fetch(u, i));
   const timeoutMs = opts.timeoutMs ?? DEFAULT_FAUCET_TIMEOUT_MS;
-  const amountMotes = csprToMotes(DEMO_FAUCET_CSPR);
+  const amountYocto = nearToYocto(DEMO_FAUCET_NEAR);
 
   const fund = async (role: DemoAccount['role']): Promise<DemoAccount> => {
-    const publicKey = generateMockPublicKey();
+    const accountId = generateMockAccountId(role);
     let res: Response;
     try {
       res = await fetchImpl(`${base}/faucet`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ account: publicKey, amountMotes }),
+        body: JSON.stringify({ account: accountId, amountYocto }),
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
@@ -88,19 +88,19 @@ export async function createDemoAccounts(
     } catch {
       throw new AgentGateError(
         'FAUCET_FAILED',
-        `faucet for ${role} returned non-JSON body (expected {"balanceMotes": "<motes>"})`,
+        `faucet for ${role} returned non-JSON body (expected {"balanceYocto": "<yocto>"})`,
         502,
       );
     }
-    const balanceMotes = (parsed as { balanceMotes?: unknown }).balanceMotes;
-    if (typeof balanceMotes !== 'string' || !/^\d+$/.test(balanceMotes)) {
+    const balanceYocto = (parsed as { balanceYocto?: unknown }).balanceYocto;
+    if (typeof balanceYocto !== 'string' || !/^\d+$/.test(balanceYocto)) {
       throw new AgentGateError(
         'FAUCET_FAILED',
-        `faucet for ${role} returned a malformed balanceMotes (expected a motes decimal string)`,
+        `faucet for ${role} returned a malformed balanceYocto (expected a yocto decimal string)`,
         502,
       );
     }
-    return { role, publicKey, balanceMotes };
+    return { role, accountId, balanceYocto };
   };
 
   const buyer = await fund('buyer');
@@ -110,8 +110,8 @@ export async function createDemoAccounts(
     buyer,
     seller,
     exportLines: [
-      `export MOCK_BUYER_ACCOUNT=${buyer.publicKey}`,
-      `export MOCK_SELLER_ACCOUNT=${seller.publicKey}`,
+      `export MOCK_BUYER_ACCOUNT=${buyer.accountId}`,
+      `export MOCK_SELLER_ACCOUNT=${seller.accountId}`,
     ],
   };
 }

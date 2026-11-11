@@ -8,10 +8,8 @@ export type { DevnetDeps } from './app';
 export {
   ACTIVITY_LOG_CAP,
   ATTESTATIONS_PER_SERVICE_CAP,
-  MIN_PRICE_MOTES,
   TRANSFER_LOG_CAP,
   MAX_SERVICES,
-  deriveAccountHash,
 } from './state';
 export type { TransferRecord } from './state';
 

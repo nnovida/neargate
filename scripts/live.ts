@@ -1,12 +1,13 @@
 /**
- * Boots the AgentGate gateway (402 paywall middleware) in LIVE mode against the
- * deployed Casper Testnet registry. The mock dev stack is `npm run dev`; this is
- * its live counterpart for testing against the real on-chain contract.
+ * Boots the gateway (402 paywall middleware) in LIVE mode against the deployed
+ * NEAR testnet registry. The mock dev stack is `npm run dev`; this is its live
+ * counterpart for testing against the real on-chain contract.
  *
  * Reads config from the root `.env` (the repo has no dotenv dependency, so this
- * loads it explicitly). Requires AGENTGATE_MODE=live + REGISTRY_CONTRACT_PACKAGE_HASH
- * + CSPR_CLOUD_API_KEY + GATE_SIGNER_PEM_PATH (for attestations) + a non-default
- * AGENTGATE_ADMIN_TOKEN.
+ * loads it explicitly). Requires AGENTGATE_MODE=live + REGISTRY_CONTRACT_ID
+ * + GATEWAY_ACCOUNT_ID with GATEWAY_KEY_PATH or GATEWAY_PRIVATE_KEY (for
+ * attestations) + a non-default AGENTGATE_ADMIN_TOKEN.
+ * TODO(Task 6): live mode needs LiveNearClient; createChainClient throws until then.
  */
 import { readFileSync } from 'node:fs';
 import { loadConfig } from '@agentgate/shared';
@@ -40,8 +41,8 @@ async function main(): Promise<void> {
   }
   const chain = createChainClient(config);
   const mw = await startMiddleware({ config, chain });
-  console.log(`\nAgentGate gateway LIVE on http://localhost:${mw.port}  (network ${config.casperNetwork})`);
-  console.log(`registry package: ${config.registryContractPackageHash}`);
+  console.log(`\nAgentGate gateway LIVE on http://localhost:${mw.port}  (network ${chain.network})`);
+  console.log(`registry contract: ${config.registryContractId}`);
   console.log('\nNext steps:');
   console.log('  # 1. Map a service to a PUBLIC upstream (live-mode SSRF blocks localhost):');
   console.log(`  curl -X POST http://localhost:${mw.port}/admin/services \\`);

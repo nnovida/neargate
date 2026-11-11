@@ -9,7 +9,6 @@ import {
 } from '@agentgate/shared';
 import { createApp, type AppInternals } from './app';
 import type { InvoiceStore } from './invoice-store';
-import type { FacilitatorClient } from '@x402/core/http';
 
 export interface MiddlewareStartOpts {
   /** Port to listen on (0 = ephemeral, for in-process e2e). Defaults to config.middlewarePort (4021). */
@@ -37,8 +36,6 @@ export interface MiddlewareStartOpts {
   attestationRetryDelayMs?: number;
   /** Total attestation attempts before giving up. Default 4. */
   attestationMaxAttempts?: number;
-  /** Injected facilitator client for the x402 v2 rail (tests bypass the real HTTP client). */
-  facilitatorClient?: FacilitatorClient;
 }
 
 export interface RunningServer {
@@ -62,7 +59,7 @@ export async function startServer(opts: MiddlewareStartOpts = {}): Promise<Runni
   let chain = opts.chain;
   if (!chain) {
     // Lazy import so in-process consumers that inject a ChainClient never
-    // load the chain package (and its casper-js-sdk dependency) at all.
+    // load the chain package (and its chain SDK dependencies) at all.
     const { createChainClient } = await import('@agentgate/chain');
     chain = createChainClient(config);
   }
@@ -86,7 +83,6 @@ export async function startServer(opts: MiddlewareStartOpts = {}): Promise<Runni
     ...(opts.attestationMaxAttempts !== undefined
       ? { attestationMaxAttempts: opts.attestationMaxAttempts }
       : {}),
-    ...(opts.facilitatorClient !== undefined ? { facilitatorClient: opts.facilitatorClient } : {}),
   });
   const internals = app.locals['agentgate'] as AppInternals | undefined;
 

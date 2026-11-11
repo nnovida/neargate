@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import useSWR from 'swr';
-import { formatCspr, formatToken, motesToCspr } from '@agentgate/shared';
+import { formatNear, yoctoToNear } from '@agentgate/shared';
 import { fetcher, isChainDown, isNotFound } from '@/lib/fetcher';
 import { formatDateTime, formatInt, svcLabel, timeAgo, truncateMiddle } from '@/lib/format';
 import type { ServiceDetailResponse } from '@/lib/api-types';
@@ -47,10 +47,10 @@ function buildCurlSnippet(endpointUrl: string): string {
     '# 1 — call without payment → HTTP 402 + PaymentRequiredResponse JSON',
     `curl -i ${endpointUrl}`,
     '',
-    '# 2 — pay accepts[0].maxAmountRequired motes to accepts[0].payTo',
-    '#     with transfer_id = accepts[0].extra.nonce, receive <deployHash>.',
-    '#     Encode proof: base64({"x402Version":1,"scheme":"exact","network":"casper-test",',
-    '#       "payload":{"transaction":"<deployHash>","transferId":"<nonce>","from":"<account>"}})',
+    '# 2 — call pay({service_id, nonce: accepts[0].extra.nonce}) on accepts[0].payTo,',
+    '#     attaching accepts[0].maxAmountRequired yocto (price + storage fee); receive <txHash>.',
+    '#     Encode proof: base64({"x402Version":1,"scheme":"exact","network":"near-testnet",',
+    '#       "payload":{"kind":"tx","transaction":"<txHash>","nonce":"<nonce>","payer":"<account>"}})',
     `curl -s ${endpointUrl} \\`,
     '  -H "X-PAYMENT: <base64-encoded-payload>"',
   ].join('\n');
@@ -119,8 +119,7 @@ export function ServiceDetail({ id }: { id: number }) {
     return null;
   }
 
-  const { service, score, trustTier, attestations, revenueMotes, balanceMotes, network, mode, facilitator } =
-    data;
+  const { service, score, trustTier, attestations, revenueYocto, balanceYocto, network, mode } = data;
 
   return (
     <>
@@ -165,14 +164,7 @@ export function ServiceDetail({ id }: { id: number }) {
               value={service.endpointUrl}
               copyValue={service.endpointUrl}
             />
-            <MetaRow
-              label="price / call"
-              value={
-                facilitator
-                  ? `${formatToken(facilitator.amount, facilitator.decimals, facilitator.symbol)} · via x402 facilitator`
-                  : formatCspr(service.priceMotes)
-              }
-            />
+            <MetaRow label="price / call" value={formatNear(service.priceYocto)} />
             <MetaRow
               label="payment target"
               value={truncateMiddle(service.paymentTarget, 22, 8)}
@@ -211,16 +203,16 @@ export function ServiceDetail({ id }: { id: number }) {
           <section className="panel p-6">
             <p className="microlabel">revenue settled</p>
             <p className="mt-2 font-display text-4xl font-semibold tracking-tight text-white">
-              {motesToCspr(revenueMotes)}
-              <span className="ml-2 font-mono text-sm text-mut">CSPR</span>
+              {yoctoToNear(revenueYocto)}
+              <span className="ml-2 font-mono text-sm text-mut">NEAR</span>
             </p>
             <p className="mt-2 font-mono text-[11px] text-mut">
-              {formatCspr(service.priceMotes)} × {formatInt(score.successCalls)} successful calls
+              {formatNear(service.priceYocto)} × {formatInt(score.successCalls)} successful calls
             </p>
-            {mode === 'mock' && balanceMotes !== null ? (
+            {mode === 'mock' && balanceYocto !== null ? (
               <p className="mt-4 border-t border-line/60 pt-3 font-mono text-[11px] text-mut">
                 payment-target wallet balance{' '}
-                <span className="text-white">{formatCspr(balanceMotes)}</span>{' '}
+                <span className="text-white">{formatNear(balanceYocto)}</span>{' '}
                 <span className="text-mut/70">(mock devnet)</span>
               </p>
             ) : null}
@@ -253,7 +245,7 @@ export function ServiceDetail({ id }: { id: number }) {
           <ul className="divide-y divide-line">
             {attestations.map((a) => (
               <li
-                key={a.recordTxHash}
+                key={a.nonce}
                 className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:gap-4"
               >
                 <span
@@ -267,10 +259,10 @@ export function ServiceDetail({ id }: { id: number }) {
                   {timeAgo(a.timestamp)}
                 </span>
                 <span className="min-w-0 flex-1 font-mono text-[11px] text-mut">
-                  payment <TxHash hash={a.paymentDeployHash} network={network} />
+                  payment <TxHash hash={a.paymentTxHash} network={network} />
                 </span>
                 <span className="shrink-0 font-mono text-[11px] text-mut">
-                  attest <TxHash hash={a.recordTxHash} network={network} />
+                  nonce <code className="text-zinc-300">{a.nonce}</code>
                 </span>
               </li>
             ))}

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AgentGateError,
   DEFAULT_ADMIN_TOKEN,
-  DEFAULT_REGISTRY_PACKAGE_HASH,
+  DEFAULT_REGISTRY_CONTRACT_ID,
   loadConfig,
 } from '../src/index';
 
@@ -18,21 +18,31 @@ describe('loadConfig — mock mode defaults', () => {
     expect(cfg.adminToken).toBe(DEFAULT_ADMIN_TOKEN);
     expect(cfg.invoiceTtlMs).toBe(300000);
     expect(cfg.upstreamTimeoutMs).toBe(30000);
-    expect(cfg.casperNetwork).toBe('casper-test');
-    expect(cfg.csprCloudApiKey).toBe('');
+    expect(cfg.nearNetwork).toBe('testnet');
+    expect(cfg.nearRpcUrl).toBe('https://rpc.testnet.near.org');
+    expect(cfg.nearExplorerUrl).toBe('https://testnet.nearblocks.io');
+    expect(cfg.registryContractId).toBe(DEFAULT_REGISTRY_CONTRACT_ID);
+    expect(cfg.registryContractId).toBe('');
     expect(cfg.llmModel).toBe('claude-sonnet-4-6');
     expect(cfg.oracleStatic).toBe(false);
-    expect(cfg.buyerBudgetCspr).toBe('5');
+    expect(cfg.buyerBudgetNear).toBe('1');
+    expect(cfg.relayerEnabled).toBe(false);
+    expect(cfg.mockBuyerAccount).toBe('buyer.mock');
+    expect(cfg.mockSellerAccount).toBe('seller.mock');
+    expect([cfg.gatewayAccountId, cfg.gatewayPrivateKey, cfg.gatewayKeyPath]).toEqual(['', '', '']);
+    expect([cfg.buyerAccountId, cfg.buyerPrivateKey, cfg.buyerKeyPath]).toEqual(['', '', '']);
+    expect([cfg.sellerAccountId, cfg.sellerPrivateKey, cfg.sellerKeyPath]).toEqual(['', '', '']);
   });
 
-  it('mock mode tolerates the default admin token and no CSPR.cloud key', () => {
+  it('mock mode tolerates the default admin token', () => {
     expect(() => loadConfig({ AGENTGATE_MODE: 'mock' })).not.toThrow();
   });
 
   it('treats empty-string env values as unset (matches .env.example blanks)', () => {
-    const cfg = loadConfig({ CSPR_CLOUD_API_KEY: '', REGISTRY_CONTRACT_PACKAGE_HASH: '' });
-    expect(cfg.csprCloudApiKey).toBe('');
-    expect(cfg.registryContractPackageHash).toBe('');
+    const cfg = loadConfig({ REGISTRY_CONTRACT_ID: '', NEAR_RPC_URL: '  ', MOCK_BUYER_ACCOUNT: '' });
+    expect(cfg.registryContractId).toBe('');
+    expect(cfg.nearRpcUrl).toBe('https://rpc.testnet.near.org');
+    expect(cfg.mockBuyerAccount).toBe('buyer.mock');
   });
 
   it('derives DEVNET_URL default from DEVNET_PORT', () => {
@@ -43,19 +53,69 @@ describe('loadConfig — mock mode defaults', () => {
   it('parses overrides', () => {
     const cfg = loadConfig({
       ORACLE_STATIC: '1',
-      BUYER_BUDGET_CSPR: '2.5',
+      BUYER_BUDGET_NEAR: '2.5',
       INVOICE_TTL_MS: '1000',
       LOG_LEVEL: 'debug',
+      RELAYER_ENABLED: 'true',
+      NEAR_RPC_URL: 'https://rpc.example.org',
+      NEAR_EXPLORER_URL: 'https://explorer.example.org',
+      REGISTRY_CONTRACT_ID: 'registry.neargate.testnet',
+      MOCK_SELLER_ACCOUNT: 'alice.mock',
     });
     expect(cfg.oracleStatic).toBe(true);
-    expect(cfg.buyerBudgetCspr).toBe('2.5');
+    expect(cfg.buyerBudgetNear).toBe('2.5');
     expect(cfg.invoiceTtlMs).toBe(1000);
+    expect(cfg.relayerEnabled).toBe(true);
+    expect(cfg.nearRpcUrl).toBe('https://rpc.example.org');
+    expect(cfg.nearExplorerUrl).toBe('https://explorer.example.org');
+    expect(cfg.registryContractId).toBe('registry.neargate.testnet');
+    expect(cfg.mockSellerAccount).toBe('alice.mock');
+  });
+
+  it('reads the gateway, buyer and seller accounts and keys', () => {
+    const cfg = loadConfig({
+      GATEWAY_ACCOUNT_ID: 'gateway.testnet',
+      GATEWAY_PRIVATE_KEY: 'ed25519:gatewaysecret',
+      GATEWAY_KEY_PATH: '/keys/gateway.json',
+      BUYER_ACCOUNT_ID: 'buyer.testnet',
+      BUYER_PRIVATE_KEY: 'ed25519:buyersecret',
+      BUYER_KEY_PATH: '/keys/buyer.json',
+      SELLER_ACCOUNT_ID: 'seller.testnet',
+      SELLER_PRIVATE_KEY: 'ed25519:sellersecret',
+      SELLER_KEY_PATH: '/keys/seller.json',
+    });
+    expect([cfg.gatewayAccountId, cfg.gatewayPrivateKey, cfg.gatewayKeyPath]).toEqual([
+      'gateway.testnet',
+      'ed25519:gatewaysecret',
+      '/keys/gateway.json',
+    ]);
+    expect([cfg.buyerAccountId, cfg.buyerPrivateKey, cfg.buyerKeyPath]).toEqual([
+      'buyer.testnet',
+      'ed25519:buyersecret',
+      '/keys/buyer.json',
+    ]);
+    expect([cfg.sellerAccountId, cfg.sellerPrivateKey, cfg.sellerKeyPath]).toEqual([
+      'seller.testnet',
+      'ed25519:sellersecret',
+      '/keys/seller.json',
+    ]);
+  });
+
+  it('mainnet switches the RPC and explorer defaults', () => {
+    const cfg = loadConfig({ NEAR_NETWORK: 'mainnet' });
+    expect(cfg.nearNetwork).toBe('mainnet');
+    expect(cfg.nearRpcUrl).toBe('https://rpc.mainnet.near.org');
+    expect(cfg.nearExplorerUrl).toBe('https://nearblocks.io');
   });
 });
 
 describe('loadConfig — validation failures', () => {
   it('rejects an unknown mode', () => {
     expect(() => loadConfig({ AGENTGATE_MODE: 'prod' })).toThrow(AgentGateError);
+  });
+
+  it('rejects an unknown NEAR network', () => {
+    expect(() => loadConfig({ NEAR_NETWORK: 'localnet' })).toThrow(/NEAR_NETWORK/);
   });
 
   it('rejects malformed ports and integers', () => {
@@ -67,49 +127,50 @@ describe('loadConfig — validation failures', () => {
 
   it('rejects malformed URLs', () => {
     expect(() => loadConfig({ DEVNET_URL: 'not-a-url' })).toThrow(AgentGateError);
-    expect(() => loadConfig({ CSPR_CLOUD_STREAMING_URL: 'http://not-ws.example' })).toThrow(
-      AgentGateError,
-    );
+    expect(() => loadConfig({ NEAR_RPC_URL: 'not-a-url' })).toThrow(/NEAR_RPC_URL/);
+    expect(() => loadConfig({ NEAR_RPC_URL: 'ws://rpc.example.org' })).toThrow(/NEAR_RPC_URL/);
+    expect(() => loadConfig({ NEAR_EXPLORER_URL: 'ftp://explorer.example.org' })).toThrow(/NEAR_EXPLORER_URL/);
   });
 
   it('rejects a malformed buyer budget', () => {
-    expect(() => loadConfig({ BUYER_BUDGET_CSPR: '-1' })).toThrow(AgentGateError);
-    expect(() => loadConfig({ BUYER_BUDGET_CSPR: '1.0000000001' })).toThrow(AgentGateError);
+    expect(() => loadConfig({ BUYER_BUDGET_NEAR: '-1' })).toThrow(/BUYER_BUDGET_NEAR/);
+    expect(() => loadConfig({ BUYER_BUDGET_NEAR: '1.' + '0'.repeat(24) + '1' })).toThrow(/BUYER_BUDGET_NEAR/);
+  });
+
+  it('rejects a malformed RELAYER_ENABLED flag', () => {
+    expect(() => loadConfig({ RELAYER_ENABLED: 'maybe' })).toThrow(/RELAYER_ENABLED/);
+  });
+
+  it('rejects account ids that are not valid NEAR account ids', () => {
+    expect(() => loadConfig({ REGISTRY_CONTRACT_ID: 'Registry.testnet' })).toThrow(/REGISTRY_CONTRACT_ID/);
+    expect(() => loadConfig({ GATEWAY_ACCOUNT_ID: 'gateway..testnet' })).toThrow(/GATEWAY_ACCOUNT_ID/);
+    expect(() => loadConfig({ BUYER_ACCOUNT_ID: 'b' })).toThrow(/BUYER_ACCOUNT_ID/);
+    expect(() => loadConfig({ SELLER_ACCOUNT_ID: 'seller testnet' })).toThrow(/SELLER_ACCOUNT_ID/);
+    expect(() => loadConfig({ MOCK_BUYER_ACCOUNT: '-buyer.mock' })).toThrow(/MOCK_BUYER_ACCOUNT/);
+    expect(() => loadConfig({ MOCK_SELLER_ACCOUNT: 'Seller.mock' })).toThrow(/MOCK_SELLER_ACCOUNT/);
   });
 });
 
 describe('loadConfig — live mode combos', () => {
-  it('throws in live mode without CSPR_CLOUD_API_KEY', () => {
-    expect(() =>
-      loadConfig({ AGENTGATE_MODE: 'live', AGENTGATE_ADMIN_TOKEN: 'a-strong-unique-token' }),
-    ).toThrow(/CSPR_CLOUD_API_KEY/);
-  });
-
   it('throws in live mode with the default admin token (explicit)', () => {
     expect(() =>
-      loadConfig({
-        AGENTGATE_MODE: 'live',
-        CSPR_CLOUD_API_KEY: 'some-key',
-        AGENTGATE_ADMIN_TOKEN: DEFAULT_ADMIN_TOKEN,
-      }),
+      loadConfig({ AGENTGATE_MODE: 'live', AGENTGATE_ADMIN_TOKEN: DEFAULT_ADMIN_TOKEN }),
     ).toThrow(/ADMIN_TOKEN/);
   });
 
   it('throws in live mode with the default admin token (implicit via default)', () => {
-    expect(() =>
-      loadConfig({ AGENTGATE_MODE: 'live', CSPR_CLOUD_API_KEY: 'some-key' }),
-    ).toThrow(/ADMIN_TOKEN/);
+    expect(() => loadConfig({ AGENTGATE_MODE: 'live' })).toThrow(/ADMIN_TOKEN/);
   });
 
-  it('accepts live mode with a key and a non-default admin token', () => {
+  it('accepts live mode with a non-default admin token', () => {
     const cfg = loadConfig({
       AGENTGATE_MODE: 'live',
-      CSPR_CLOUD_API_KEY: 'some-key',
       AGENTGATE_ADMIN_TOKEN: 'a-strong-unique-token',
+      REGISTRY_CONTRACT_ID: 'registry.neargate.testnet',
     });
     expect(cfg.mode).toBe('live');
-    expect(cfg.csprCloudApiKey).toBe('some-key');
     expect(cfg.adminToken).toBe('a-strong-unique-token');
+    expect(cfg.registryContractId).toBe('registry.neargate.testnet');
   });
 
   it('config errors carry the CONFIG_INVALID code', () => {
@@ -122,43 +183,10 @@ describe('loadConfig — live mode combos', () => {
       expect((err as AgentGateError).httpStatus).toBe(500);
     }
   });
-});
 
-describe('loadConfig — requireCloudKey opt-out (CLI reads)', () => {
-  it('still throws in live mode without a key by default', () => {
-    expect(() =>
-      loadConfig({ AGENTGATE_MODE: 'live', AGENTGATE_ADMIN_TOKEN: 'a-strong-unique-token' }),
-    ).toThrow(/CSPR_CLOUD_API_KEY/);
-  });
-
-  it('allows live mode without a key when requireCloudKey is false', () => {
-    const cfg = loadConfig(
-      { AGENTGATE_MODE: 'live', AGENTGATE_ADMIN_TOKEN: 'a-strong-unique-token' },
-      { requireCloudKey: false },
-    );
+  it('allows live mode with the default admin token when the guard is off (CLI reads)', () => {
+    const cfg = loadConfig({ AGENTGATE_MODE: 'live' }, { requireStrongAdminToken: false });
     expect(cfg.mode).toBe('live');
-    expect(cfg.csprCloudApiKey).toBe('');
-  });
-
-  it('still enforces the non-default admin token in live mode even when requireCloudKey is false', () => {
-    expect(() => loadConfig({ AGENTGATE_MODE: 'live' }, { requireCloudKey: false })).toThrow(
-      /ADMIN_TOKEN/,
-    );
-  });
-
-  it('allows live mode with no key and the default admin token when both guards are off (CLI reads)', () => {
-    const cfg = loadConfig(
-      { AGENTGATE_MODE: 'live' },
-      { requireCloudKey: false, requireStrongAdminToken: false },
-    );
-    expect(cfg.mode).toBe('live');
-    expect(cfg.csprCloudApiKey).toBe('');
     expect(cfg.adminToken).toBe(DEFAULT_ADMIN_TOKEN);
-  });
-
-  it('exposes the deployed registry package hash constant', () => {
-    expect(DEFAULT_REGISTRY_PACKAGE_HASH).toBe(
-      'hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df',
-    );
   });
 });

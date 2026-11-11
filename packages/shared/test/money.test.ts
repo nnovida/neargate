@@ -1,138 +1,165 @@
 import { describe, expect, it } from 'vitest';
 import {
-  addMotes,
-  compareMotes,
-  csprToMotes,
-  formatCspr,
+  addYocto,
+  compareYocto,
+  formatNear,
   formatToken,
   formatUnits,
-  motesToCspr,
-  parseMotes,
+  MIN_PRICE_YOCTO,
+  nearToYocto,
+  parseYocto,
+  PAYMENT_STORAGE_FEE_YOCTO,
+  REGISTRATION_DEPOSIT_YOCTO,
+  yoctoToNear,
+  YOCTO_PER_NEAR,
   AgentGateError,
 } from '../src/index';
 
-describe('csprToMotes', () => {
-  it('converts whole CSPR', () => {
-    expect(csprToMotes('1')).toBe('1000000000');
-    expect(csprToMotes('0')).toBe('0');
-    expect(csprToMotes('123')).toBe('123000000000');
+/** Runs `fn` and returns the AgentGateError code it throws (fails the test otherwise). */
+function errorCode(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (err) {
+    expect(err).toBeInstanceOf(AgentGateError);
+    return (err as AgentGateError).code;
+  }
+  return expect.unreachable('expected an AgentGateError');
+}
+
+describe('constants (mirror the neargate-registry contract)', () => {
+  it('1 NEAR = 10^24 yocto', () => {
+    expect(YOCTO_PER_NEAR).toBe(10n ** 24n);
   });
 
-  it('converts fractional CSPR', () => {
-    expect(csprToMotes('0.5')).toBe('500000000');
-    expect(csprToMotes('2.25')).toBe('2250000000');
-    expect(csprToMotes('0.000000001')).toBe('1');
-    expect(csprToMotes('1.000000000')).toBe('1000000000');
+  it('storage fee is 0.002 NEAR, registration deposit 0.12 NEAR, min price 10^18 yocto', () => {
+    expect(PAYMENT_STORAGE_FEE_YOCTO).toBe('2000000000000000000000');
+    expect(PAYMENT_STORAGE_FEE_YOCTO).toBe(nearToYocto('0.002'));
+    expect(REGISTRATION_DEPOSIT_YOCTO).toBe('120000000000000000000000');
+    expect(REGISTRATION_DEPOSIT_YOCTO).toBe(nearToYocto('0.12'));
+    expect(MIN_PRICE_YOCTO).toBe('1000000000000000000');
+    expect(MIN_PRICE_YOCTO).toBe(nearToYocto('0.000001'));
+  });
+});
+
+describe('nearToYocto', () => {
+  it('converts whole NEAR', () => {
+    expect(nearToYocto('1')).toBe('1000000000000000000000000');
+    expect(nearToYocto('0')).toBe('0');
+    expect(nearToYocto('123')).toBe('123000000000000000000000000');
   });
 
-  it('handles 9 decimal places exactly', () => {
-    expect(csprToMotes('123.456789012')).toBe('123456789012');
+  it('converts fractional NEAR', () => {
+    expect(nearToYocto('0.01')).toBe('10000000000000000000000');
+    expect(nearToYocto('0.5')).toBe('500000000000000000000000');
+    expect(nearToYocto('2.25')).toBe('2250000000000000000000000');
+    expect(nearToYocto('0.' + '0'.repeat(23) + '1')).toBe('1');
+    expect(nearToYocto('1.' + '0'.repeat(24))).toBe('1000000000000000000000000');
   });
 
-  it('handles values beyond Number.MAX_SAFE_INTEGER', () => {
-    // 10^10 CSPR = 10^19 motes > 2^53
-    expect(csprToMotes('10000000000')).toBe('10000000000000000000');
+  it('handles 24 decimal places exactly', () => {
+    expect(nearToYocto('1.123456789012345678901234')).toBe('1123456789012345678901234');
   });
 
-  it('rejects more than 9 decimal places', () => {
-    expect(() => csprToMotes('1.0000000001')).toThrow(AgentGateError);
-    expect(() => csprToMotes('0.1234567891')).toThrow(/decimal places/);
+  it('trims surrounding whitespace', () => {
+    expect(nearToYocto(' 0.5 ')).toBe('500000000000000000000000');
+  });
+
+  it('rejects more than 24 decimal places with INVALID_AMOUNT', () => {
+    expect(errorCode(() => nearToYocto('1.' + '0'.repeat(24) + '1'))).toBe('INVALID_AMOUNT');
+    expect(() => nearToYocto('0.' + '1'.repeat(25))).toThrow(/decimal places/);
   });
 
   it('rejects negative, signed, exponent, and malformed input', () => {
     for (const bad of ['-1', '-0.5', '+5', '1e9', '1.2.3', 'abc', '', '.', '.5', '5.', '1,5', 'NaN', 'Infinity']) {
-      expect(() => csprToMotes(bad), `should reject ${JSON.stringify(bad)}`).toThrow(AgentGateError);
+      expect(errorCode(() => nearToYocto(bad)), `should reject ${JSON.stringify(bad)}`).toBe('INVALID_AMOUNT');
     }
   });
 });
 
-describe('motesToCspr', () => {
-  it('round-trips with csprToMotes', () => {
-    for (const v of ['0', '1', '0.5', '2.25', '0.000000001', '123.456789012', '9999.9']) {
-      expect(motesToCspr(csprToMotes(v))).toBe(v);
-    }
-  });
-
+describe('yoctoToNear', () => {
   it('trims trailing zeros', () => {
-    expect(motesToCspr('1500000000')).toBe('1.5');
-    expect(motesToCspr('1000000000')).toBe('1');
-    expect(motesToCspr('500000000')).toBe('0.5');
-    expect(motesToCspr('0')).toBe('0');
+    expect(yoctoToNear('1500000000000000000000000')).toBe('1.5');
+    expect(yoctoToNear('1000000000000000000000000')).toBe('1');
+    expect(yoctoToNear('2000000000000000000000')).toBe('0.002');
+    expect(yoctoToNear('1')).toBe('0.' + '0'.repeat(23) + '1');
+    expect(yoctoToNear('0')).toBe('0');
   });
 
-  it('rejects non-integer or negative motes', () => {
+  it('round-trips with nearToYocto', () => {
+    for (const v of ['0', '1', '0.5', '2.25', '0.002', '0.12', '0.000001', '123.456789012345678901234', '9999.9']) {
+      expect(yoctoToNear(nearToYocto(v))).toBe(v);
+    }
+  });
+
+  it('rejects non-integer or negative yocto', () => {
     for (const bad of ['1.5', '-3', '', 'abc', '1e9', '+1']) {
-      expect(() => motesToCspr(bad), `should reject ${JSON.stringify(bad)}`).toThrow(AgentGateError);
+      expect(errorCode(() => yoctoToNear(bad)), `should reject ${JSON.stringify(bad)}`).toBe('INVALID_AMOUNT');
     }
   });
 });
 
-describe('parseMotes', () => {
-  it('parses valid motes strings', () => {
-    expect(parseMotes('0')).toBe(0n);
-    expect(parseMotes('1000000000')).toBe(1_000_000_000n);
+describe('parseYocto', () => {
+  it('parses valid yocto strings, including values past u64', () => {
+    expect(parseYocto('0')).toBe(0n);
+    expect(parseYocto('1000000000000000000000000')).toBe(10n ** 24n);
   });
 
   it('rejects invalid input', () => {
-    expect(() => parseMotes('-1')).toThrow(AgentGateError);
-    expect(() => parseMotes('0x10')).toThrow(AgentGateError);
+    expect(() => parseYocto('-1')).toThrow(AgentGateError);
+    expect(() => parseYocto('0x10')).toThrow(AgentGateError);
+    expect(() => parseYocto('1.0')).toThrow(AgentGateError);
   });
 });
 
-describe('addMotes', () => {
-  it('adds small values', () => {
-    expect(addMotes('1', '2')).toBe('3');
-    expect(addMotes('0', '0')).toBe('0');
-  });
-
-  it('adds without float precision loss past 2^53', () => {
-    expect(addMotes('9007199254740993', '1')).toBe('9007199254740994');
-    expect(addMotes('18446744073709551615', '1')).toBe('18446744073709551616');
+describe('addYocto', () => {
+  it('adds without float precision loss', () => {
+    expect(addYocto('1', '2')).toBe('3');
+    expect(addYocto('500000000000000000000000', PAYMENT_STORAGE_FEE_YOCTO)).toBe('502000000000000000000000');
+    expect(addYocto('340282366920938463463374607431768211455', '1')).toBe('340282366920938463463374607431768211456');
   });
 
   it('rejects invalid operands', () => {
-    expect(() => addMotes('1.5', '1')).toThrow(AgentGateError);
-    expect(() => addMotes('1', '-1')).toThrow(AgentGateError);
+    expect(() => addYocto('1.5', '1')).toThrow(AgentGateError);
+    expect(() => addYocto('1', '-1')).toThrow(AgentGateError);
   });
 });
 
-describe('compareMotes', () => {
+describe('compareYocto', () => {
   it('orders correctly', () => {
-    expect(compareMotes('1', '2')).toBe(-1);
-    expect(compareMotes('2', '1')).toBe(1);
-    expect(compareMotes('500000000', '500000000')).toBe(0);
+    expect(compareYocto('1', '2')).toBe(-1);
+    expect(compareYocto('2', '1')).toBe(1);
+    expect(compareYocto(MIN_PRICE_YOCTO, MIN_PRICE_YOCTO)).toBe(0);
   });
 
   it('compares numerically, not lexicographically', () => {
-    expect(compareMotes('9', '10')).toBe(-1);
-    expect(compareMotes('100', '99')).toBe(1);
+    expect(compareYocto('9', '10')).toBe(-1);
+    expect(compareYocto('100', '99')).toBe(1);
   });
 });
 
-describe('formatCspr', () => {
-  it('formats with CSPR suffix', () => {
-    expect(formatCspr('500000000')).toBe('0.5 CSPR');
-    expect(formatCspr('1000000000')).toBe('1 CSPR');
-    expect(formatCspr('0')).toBe('0 CSPR');
+describe('formatNear', () => {
+  it('formats with a NEAR suffix', () => {
+    expect(formatNear('2000000000000000000000')).toBe('0.002 NEAR');
+    expect(formatNear('500000000000000000000000')).toBe('0.5 NEAR');
+    expect(formatNear('1000000000000000000000000')).toBe('1 NEAR');
+    expect(formatNear('0')).toBe('0 NEAR');
   });
 });
 
-describe('formatUnits / formatToken (facilitator CEP-18 amounts)', () => {
+describe('formatUnits / formatToken (non-native assets)', () => {
   it('formatUnits trims trailing zeros at arbitrary decimals', () => {
-    expect(formatUnits('100000000', 9)).toBe('0.1');
-    expect(formatUnits('2500000000', 9)).toBe('2.5');
-    expect(formatUnits('1000000', 6)).toBe('1'); // 1.000000 → 1
+    expect(formatUnits('1000000', 6)).toBe('1');
     expect(formatUnits('1500000', 6)).toBe('1.5');
-    expect(formatUnits('42', 0)).toBe('42'); // 0-decimals token
-    expect(formatUnits('0', 9)).toBe('0');
+    expect(formatUnits('42', 0)).toBe('42');
+    expect(formatUnits('0', 6)).toBe('0');
+    expect(formatUnits('2000000000000000000000', 24)).toBe('0.002');
   });
 
   it('formatToken appends the symbol', () => {
-    expect(formatToken('100000000', 9, 'WCSPR')).toBe('0.1 WCSPR');
-    expect(formatToken('2500000000', 9, 'WCSPR')).toBe('2.5 WCSPR');
+    expect(formatToken('1500000', 6, 'USDC')).toBe('1.5 USDC');
   });
 
   it('formatUnits rejects a non-integer atomic string', () => {
-    expect(() => formatUnits('0.5', 9)).toThrow(AgentGateError);
+    expect(() => formatUnits('0.5', 6)).toThrow(AgentGateError);
   });
 });

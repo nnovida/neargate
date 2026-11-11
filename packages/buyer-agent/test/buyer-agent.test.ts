@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type {
+  ActivityEvent,
   AttestationRecord,
   ChainClient,
   PaymentRequiredResponse,
@@ -13,10 +14,13 @@ import { decodeXPayment, isAgentGateError, trustTier, X402_SCHEME, X402_VERSION 
 import { MockLlm, runBuyerAgent } from '@agentgate/buyer-agent';
 import type { BuyerRunReport, CatalogEntry } from '@agentgate/buyer-agent';
 
-const DEPLOY_HASH = 'd'.repeat(64);
-const ATTEST_TX = 'e'.repeat(64);
-const TARGET = `account-hash-${'a'.repeat(64)}`;
-const SIGNER = { kind: 'mock', publicKey: '01ab' } as const;
+/** Base58 strings of NEAR tx-hash length. */
+const PAYMENT_TX = 'D'.repeat(44);
+const ATTEST_TX = 'E'.repeat(44);
+const TARGET = 'seller.mock';
+const REGISTRY = 'registry.mock';
+const SIGNER = { kind: 'mock', accountId: 'buyer.mock' } as const;
+const STORAGE_FEE = '2000000000000000000000'; // 0.002 NEAR
 
 function makeService(overrides: Partial<ServiceRecord> = {}): ServiceRecord {
   return {
@@ -24,12 +28,13 @@ function makeService(overrides: Partial<ServiceRecord> = {}): ServiceRecord {
     name: 'Gold Spot Feed',
     description: 'XAU/USD gold spot price with confidence score',
     endpointUrl: 'http://gateway/svc/1',
-    priceMotes: '500000000', // 0.5 CSPR
+    priceYocto: '500000000000000000000000', // 0.5 NEAR
     paymentTarget: TARGET,
-    owner: '01aa',
-    attestor: '01bb',
+    owner: 'owner.mock',
+    attestor: 'attestor.mock',
     active: true,
     createdAt: 1_700_000_000_000,
+    accepts: [],
     ...overrides,
   };
 }
@@ -46,28 +51,38 @@ interface FakeChainOpts {
   services?: ServiceRecord[];
   scores?: Map<number, ServiceScore>;
   attestations?: AttestationRecord[];
+  activity?: ActivityEvent[];
 }
 
 function makeChain(opts: FakeChainOpts = {}): ChainClient {
   const services = opts.services ?? [makeService()];
   const scores = opts.scores ?? new Map<number, ServiceScore>();
   const attestations = opts.attestations ?? [];
+  const activity = opts.activity ?? [];
   return {
     network: 'mock',
+    registryId: REGISTRY,
     getService: vi.fn(async (id: number) => services.find((s) => s.id === id) ?? null),
     listServices: vi.fn(async () => services),
     getScore: vi.fn(async (id: number) => scores.get(id) ?? { totalCalls: 0, successCalls: 0 }),
     listAttestations: vi.fn(async () => attestations),
-    listRecentActivity: vi.fn(async () => []),
-    getBalance: vi.fn(async () => '1000000000000'),
-    verifyTransfer: vi.fn(async () => ({ ok: false as const, reason: 'not_found' as const })),
+    listRecentActivity: vi.fn(async () => activity),
+    getBalance: vi.fn(async () => '1000000000000000000000000000'),
+    getPayment: vi.fn(async () => null),
+    verifyPayment: vi.fn(async () => ({ ok: false as const, reason: 'not_found' as const })),
+    isFullAccessKey: vi.fn(async () => false),
     registerService: vi.fn(async () => ({ serviceId: 1, txHash: 'tx' })),
+    pay: vi.fn(async () => ({ txHash: PAYMENT_TX })),
     recordAttestation: vi.fn(async () => ({ txHash: 'tx' })),
     setActive: vi.fn(async () => ({ txHash: 'tx' })),
-    transfer: vi.fn(async () => ({ deployHash: DEPLOY_HASH })),
   };
 }
 
+/**
+ * TODO(Task 5): a D3 invoice quotes price + storage fee as maxAmountRequired; the
+ * agent's budget gate and client cap still use the bare price, so this fixture
+ * quotes the price alone.
+ */
 function invoiceFor(service: ServiceRecord): PaymentRequiredResponse {
   return {
     x402Version: X402_VERSION,
@@ -76,9 +91,9 @@ function invoiceFor(service: ServiceRecord): PaymentRequiredResponse {
       {
         scheme: X402_SCHEME,
         network: 'mock',
-        maxAmountRequired: service.priceMotes,
-        asset: 'CSPR',
-        payTo: service.paymentTarget,
+        maxAmountRequired: service.priceYocto,
+        asset: 'NEAR',
+        payTo: REGISTRY,
         resource: service.endpointUrl,
         description: service.name,
         maxTimeoutSeconds: 300,
@@ -86,8 +101,13 @@ function invoiceFor(service: ServiceRecord): PaymentRequiredResponse {
           nonce: '424242',
           serviceId: service.id,
           expiresAtMs: Date.now() + 300_000,
-          settlement: 'casper-native-transfer',
-          transferIdEncoding: 'u64-decimal',
+          settlement: 'neargate-registry-pay',
+          contractId: REGISTRY,
+          method: 'pay',
+          priceYocto: service.priceYocto,
+          storageFeeYocto: STORAGE_FEE,
+          seller: service.paymentTarget,
+          caip2: 'near:mock',
         },
       },
     ],
@@ -108,8 +128,12 @@ function paywallFetch(service: ServiceRecord, data: unknown) {
     const xp = headers.get('X-PAYMENT');
     if (xp !== null) {
       const decoded = decodeXPayment(xp);
-      expect(decoded.payload.transaction).toBe(DEPLOY_HASH);
-      expect(decoded.payload.transferId).toBe('424242');
+      expect(decoded.payload).toMatchObject({
+        kind: 'tx',
+        transaction: PAYMENT_TX,
+        nonce: '424242',
+        payer: 'buyer.mock',
+      });
       return json(data, 200);
     }
     return json(invoiceFor(service), 402);
@@ -126,12 +150,12 @@ describe('MockLlm.chooseService', () => {
   it('picks the cheapest active service whose name/description matches the task', async () => {
     const llm = new MockLlm();
     const catalog = [
-      entry({ id: 1, name: 'Gold Spot Feed', priceMotes: '500000000' }),
+      entry({ id: 1, name: 'Gold Spot Feed', priceYocto: '500000000000000000000000' }),
       entry({
         id: 2,
         name: 'Random Numbers',
         description: 'entropy as a service',
-        priceMotes: '100000000', // cheaper but irrelevant
+        priceYocto: '100000000000000000000000', // cheaper but irrelevant
       }),
     ];
     const choice = await llm.chooseService('Get the gold price for a treasury report', catalog);
@@ -142,8 +166,8 @@ describe('MockLlm.chooseService', () => {
   it('among multiple matches picks the cheapest', async () => {
     const llm = new MockLlm();
     const catalog = [
-      entry({ id: 1, name: 'Gold Spot Feed Premium', priceMotes: '900000000' }),
-      entry({ id: 2, name: 'Gold Spot Feed Lite', priceMotes: '200000000' }),
+      entry({ id: 1, name: 'Gold Spot Feed Premium', priceYocto: '900000000000000000000000' }),
+      entry({ id: 2, name: 'Gold Spot Feed Lite', priceYocto: '200000000000000000000000' }),
     ];
     const choice = await llm.chooseService('gold price please', catalog);
     expect(choice.serviceId).toBe(2);
@@ -152,8 +176,8 @@ describe('MockLlm.chooseService', () => {
   it('breaks price ties by highest trust tier', async () => {
     const llm = new MockLlm();
     const catalog = [
-      entry({ id: 1, name: 'Gold Feed A', priceMotes: '200000000' }, { totalCalls: 0, successCalls: 0 }), // new
-      entry({ id: 2, name: 'Gold Feed B', priceMotes: '200000000' }, { totalCalls: 30, successCalls: 30 }), // trusted
+      entry({ id: 1, name: 'Gold Feed A', priceYocto: '200000000000000000000000' }, { totalCalls: 0, successCalls: 0 }), // new
+      entry({ id: 2, name: 'Gold Feed B', priceYocto: '200000000000000000000000' }, { totalCalls: 30, successCalls: 30 }), // trusted
     ];
     const choice = await llm.chooseService('gold price', catalog);
     expect(choice.serviceId).toBe(2);
@@ -162,8 +186,8 @@ describe('MockLlm.chooseService', () => {
   it('ignores inactive services', async () => {
     const llm = new MockLlm();
     const catalog = [
-      entry({ id: 1, name: 'Gold Feed Cheap', priceMotes: '100000000', active: false }),
-      entry({ id: 2, name: 'Gold Feed', priceMotes: '300000000' }),
+      entry({ id: 1, name: 'Gold Feed Cheap', priceYocto: '100000000000000000000000', active: false }),
+      entry({ id: 2, name: 'Gold Feed', priceYocto: '300000000000000000000000' }),
     ];
     const choice = await llm.chooseService('gold price', catalog);
     expect(choice.serviceId).toBe(2);
@@ -172,8 +196,8 @@ describe('MockLlm.chooseService', () => {
   it('falls back to cheapest active when nothing matches the keywords', async () => {
     const llm = new MockLlm();
     const catalog = [
-      entry({ id: 1, name: 'Weather Feed', description: 'rain or shine', priceMotes: '700000000' }),
-      entry({ id: 2, name: 'Stocks Feed', description: 'equities', priceMotes: '300000000' }),
+      entry({ id: 1, name: 'Weather Feed', description: 'rain or shine', priceYocto: '700000000000000000000000' }),
+      entry({ id: 2, name: 'Stocks Feed', description: 'equities', priceYocto: '300000000000000000000000' }),
     ];
     const choice = await llm.chooseService('quantum flux telemetry', catalog);
     expect(choice.serviceId).toBe(2);
@@ -206,21 +230,36 @@ describe('runBuyerAgent', () => {
       name: 'Random Numbers',
       description: 'entropy as a service',
       endpointUrl: 'http://gateway/svc/2',
-      priceMotes: '100000000',
+      priceYocto: '100000000000000000000000',
     });
     const attestation: AttestationRecord = {
       serviceId: 1,
-      paymentDeployHash: DEPLOY_HASH,
+      nonce: '424242',
+      paymentTxHash: PAYMENT_TX,
       success: true,
       timestamp: Date.now(),
-      recordTxHash: ATTEST_TX,
     };
-    const chain = makeChain({ services: [gold, cheapIrrelevant], attestations: [attestation] });
+    const attestationEvent: ActivityEvent = {
+      kind: 'attestation',
+      serviceId: 1,
+      account: 'attestor.mock',
+      txHash: ATTEST_TX,
+      blockHeight: 3,
+      success: true,
+      nonce: '424242',
+      timestamp: Date.now(),
+      detail: 'attestation success for service 1',
+    };
+    const chain = makeChain({
+      services: [gold, cheapIrrelevant],
+      attestations: [attestation],
+      activity: [attestationEvent],
+    });
     const logPath = tmpLogPath();
 
     const report = await runBuyerAgent({
       task: 'Get the gold price and summarize it for a treasury report',
-      budgetCspr: '5',
+      budgetNear: '5',
       chain,
       signer: SIGNER,
       llm: new MockLlm(),
@@ -234,15 +273,15 @@ describe('runBuyerAgent', () => {
     // picked the matching service, not the cheaper irrelevant one
     expect(report.chosenServiceId).toBe(1);
     expect(report.paid).toBe(true);
-    expect(report.deployHash).toBe(DEPLOY_HASH);
+    expect(report.paymentTxHash).toBe(PAYMENT_TX);
     expect(report.attestationTxHash).toBe(ATTEST_TX);
-    expect(report.spentMotes).toBe('500000000');
+    expect(report.spentYocto).toBe('500000000000000000000000');
     expect(report.summary).toContain('3310.25');
     expect(report.reason.length).toBeGreaterThan(0);
 
-    expect(chain.transfer).toHaveBeenCalledTimes(1);
-    expect(chain.transfer).toHaveBeenCalledWith(
-      { to: TARGET, amountMotes: '500000000', transferId: '424242' },
+    expect(chain.pay).toHaveBeenCalledTimes(1);
+    expect(chain.pay).toHaveBeenCalledWith(
+      { serviceId: 1, nonce: '424242', depositYocto: '500000000000000000000000' },
       SIGNER,
     );
 
@@ -264,14 +303,14 @@ describe('runBuyerAgent', () => {
   });
 
   it('refuses BEFORE paying when the price exceeds the budget', async () => {
-    const gold = makeService(); // 0.5 CSPR
+    const gold = makeService(); // 0.5 NEAR
     const chain = makeChain({ services: [gold] });
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     const logPath = tmpLogPath();
 
     const report = await runBuyerAgent({
       task: 'gold price',
-      budgetCspr: '0.1',
+      budgetNear: '0.1',
       chain,
       signer: SIGNER,
       llm: new MockLlm(),
@@ -281,11 +320,11 @@ describe('runBuyerAgent', () => {
     });
 
     expect(report.paid).toBe(false);
-    expect(report.deployHash).toBeNull();
+    expect(report.paymentTxHash).toBeNull();
     expect(report.attestationTxHash).toBeNull();
-    expect(report.spentMotes).toBe('0');
+    expect(report.spentYocto).toBe('0');
     expect(report.summary).toContain('refused');
-    expect(chain.transfer).not.toHaveBeenCalled();
+    expect(chain.pay).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled(); // never even contacted the service
 
     const lines = readFileSync(logPath, 'utf8').trim().split('\n');
@@ -295,12 +334,12 @@ describe('runBuyerAgent', () => {
   });
 
   it('allows a price exactly equal to the budget', async () => {
-    const gold = makeService(); // 0.5 CSPR
+    const gold = makeService(); // 0.5 NEAR
     const chain = makeChain({ services: [gold] });
 
     const report = await runBuyerAgent({
       task: 'gold price',
-      budgetCspr: '0.5',
+      budgetNear: '0.5',
       chain,
       signer: SIGNER,
       llm: new MockLlm(),
@@ -311,19 +350,19 @@ describe('runBuyerAgent', () => {
       print: silent,
     });
     expect(report.paid).toBe(true);
-    expect(report.spentMotes).toBe('500000000');
+    expect(report.spentYocto).toBe('500000000000000000000000');
   });
 
   it('converts a PRICE_EXCEEDED invoice (server asks more than budget) into a refusal report', async () => {
     // On-chain price fits the budget, but the invoice demands more.
-    const gold = makeService({ priceMotes: '400000000' });
+    const gold = makeService({ priceYocto: '400000000000000000000000' });
     const chain = makeChain({ services: [gold] });
     const base = invoiceFor(gold);
     const fetchImpl = vi.fn(async (): Promise<Response> =>
       json(
         {
           ...base,
-          accepts: [{ ...base.accepts[0], maxAmountRequired: '900000000' }],
+          accepts: [{ ...base.accepts[0], maxAmountRequired: '900000000000000000000000' }],
         },
         402,
       ),
@@ -331,7 +370,7 @@ describe('runBuyerAgent', () => {
 
     const report = await runBuyerAgent({
       task: 'gold price',
-      budgetCspr: '0.5',
+      budgetNear: '0.5',
       chain,
       signer: SIGNER,
       llm: new MockLlm(),
@@ -341,9 +380,9 @@ describe('runBuyerAgent', () => {
     });
 
     expect(report.paid).toBe(false);
-    expect(report.spentMotes).toBe('0');
-    expect(report.deployHash).toBeNull();
-    expect(chain.transfer).not.toHaveBeenCalled();
+    expect(report.spentYocto).toBe('0');
+    expect(report.paymentTxHash).toBeNull();
+    expect(chain.pay).not.toHaveBeenCalled();
   });
 
   it('returns attestationTxHash null when no attestation lands within the timeout', async () => {
@@ -352,7 +391,7 @@ describe('runBuyerAgent', () => {
 
     const report = await runBuyerAgent({
       task: 'gold price',
-      budgetCspr: '5',
+      budgetNear: '5',
       chain,
       signer: SIGNER,
       llm: new MockLlm(),
@@ -372,7 +411,7 @@ describe('runBuyerAgent', () => {
 
     const report: BuyerRunReport = await runBuyerAgent({
       task: 'gold price',
-      budgetCspr: '5',
+      budgetNear: '5',
       chain,
       signer: SIGNER,
       llm: new MockLlm(),
@@ -386,24 +425,24 @@ describe('runBuyerAgent', () => {
     expect(Object.keys(report).sort()).toEqual([
       'attestationTxHash',
       'chosenServiceId',
-      'deployHash',
       'paid',
+      'paymentTxHash',
       'reason',
-      'spentMotes',
+      'spentYocto',
       'summary',
     ]);
     expect(typeof report.chosenServiceId).toBe('number');
     expect(typeof report.reason).toBe('string');
     expect(typeof report.paid).toBe('boolean');
     expect(typeof report.summary).toBe('string');
-    expect(typeof report.spentMotes).toBe('string');
+    expect(typeof report.spentYocto).toBe('string');
   });
 
   it('throws NO_SERVICES on an empty catalog', async () => {
     const chain = makeChain({ services: [] });
     const err = await runBuyerAgent({
       task: 'gold price',
-      budgetCspr: '5',
+      budgetNear: '5',
       chain,
       signer: SIGNER,
       llm: new MockLlm(),

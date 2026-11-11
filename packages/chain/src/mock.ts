@@ -1,40 +1,29 @@
-import { createHash } from 'node:crypto';
 import { AgentGateError, stripTrailingSlashes } from '@agentgate/shared';
 import type {
   ActivityEvent,
   AnySigner,
   AttestationRecord,
   ChainClient,
-  Motes,
+  MockSigner,
+  PaymentRecord,
   RegisterServiceInput,
   ServiceRecord,
   ServiceScore,
-  SignerRef,
+  VerifyPaymentQuery,
   VerifyResult,
-  VerifyTransferQuery,
+  Yocto,
 } from '@agentgate/shared';
 
-const MOTES_RE = /^(0|[1-9]\d*)$/;
-const U64_MAX = 18_446_744_073_709_551_615n;
+const YOCTO_RE = /^(0|[1-9]\d*)$/;
+/** Same nonce rule as the registry contract. */
+const NONCE_RE = /^[0-9]{1,20}$/;
 
-/**
- * Mock account-hash derivation used by the devnet (SPEC §4):
- * `"account-hash-" + sha256(publicKey) hex` (64 hex chars).
- */
-export function mockAccountHash(publicKey: string): string {
-  if (typeof publicKey !== 'string' || publicKey.trim() === '') {
-    throw new AgentGateError('invalid_public_key', 'publicKey must be a non-empty string', 400);
-  }
-  return `account-hash-${createHash('sha256').update(publicKey).digest('hex')}`;
-}
-
-/** Shape of the devnet's GET /chain/transfers/:deployHash response. */
+/** Shape of the devnet's GET /chain/transfers/:txHash response. */
 interface DevnetTransfer {
-  deployHash: string;
-  fromPublicKey: string;
+  txHash: string;
   from: string;
   to: string;
-  amountMotes: Motes;
+  amountYocto: Yocto;
   transferId: string;
   timestamp: number;
 }
@@ -46,7 +35,7 @@ function invalid(message: string): AgentGateError {
   return new AgentGateError('invalid_query', message, 400);
 }
 
-function requireMockSigner(signer: AnySigner): SignerRef {
+function requireMockSigner(signer: AnySigner): MockSigner {
   if (signer.kind !== 'mock') {
     throw new AgentGateError(
       'invalid_signer',
@@ -54,10 +43,14 @@ function requireMockSigner(signer: AnySigner): SignerRef {
       400,
     );
   }
-  if (signer.publicKey.trim() === '') {
-    throw new AgentGateError('invalid_signer', 'mock signer publicKey must not be empty', 400);
+  if (signer.accountId.trim() === '') {
+    throw new AgentGateError('invalid_signer', 'mock signer accountId must not be empty', 400);
   }
   return signer;
+}
+
+function notYet(method: string): AgentGateError {
+  return new AgentGateError('not_implemented', `MockChainHttpClient.${method} lands in Task 3`, 501);
 }
 
 function assertServiceId(id: number): void {
@@ -67,11 +60,13 @@ function assertServiceId(id: number): void {
 }
 
 /**
- * ChainClient backed by the local devnet's REST API (SPEC §4).
- * Maps every read/write 1:1 onto the SPEC §3 routes.
+ * ChainClient backed by the local devnet's REST API.
+ * Maps every read/write 1:1 onto the devnet routes.
+ * TODO(Task 3): mirror the NEAR registry routes (`/registry/*`), `network = 'near-mock'`.
  */
 export class MockChainHttpClient implements ChainClient {
   readonly network = 'mock';
+  readonly registryId = 'registry.mock';
   private readonly baseUrl: string;
 
   constructor(devnetUrl: string) {
@@ -175,62 +170,70 @@ export class MockChainHttpClient implements ChainClient {
     return await this.get<ActivityEvent[]>(`/chain/activity${qs}`);
   }
 
-  async getBalance(account: string): Promise<Motes> {
-    if (typeof account !== 'string' || account.trim() === '') {
-      throw invalid('account must be a non-empty string');
+  async getBalance(accountId: string): Promise<Yocto> {
+    if (typeof accountId !== 'string' || accountId.trim() === '') {
+      throw invalid('accountId must be a non-empty string');
     }
-    const result = await this.get<{ account: string; balanceMotes: Motes }>(
-      `/chain/balance/${encodeURIComponent(account)}`,
+    const result = await this.get<{ account: string; balanceYocto: Yocto }>(
+      `/chain/balance/${encodeURIComponent(accountId)}`,
     );
-    return result.balanceMotes;
+    return result.balanceYocto;
+  }
+
+  /** TODO(Task 3): GET the registry payment record by nonce. */
+  async getPayment(_nonce: string): Promise<PaymentRecord | null> {
+    throw notYet('getPayment');
+  }
+
+  /** TODO(Task 3): devnet accounts get deterministic full-access keys. */
+  async isFullAccessKey(_accountId: string, _publicKey: string): Promise<boolean> {
+    throw notYet('isFullAccessKey');
   }
 
   /**
-   * Looks up the transfer by deployHash, then checks target → amount →
-   * transfer_id → age (SPEC §4). `pending` never occurs in mock mode because
-   * devnet transfers settle synchronously.
+   * Looks up the transfer by txHash, then checks nonce → service target →
+   * amount → age. `pending` never occurs in mock mode because devnet transfers
+   * settle synchronously.
+   * TODO(Task 3): verify against the registry payment record (by nonce), with
+   * `already_attested` and `selfPaid` from the contract rules.
    */
-  async verifyTransfer(q: VerifyTransferQuery): Promise<VerifyResult> {
-    if (typeof q.deployHash !== 'string' || q.deployHash.trim() === '') {
-      throw invalid('deployHash must be a non-empty string');
+  async verifyPayment(q: VerifyPaymentQuery): Promise<VerifyResult> {
+    if (typeof q.nonce !== 'string' || !NONCE_RE.test(q.nonce)) {
+      throw invalid('nonce must be 1–20 decimal digits');
     }
-    if (typeof q.expectedTarget !== 'string' || q.expectedTarget.trim() === '') {
-      throw invalid('expectedTarget must be a non-empty string');
-    }
-    if (typeof q.minAmountMotes !== 'string' || !MOTES_RE.test(q.minAmountMotes)) {
-      throw invalid('minAmountMotes must be a motes decimal string');
-    }
-    if (typeof q.expectedTransferId !== 'string' || !MOTES_RE.test(q.expectedTransferId)) {
-      throw invalid('expectedTransferId must be a u64 decimal string');
+    assertServiceId(q.serviceId);
+    if (typeof q.minAmountYocto !== 'string' || !YOCTO_RE.test(q.minAmountYocto)) {
+      throw invalid('minAmountYocto must be a yocto decimal string');
     }
     if (typeof q.maxAgeMs !== 'number' || !Number.isFinite(q.maxAgeMs) || q.maxAgeMs < 0) {
       throw invalid('maxAgeMs must be a non-negative number');
     }
+    if (q.txHash === undefined || q.txHash.trim() === '') return { ok: false, reason: 'not_found' };
 
     const transfer = await this.request<DevnetTransfer>(
       'GET',
-      `/chain/transfers/${encodeURIComponent(q.deployHash)}`,
+      `/chain/transfers/${encodeURIComponent(q.txHash)}`,
       undefined,
       true,
     );
     if (transfer === null) return { ok: false, reason: 'not_found' };
-    if (transfer.to.toLowerCase() !== q.expectedTarget.toLowerCase()) {
-      return { ok: false, reason: 'wrong_target' };
+    if (transfer.transferId !== q.nonce) return { ok: false, reason: 'tx_mismatch' };
+    const service = await this.getService(q.serviceId);
+    if (service === null || transfer.to !== service.paymentTarget) {
+      return { ok: false, reason: 'wrong_service' };
     }
-    if (BigInt(transfer.amountMotes) < BigInt(q.minAmountMotes)) {
+    if (BigInt(transfer.amountYocto) < BigInt(q.minAmountYocto)) {
       return { ok: false, reason: 'amount_too_low' };
-    }
-    if (BigInt(transfer.transferId) !== BigInt(q.expectedTransferId)) {
-      return { ok: false, reason: 'wrong_transfer_id' };
     }
     if (Date.now() - transfer.timestamp > q.maxAgeMs) {
       return { ok: false, reason: 'expired' };
     }
     return {
       ok: true,
-      amountMotes: transfer.amountMotes,
-      from: transfer.from,
+      amountYocto: transfer.amountYocto,
+      payer: transfer.from,
       timestamp: transfer.timestamp,
+      selfPaid: transfer.from === service.owner || transfer.from === service.paymentTarget,
     };
   }
 
@@ -243,21 +246,22 @@ export class MockChainHttpClient implements ChainClient {
     const mockSigner = requireMockSigner(signer);
     return await this.post<{ serviceId: number; txHash: string }>('/chain/register-service', {
       ...input,
-      ownerPublicKey: mockSigner.publicKey,
+      ownerAccountId: mockSigner.accountId,
     });
   }
 
   async recordAttestation(
-    input: { serviceId: number; paymentDeployHash: string; success: boolean },
+    input: { serviceId: number; nonce: string; paymentTxHash: string; success: boolean },
     signer: AnySigner,
   ): Promise<{ txHash: string }> {
     const mockSigner = requireMockSigner(signer);
     assertServiceId(input.serviceId);
     return await this.post<{ txHash: string }>('/chain/attestations', {
       serviceId: input.serviceId,
-      paymentDeployHash: input.paymentDeployHash,
+      nonce: input.nonce,
+      paymentTxHash: input.paymentTxHash,
       success: input.success,
-      byPublicKey: mockSigner.publicKey,
+      byAccountId: mockSigner.accountId,
     });
   }
 
@@ -270,34 +274,37 @@ export class MockChainHttpClient implements ChainClient {
     assertServiceId(serviceId);
     return await this.post<{ txHash: string }>(`/chain/services/${serviceId}/active`, {
       active,
-      byPublicKey: mockSigner.publicKey,
+      byAccountId: mockSigner.accountId,
     });
   }
 
-  async transfer(
-    input: { to: string; amountMotes: Motes; transferId: string },
+  /**
+   * Pays a service: moves `depositYocto` to the service's payment target,
+   * tagged with the invoice nonce.
+   * TODO(Task 3): call the devnet registry `pay` (price forwarded, storage fee kept, excess refunded).
+   */
+  async pay(
+    input: { serviceId: number; nonce: string; depositYocto: Yocto },
     signer: AnySigner,
-  ): Promise<{ deployHash: string }> {
+  ): Promise<{ txHash: string }> {
     const mockSigner = requireMockSigner(signer);
-    if (typeof input.to !== 'string' || input.to.trim() === '') {
-      throw invalid('"to" must be a non-empty account string');
+    assertServiceId(input.serviceId);
+    if (typeof input.nonce !== 'string' || !NONCE_RE.test(input.nonce)) {
+      throw invalid('nonce must be 1–20 decimal digits');
     }
-    if (typeof input.amountMotes !== 'string' || !MOTES_RE.test(input.amountMotes)) {
-      throw invalid('amountMotes must be a motes decimal string');
+    if (typeof input.depositYocto !== 'string' || !YOCTO_RE.test(input.depositYocto)) {
+      throw invalid('depositYocto must be a yocto decimal string');
     }
-    if (
-      typeof input.transferId !== 'string' ||
-      !MOTES_RE.test(input.transferId) ||
-      BigInt(input.transferId) > U64_MAX
-    ) {
-      throw invalid('transferId must be a u64 decimal string');
+    const service = await this.getService(input.serviceId);
+    if (service === null) {
+      throw new AgentGateError('service_not_found', `no service with id ${input.serviceId}`, 404);
     }
-    const result = await this.post<{ deployHash: string; timestamp: number }>('/chain/transfers', {
-      fromPublicKey: mockSigner.publicKey,
-      to: input.to,
-      amountMotes: input.amountMotes,
-      transferId: input.transferId,
+    const result = await this.post<{ txHash: string; timestamp: number }>('/chain/transfers', {
+      fromAccountId: mockSigner.accountId,
+      to: service.paymentTarget,
+      amountYocto: input.depositYocto,
+      transferId: input.nonce,
     });
-    return { deployHash: result.deployHash };
+    return { txHash: result.txHash };
   }
 }
