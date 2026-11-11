@@ -29,6 +29,11 @@ function reqString(body: Record<string, unknown>, field: string, allowEmpty = fa
   return value;
 }
 
+/** An account id field: any string (empty included); `isNearAccountId` gives the verdict. */
+function reqAccountId(body: Record<string, unknown>, field: string): string {
+  return reqString(body, field, true);
+}
+
 function reqBool(body: Record<string, unknown>, field: string): boolean {
   const value = body[field];
   if (typeof value !== 'boolean') throw badRequest(`"${field}" must be a boolean`);
@@ -75,6 +80,18 @@ function parseLimit(req: Request, fallback: number): number {
   return limit;
 }
 
+/** The 4xx `status`/`statusCode` a framework (body-parser, the router) put on an error, or null. */
+function frameworkClientStatus(error: unknown): number | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const { status, statusCode } = error as { status?: unknown; statusCode?: unknown };
+  for (const candidate of [status, statusCode]) {
+    if (typeof candidate === 'number' && Number.isInteger(candidate) && candidate >= 400 && candidate <= 499) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 type SyncHandler = (req: Request, res: Response) => void;
 
 /**
@@ -118,7 +135,7 @@ export function createApp(deps: DevnetDeps = {}): Express {
     '/faucet',
     wrap((req, res) => {
       const body = asObject(req.body, 'request body');
-      res.json(state.faucet(reqString(body, 'accountId'), reqYocto(body, 'amountYocto')));
+      res.json(state.faucet(reqAccountId(body, 'accountId'), reqYocto(body, 'amountYocto')));
     }),
   );
 
@@ -151,14 +168,14 @@ export function createApp(deps: DevnetDeps = {}): Express {
       const input = asObject(body['input'], '"input"');
       res.json(
         state.registerService(
-          reqString(body, 'signer'),
+          reqAccountId(body, 'signer'),
           {
             name: reqString(input, 'name', true), // blankness is the contract's ERR_EMPTY_NAME
             description: reqString(input, 'description', true),
             gatewayBaseUrl: reqString(input, 'gatewayBaseUrl', true),
             priceYocto: reqYocto(input, 'priceYocto'),
-            paymentTarget: reqString(input, 'paymentTarget'),
-            attestor: reqString(input, 'attestor'),
+            paymentTarget: reqAccountId(input, 'paymentTarget'),
+            attestor: reqAccountId(input, 'attestor'),
           },
           reqYocto(body, 'depositYocto'),
         ),
@@ -173,7 +190,7 @@ export function createApp(deps: DevnetDeps = {}): Express {
       const body = asObject(req.body, 'request body');
       res.json(
         state.pay(
-          reqString(body, 'signer'),
+          reqAccountId(body, 'signer'),
           reqServiceIdBody(body),
           reqString(body, 'nonce', true), // the shape is the contract's ERR_INVALID_NONCE
           reqYocto(body, 'depositYocto'),
@@ -189,7 +206,7 @@ export function createApp(deps: DevnetDeps = {}): Express {
       const body = asObject(req.body, 'request body');
       res.json(
         state.recordAttestation(
-          reqString(body, 'signer'),
+          reqAccountId(body, 'signer'),
           reqServiceIdBody(body),
           reqString(body, 'nonce', true), // an unknown nonce is the contract's ERR_PAYMENT_NOT_FOUND
           reqString(body, 'paymentTxHash', true),
@@ -204,7 +221,7 @@ export function createApp(deps: DevnetDeps = {}): Express {
     '/registry/active',
     wrap((req, res) => {
       const body = asObject(req.body, 'request body');
-      res.json(state.setActive(reqString(body, 'signer'), reqServiceIdBody(body), reqBool(body, 'active')));
+      res.json(state.setActive(reqAccountId(body, 'signer'), reqServiceIdBody(body), reqBool(body, 'active')));
     }),
   );
 
@@ -276,6 +293,16 @@ export function createApp(deps: DevnetDeps = {}): Express {
     }
     if (error instanceof AgentGateError) {
       res.status(error.httpStatus).json({ error: error.code, message: error.message });
+      return;
+    }
+    // Framework client errors keep their status: body-parser's 413 over the body limit, the
+    // router's 400 for a malformed percent-escape in a path parameter.
+    const status = frameworkClientStatus(error);
+    if (status !== null) {
+      res.status(status).json({
+        error: 'invalid_request',
+        message: error instanceof Error ? error.message : 'invalid request',
+      });
       return;
     }
     logger.error('devnet middleware error', {

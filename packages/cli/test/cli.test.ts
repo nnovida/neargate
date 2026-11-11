@@ -436,7 +436,14 @@ describe('createDemoAccounts', () => {
   });
 
   it('rejects a faucet answer without a usable key pair', async () => {
-    for (const keys of [{}, { publicKey: PUBLIC_KEY }, { publicKey: 'nope', secretKey: SECRET_KEY }]) {
+    const publicOnly = { publicKey: PUBLIC_KEY };
+    const keysOfWrongSize = [
+      { publicKey: 'ed25519:1', secretKey: SECRET_KEY }, // decodes to 1 byte
+      { publicKey: PUBLIC_KEY, secretKey: PUBLIC_KEY }, // a secret key must be 64 bytes
+      { publicKey: SECRET_KEY, secretKey: SECRET_KEY }, // a public key must be 32 bytes
+      { publicKey: PUBLIC_KEY, secretKey: 'ed25519:0OIl' }, // not base58
+    ];
+    for (const keys of [{}, publicOnly, { publicKey: 'nope', secretKey: SECRET_KEY }, ...keysOfWrongSize]) {
       const { impl } = makeFakeFetch(() => Response.json({ balanceYocto: THOUSAND_NEAR, ...keys }));
       await expect(
         createDemoAccounts({ devnetUrl: 'http://localhost:4030', fetchImpl: impl }),

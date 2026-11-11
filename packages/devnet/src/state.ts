@@ -15,6 +15,7 @@ import {
   parseYocto,
   stripTrailingSlashes,
 } from '@agentgate/shared';
+import { rustTrim } from './trim';
 import type {
   ActivityEvent,
   AttestationRecord,
@@ -39,6 +40,13 @@ export const ACTIVITY_CAP = 200;
  * register is unauthenticated here, so bound the registry to keep memory finite.
  */
 export const MAX_SERVICES = 1000;
+
+/**
+ * Memory guard for the in-process devnet, NOT a protocol rule: the contract stores payments
+ * forever. `pay` is unauthenticated here, so bound the payment table. Past the cap `pay` answers
+ * 429 `devnet_capacity`; payments are never evicted, because dropping one would reopen its nonce.
+ */
+export const MAX_PAYMENTS = 100_000;
 
 // Field limits in UTF-8 bytes, as lib.rs counts them (NAME_MAX, DESC_MAX, URL_MAX, TX_HASH_MAX).
 const NAME_MAX = 64;
@@ -69,7 +77,9 @@ export function deriveDevnetKey(accountId: string): DevnetKey {
     format: 'der',
     type: 'pkcs8',
   });
-  const publicBytes = Buffer.from(createPublicKey(privateKey).export({ format: 'jwk' }).x ?? '', 'base64url');
+  const x = createPublicKey(privateKey).export({ format: 'jwk' }).x;
+  if (x === undefined) throw new Error('node:crypto exported an ed25519 public key without its x coordinate');
+  const publicBytes = Buffer.from(x, 'base64url');
   return {
     publicKey: `ed25519:${base58Encode(publicBytes)}`,
     secretKey: `ed25519:${base58Encode(Buffer.concat([seed, publicBytes]))}`,
@@ -110,6 +120,11 @@ function checkLen(field: string, value: string, max: number): void {
   }
 }
 
+export interface DevnetStateOptions {
+  /** Stored-payment cap (default MAX_PAYMENTS); tests pass a small one. */
+  maxPayments?: number;
+}
+
 /**
  * In-memory mock chain: account balances in yoctoNEAR and the registry contract's state
  * (services, payments by nonce, scores, attestations, activity ring). Every write is atomic: it
@@ -117,6 +132,7 @@ function checkLen(field: string, value: string, max: number): void {
  * call changes nothing.
  */
 export class DevnetState {
+  private readonly maxPayments: number;
   private readonly balances = new Map<string, bigint>();
   private readonly services = new Map<number, InternalService>();
   private readonly scores = new Map<number, { total: number; success: number }>();
@@ -129,6 +145,10 @@ export class DevnetState {
   private txCounter = 0;
   private blockHeight = 0;
   private nextServiceId = 1;
+
+  constructor(options: DevnetStateOptions = {}) {
+    this.maxPayments = options.maxPayments ?? MAX_PAYMENTS;
+  }
 
   /** Starts a block for a successful mutating call and names its transaction. */
   private nextTx(payload: unknown): { txHash: string; blockHeight: number; timestamp: number } {
@@ -194,6 +214,7 @@ export class DevnetState {
 
   /** True iff the devnet knows the account (it has a balance record) and `publicKey` is its key. */
   hasFullAccessKey(accountId: string, publicKey: string): boolean {
+    assertAccountId(accountId, 'accountId');
     return this.balances.has(accountId) && deriveDevnetKey(accountId).publicKey === publicKey;
   }
 
@@ -212,7 +233,7 @@ export class DevnetState {
     assertAccountId(input.attestor, 'attestor');
     const priceYocto = parseYocto(input.priceYocto);
 
-    const name = input.name.trim();
+    const name = rustTrim(input.name); // Rust's trim, not JS's: see trim.ts
     if (name === '') throw contractError('ERR_EMPTY_NAME', 'the service name must not be blank');
     checkLen('name', name, NAME_MAX);
     checkLen('description', input.description, DESC_MAX);
@@ -297,6 +318,13 @@ export class DevnetState {
       throw contractError('ERR_INVALID_NONCE', 'the nonce must be 1 to 20 decimal digits');
     }
     if (this.payments.has(nonce)) throw contractError('ERR_NONCE_USED', 'nonce already paid');
+    if (this.payments.size >= this.maxPayments) {
+      throw new AgentGateError(
+        'devnet_capacity',
+        `the devnet stores at most ${this.maxPayments} payments`,
+        429,
+      );
+    }
 
     const { txHash, blockHeight, timestamp } = this.nextTx({ kind: 'pay', serviceId, nonce, payer: signer });
     this.move(signer, service.paymentTarget, price);
@@ -381,6 +409,7 @@ export class DevnetState {
       blockHeight,
       success,
       nonce,
+      paymentTxHash,
       timestamp,
       detail: `attested service #${serviceId} — ${success ? 'success' : 'failure'}`,
     });

@@ -63,6 +63,8 @@ export interface ActivityEvent {
   amountYocto?: Yocto;
   success?: boolean;
   nonce?: string;
+  /** The attested payment's tx hash (attestation events only); `txHash` stays the event's own tx. */
+  paymentTxHash?: string;
   timestamp: number;         // unix ms
   detail: string;            // human-readable one-liner for the dashboard feed
 }

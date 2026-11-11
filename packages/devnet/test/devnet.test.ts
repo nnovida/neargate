@@ -10,9 +10,18 @@ import {
   loadConfig,
   nearToYocto,
 } from '@agentgate/shared';
-import { ACTIVITY_CAP, MAX_ATTESTATIONS, MAX_SERVICES, deriveDevnetKey, startServer } from '../src/index';
+import type { Logger } from '@agentgate/shared';
+import {
+  ACTIVITY_CAP,
+  MAX_ATTESTATIONS,
+  MAX_PAYMENTS,
+  MAX_SERVICES,
+  deriveDevnetKey,
+  startServer,
+} from '../src/index';
 import type { RunningServer } from '../src/index';
 import { DevnetState } from '../src/state';
+import { rustTrim } from '../src/trim';
 
 const REGISTRY = 'registry.mock';
 const OWNER = 'owner.mock';
@@ -212,6 +221,51 @@ describe('devnet basics', () => {
     expect(body.error).toBe('invalid_json');
   });
 
+  it('answers framework 4xx errors with their own status and logs nothing as an error', async () => {
+    const errors: string[] = [];
+    const spy: Logger = {
+      name: 'spy',
+      level: 'error',
+      debug() {},
+      info() {},
+      warn() {},
+      error: (msg) => {
+        errors.push(msg);
+      },
+      child: () => spy,
+    };
+    const quiet = await startServer({ port: 0, logger: spy });
+    try {
+      const url = `http://127.0.0.1:${quiet.port}`;
+
+      // body-parser: over the 256kb limit -> 413
+      const tooBig = await fetch(`${url}/faucet`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accountId: 'big.mock', amountYocto: '1', pad: 'x'.repeat(300_000) }),
+      });
+      expect(tooBig.status).toBe(413);
+      const tooBigBody: any = await tooBig.json();
+      expect(tooBigBody.error).toBe('invalid_request');
+      expect(typeof tooBigBody.message).toBe('string');
+
+      // the router: a malformed percent-escape in a path parameter -> 400
+      for (const path of [
+        '/accounts/%E0%A4%A/balance',
+        '/accounts/x.mock/keys/%E0%A4%A',
+        '/registry/payments/%E0%A4%A',
+        '/registry/services/%E0%A4%A',
+      ]) {
+        const res = await fetch(`${url}${path}`);
+        expect(res.status, path).toBe(400);
+        expect(((await res.json()) as any).error, path).toBe('invalid_request');
+      }
+      expect(errors).toEqual([]);
+    } finally {
+      await quiet.close();
+    }
+  });
+
   it('rejects bad faucet requests: float amounts, a missing account id, amounts above u128', async () => {
     expect((await post('/faucet', { accountId: 'x.mock', amountYocto: '1.5' })).status).toBe(400);
     expect((await post('/faucet', { accountId: 'x.mock', amountYocto: 7 })).status).toBe(400);
@@ -236,6 +290,37 @@ describe('devnet basics', () => {
     expectErr(await pay(serviceId, freshNonce(), { signer: 'Bad Payer' }), 'ERR_INVALID_ACCOUNT_ID');
     expectErr(await attest(serviceId, freshNonce(), { signer: 'Bad Attestor' }), 'ERR_INVALID_ACCOUNT_ID');
     expectErr(await setActive(serviceId, false, 'Bad Owner'), 'ERR_INVALID_ACCOUNT_ID');
+  });
+});
+
+describe('account ids the devnet receives (ERR_INVALID_ACCOUNT_ID)', () => {
+  it('treats an empty string like any other malformed account id', async () => {
+    expectErr(await fund(''), 'ERR_INVALID_ACCOUNT_ID');
+    expectErr(await register({}, { signer: '' }), 'ERR_INVALID_ACCOUNT_ID');
+    expectErr(await register({ paymentTarget: '' }), 'ERR_INVALID_ACCOUNT_ID');
+    expectErr(await register({ attestor: '' }), 'ERR_INVALID_ACCOUNT_ID');
+    const serviceId = await newService();
+    expectErr(await pay(serviceId, freshNonce(), { signer: '' }), 'ERR_INVALID_ACCOUNT_ID');
+    expectErr(await attest(serviceId, freshNonce(), { signer: '' }), 'ERR_INVALID_ACCOUNT_ID');
+    expectErr(await setActive(serviceId, false, ''), 'ERR_INVALID_ACCOUNT_ID');
+  });
+
+  it('checks the signer\'s own id, then its balance, then the argument ids, then the contract rules', async () => {
+    // a malformed signer is rejected even when the attached deposit is huge
+    expectErr(
+      await register({ name: ' ', paymentTarget: 'Bad Target' }, { signer: 'Bad Signer', depositYocto: NEAR('999999999') }),
+      'ERR_INVALID_ACCOUNT_ID',
+    );
+    // an unfunded signer with a malformed paymentTarget or attestor is told about its balance first
+    const unfunded = 'unfunded-registrant.mock';
+    expectErr(await register({ paymentTarget: 'Bad Target' }, { signer: unfunded }), 'ERR_INSUFFICIENT_BALANCE');
+    expectErr(await register({ attestor: 'Bad Attestor' }, { signer: unfunded }), 'ERR_INSUFFICIENT_BALANCE');
+    // once it can cover the deposit, the malformed argument id is what fails, ahead of the contract rules
+    expectErr(
+      await register({ name: ' ', paymentTarget: 'Bad Target' }),
+      'ERR_INVALID_ACCOUNT_ID',
+    );
+    expectErr(await register({ name: ' ' }), 'ERR_EMPTY_NAME');
   });
 });
 
@@ -297,6 +382,9 @@ describe('devnet keys: one deterministic full-access ed25519 key per account', (
     expect((await get(keyPath(accountId, other))).body).toEqual({ fullAccess: false });
     expect((await get(keyPath(accountId, 'ed25519:notakey'))).body).toEqual({ fullAccess: false });
     expect((await get(keyPath(accountId, 'garbage'))).body).toEqual({ fullAccess: false });
+    // a malformed account id is a malformed argument, as on the balance route
+    expectErr(await get(keyPath('Bad Id', mine)), 'ERR_INVALID_ACCOUNT_ID');
+    expectErr(await get(keyPath('UPPER.mock', mine)), 'ERR_INVALID_ACCOUNT_ID');
     // an account the devnet has never seen has no keys, even with its own derived key
     const stranger = 'never-seen.mock';
     expect((await get(keyPath(stranger, deriveDevnetKey(stranger).publicKey))).body).toEqual({
@@ -359,6 +447,28 @@ describe('register_service', () => {
   it('trims the name before storing it', async () => {
     const id = await newService({ name: '  Padded Name \n' });
     expect((await get(`/registry/services/${id}`)).body.name).toBe('Padded Name');
+  });
+
+  it('trims like Rust str::trim: Unicode White_Space only, so U+0085 goes and U+FEFF stays', async () => {
+    // every White_Space character, front and back
+    const whiteSpace = '\t\n\v\f\r \u0085\u00a0\u1680\u2000\u2001\u2009\u200a\u2028\u2029\u202f\u205f\u3000';
+    const padded = await register({ name: `${whiteSpace}Spaced${whiteSpace}` });
+    expect(padded.status).toBe(200);
+    expect((await get(`/registry/services/${padded.body.serviceId}`)).body.name).toBe('Spaced');
+
+    // U+0085 alone is blank to Rust (but not to JS trim)
+    expectErr(await register({ name: '\u0085' }), 'ERR_EMPTY_NAME');
+    expectErr(await register({ name: '\u0085\u2028 \u3000' }), 'ERR_EMPTY_NAME');
+
+    // U+FEFF and U+200B are not White_Space in Rust: a name made of them is not blank, and is kept
+    for (const name of ['\ufeff', '\u200b', '\ufeffName']) {
+      const kept = await register({ name });
+      expect(kept.status, JSON.stringify(name)).toBe(200);
+      expect((await get(`/registry/services/${kept.body.serviceId}`)).body.name).toBe(name);
+    }
+
+    // the byte limit applies to the trimmed name
+    expect((await register({ name: `${'\u3000'.repeat(20)}${'n'.repeat(64)}` })).status).toBe(200);
   });
 
   it('ERR_EMPTY_NAME for a blank name', async () => {
@@ -827,6 +937,11 @@ describe('activity feed', () => {
     expect(payment).toMatchObject({ account: buyer, txHash: paid.body.txHash, amountYocto: PRICE, nonce });
     expect(payment.detail).toBe(`${buyer} paid 0.5 NEAR to service #${serviceId}`);
     expect(att).toMatchObject({ account: owner, txHash: attested.body.txHash, success: true, nonce });
+    // an attestation names the payment it attests; its own tx hash stays `txHash`
+    expect(att.paymentTxHash).toBe(paid.body.txHash);
+    expect(att.txHash).not.toBe(att.paymentTxHash);
+    expect(registered).not.toHaveProperty('paymentTxHash');
+    expect(payment).not.toHaveProperty('paymentTxHash');
     expect(att.detail).toBe(`attested service #${serviceId} — success`);
 
     for (const e of mine) {
@@ -910,6 +1025,41 @@ describe('activity feed', () => {
   });
 });
 
+describe('DevnetState payments memory guard', () => {
+  it(`caps stored payments at ${MAX_PAYMENTS} by default and never evicts to make room`, () => {
+    expect(MAX_PAYMENTS).toBe(100_000);
+
+    const state = new DevnetState({ maxPayments: 3 });
+    state.faucet('guard-owner.mock', NEAR('10'));
+    state.faucet('guard-buyer.mock', NEAR('10'));
+    const { serviceId } = state.registerService(
+      'guard-owner.mock',
+      { name: 'svc', description: '', gatewayBaseUrl: GATEWAY, priceYocto: PRICE, paymentTarget: TARGET, attestor: ATTESTOR },
+      REG_DEPOSIT,
+    );
+    const deposit = (BigInt(PRICE) + BigInt(FEE)).toString();
+    for (const nonce of ['1', '2', '3']) state.pay('guard-buyer.mock', serviceId, nonce, deposit);
+
+    const balanceBefore = state.getBalance('guard-buyer.mock');
+    expect(() => state.pay('guard-buyer.mock', serviceId, '4', deposit)).toThrowError(
+      expect.objectContaining({ code: 'devnet_capacity', httpStatus: 429 }),
+    );
+    // the refused call took no money and burned no nonce
+    expect(state.getBalance('guard-buyer.mock')).toBe(balanceBefore);
+    expect(() => state.getPayment('4')).toThrowError(expect.objectContaining({ httpStatus: 404 }));
+
+    // nothing was evicted: the first nonces are still single-use
+    expect(() => state.pay('guard-buyer.mock', serviceId, '1', deposit)).toThrowError(
+      expect.objectContaining({ code: 'ERR_NONCE_USED' }),
+    );
+    expect(state.getPayment('1').payer).toBe('guard-buyer.mock');
+    // the contract's own rejections still win over the guard
+    expect(() => state.pay('guard-buyer.mock', serviceId, 'x', deposit)).toThrowError(
+      expect.objectContaining({ code: 'ERR_INVALID_NONCE' }),
+    );
+  });
+});
+
 describe('DevnetState memory guard', () => {
   it(`caps the registry at ${MAX_SERVICES} services (a devnet-only guard, not a protocol rule)`, () => {
     const state = new DevnetState();
@@ -932,5 +1082,22 @@ describe('DevnetState memory guard', () => {
     expect(BigInt(state.getBalance('guard-owner.mock'))).toBe(
       BigInt(NEAR('1000')) - BigInt(MAX_SERVICES) * BigInt(REG_DEPOSIT),
     );
+  });
+});
+
+describe('rustTrim', () => {
+  it('strips exactly the Unicode White_Space set from both ends', () => {
+    expect(rustTrim('  a b  ')).toBe('a b');
+    expect(rustTrim('\u0085a\u0085')).toBe('a');
+    expect(rustTrim('\ufeffa\ufeff')).toBe('\ufeffa\ufeff');
+    expect(rustTrim('\u200ba\u200b')).toBe('\u200ba\u200b');
+    expect(rustTrim('')).toBe('');
+    expect(rustTrim(' \t\n ')).toBe('');
+  });
+
+  it('is linear on long whitespace runs with a non-space tail (no regex backtracking)', () => {
+    const started = Date.now();
+    expect(rustTrim(`${' '.repeat(200_000)}x${' '.repeat(10)}y`)).toBe(`x${' '.repeat(10)}y`);
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 });

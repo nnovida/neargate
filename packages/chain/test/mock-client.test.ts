@@ -336,6 +336,14 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
     const payment = activity.find((e) => e.kind === 'payment' && e.nonce === nonce);
     expect(payment).toMatchObject({ serviceId, account: BUYER.accountId, txHash: payTx, amountYocto: PRICE });
 
+    // an attestation event names the payment it attests (R33); its own hash stays txHash
+    const attestation = activity.find((e) => e.kind === 'attestation' && e.nonce === nonce);
+    expect(attestation).toMatchObject({ serviceId, account: ATTESTOR.accountId, paymentTxHash: payTx });
+    expect(attestation?.txHash).not.toBe(payTx);
+    for (const event of activity.filter((e) => e.kind !== 'attestation')) {
+      expect(event).not.toHaveProperty('paymentTxHash');
+    }
+
     expect(await chain.listRecentActivity(2)).toHaveLength(2);
     expect((await chain.listRecentActivity())[0]).toEqual(activity[0]);
   });
@@ -348,6 +356,7 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
     expect(await chain.isFullAccessKey(OWNER.accountId, buyer.publicKey)).toBe(false);
     expect(await chain.isFullAccessKey(OWNER.accountId, 'ed25519:nope')).toBe(false);
     expect(await chain.isFullAccessKey('never-seen.mock', owner.publicKey)).toBe(false);
+    await expectContractError(chain.isFullAccessKey('Bad Id', owner.publicKey), 'ERR_INVALID_ACCOUNT_ID');
   });
 
   it('rejects non-mock signers and empty arguments before touching the devnet', async () => {

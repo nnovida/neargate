@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { Yocto } from '@agentgate/shared';
-import { AgentGateError, nearToYocto } from '@agentgate/shared';
+import { AgentGateError, base58Decode, nearToYocto } from '@agentgate/shared';
 import type { FetchLike } from './types';
 import { normalizeBaseUrl } from './validate';
 
@@ -38,8 +38,14 @@ export interface DemoAccountsResult {
   publicKeyLines: [string, string];
 }
 
-function isEd25519Key(value: unknown): value is string {
-  return typeof value === 'string' && /^ed25519:[1-9A-HJ-NP-Za-km-z]+$/.test(value);
+/** `ed25519:<base58>` whose payload decodes to exactly `bytes` bytes (32 public, 64 secret). */
+function isEd25519Key(value: unknown, bytes: number): value is string {
+  if (typeof value !== 'string' || !value.startsWith('ed25519:')) return false;
+  try {
+    return base58Decode(value.slice('ed25519:'.length)).length === bytes;
+  } catch {
+    return false;
+  }
 }
 
 /** `<role>-<8 random hex>.mock` — a fresh, valid NEAR-style account id on the mock devnet. */
@@ -115,7 +121,7 @@ export async function createDemoAccounts(
         502,
       );
     }
-    if (!isEd25519Key(publicKey) || !isEd25519Key(secretKey)) {
+    if (!isEd25519Key(publicKey, 32) || !isEd25519Key(secretKey, 64)) {
       throw new AgentGateError(
         'FAUCET_FAILED',
         `faucet for ${role} returned a malformed key pair (expected ed25519:<base58> strings)`,

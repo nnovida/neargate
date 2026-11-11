@@ -5,7 +5,7 @@ import type { DevnetDeps } from './app';
 
 export { createApp } from './app';
 export type { DevnetDeps } from './app';
-export { ACTIVITY_CAP, MAX_ATTESTATIONS, MAX_SERVICES, deriveDevnetKey } from './state';
+export { ACTIVITY_CAP, MAX_ATTESTATIONS, MAX_PAYMENTS, MAX_SERVICES, deriveDevnetKey } from './state';
 export type { DevnetKey } from './state';
 
 export interface DevnetStartOpts extends DevnetDeps {
