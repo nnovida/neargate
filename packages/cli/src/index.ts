@@ -15,6 +15,7 @@ export {
   type BuyServiceResult,
 } from './buy';
 export {
+  balanceAccountArg,
   depositToEscrow,
   withdrawFromEscrow,
   escrowBalance,

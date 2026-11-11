@@ -117,7 +117,10 @@ export default function Page() {
         minus what it has already spent in the run, and then hands the client exactly that approved
         total as its cap, so an invoice that grew after the check is refused. The cap covers a{' '}
         <M>--from-escrow</M> payment the same way, and the client also reads the escrow first and
-        refuses (<M>ERR_ESCROW_INSUFFICIENT</M>) before sending anything it cannot pay.
+        refuses (<M>ERR_ESCROW_INSUFFICIENT</M>) before sending anything it cannot pay. Because{' '}
+        <M>pay_from_escrow</M> carries no amount and debits the service’s on-chain price whatever the
+        invoice says, the client first checks the invoice’s total against the registry and refuses a
+        differing one (<M>PRICE_MISMATCH</M>), so the cap holds for escrow payments too.
       </P>
       <H3 id="payment-self">Self-payment guard</H3>
       <P>
@@ -244,8 +247,10 @@ export default function Page() {
         An agent key restricted to <M>pay_from_escrow</M> can spend the escrow and nothing else.
         Withdrawing needs a full-access key (<M>withdraw_escrow</M> attaches 1 yocto, which a
         function-call key cannot). The escrow is the spending limit: a leaked agent key can spend all
-        of it, on any active service, and no more. It cannot touch the rest of the account, change a
-        service or move NEAR anywhere else.
+        of it, on any active service, and no more NEAR than that. Its gas, though, comes from the
+        account’s own balance, not from the escrow: a leaked key can also burn gas from the account
+        balance up to its allowance, so set the allowance low. Apart from that gas it cannot touch
+        the rest of the account, change a service or move NEAR anywhere else.
       </Callout>
       <DocTable
         head={['What', 'How it is handled']}
@@ -260,7 +265,7 @@ export default function Page() {
           ],
           [
             'The key’s allowance',
-            'Pays only the key’s gas, a small amount per call. Set it low; it is not the spending limit.',
+            'Pays only the key’s gas, a small amount per call, and that gas is drawn from the account balance, not from the escrow. A leaked key can burn gas from the account balance up to its allowance, so set it low; it is not the spending limit.',
           ],
           [
             'The key file',

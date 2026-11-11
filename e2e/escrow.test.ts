@@ -93,7 +93,15 @@ describe('escrow rail (e2e, mock stack)', () => {
         {
           cwd: REPO_ROOT,
           // Never inherit the host shell's NearGate settings.
-          env: { PATH: process.env['PATH'] ?? '', HOME: home, DEVNET_URL: devnetUrl, MOCK_BUYER_ACCOUNT: buyer.accountId, ...envOver },
+          env: {
+            PATH: process.env['PATH'] ?? '',
+            HOME: home,
+            DEVNET_URL: devnetUrl,
+            MOCK_BUYER_ACCOUNT: buyer.accountId,
+            // Live-mode children must never reach a real RPC, whatever the tests below do: nothing listens here.
+            NEAR_RPC_URL: 'http://127.0.0.1:9',
+            ...envOver,
+          },
           timeout: 20_000,
         },
         (error, stdout, stderr) => {
@@ -270,6 +278,16 @@ describe('escrow rail (e2e, mock stack)', () => {
       const run = await runCli(['escrow', 'balance', buyer.accountId, '--mode', 'mock'], { kind: 'mock', accountId: 'someone-else.mock' });
       expect(run.code, run.stderr).toBe(0);
       expect(run.stdout).toBe(`account:  ${buyer.accountId}\nescrow:   0.998 NEAR\n`);
+    });
+
+    it('`escrow balance <account> --account <other>` names two accounts: exit 1, nothing read', async () => {
+      const run = await runCli(['escrow', 'balance', buyer.accountId, '--account', 'someone-else.mock', '--mode', 'mock'], buyer);
+      expect(run.code).toBe(1);
+      expect(run.stdout).toBe('');
+      expect(run.stderr).toMatch(/^error: INVALID_INPUT: escrow balance got two different accounts/);
+      // the same account twice is fine
+      const same = await runCli(['escrow', 'balance', buyer.accountId, '--account', buyer.accountId, '--mode', 'mock'], buyer);
+      expect(same.code, same.stderr).toBe(0);
     });
 
     it('`buy --from-escrow` prints the body on stdout and a receipt that says the escrow paid', async () => {

@@ -5,6 +5,7 @@ import type { Action } from 'near-api-js';
 import { AgentGateError, isEd25519PublicKey, isNearAccountId, parseYocto } from '@agentgate/shared';
 import type { AnySigner, NearNetwork, Yocto } from '@agentgate/shared';
 import { requireNearSigner } from './near-args';
+import { TxTimeoutError } from './near-errors';
 import { defaultCredentialsPath } from './near-keys';
 
 /**
@@ -81,10 +82,11 @@ export interface ProvisionedAgentKey {
  * Creates an agent key: a fresh ed25519 pair, the secret written to its key file (mode 0600,
  * created exclusively, so an existing file is never overwritten), then `addAgentKey` puts the
  * public half on the account. The file comes first so the secret has a home before the key
- * exists on chain; if the AddKey fails the file is removed again, so a file here always names a
- * key that was added (a TX_TIMEOUT leaves that open: the tx may still land, and its key is then
- * an orphan nobody holds the secret of). The secret is returned and thrown nowhere: only the
- * file holds it.
+ * exists on chain. If the AddKey fails definitively (NEAR rejected it or it failed) the file is
+ * removed again. If its outcome is unknown (TX_TIMEOUT) the tx may still land and the file is then
+ * the only copy of the secret, so it is KEPT and the thrown TX_TIMEOUT names its path and the
+ * public key and says to delete it if the tx failed. The secret is returned and thrown nowhere:
+ * only the file holds it.
  */
 export async function provisionAgentKey(opts: ProvisionAgentKeyOpts): Promise<ProvisionedAgentKey> {
   const signer = requireNearSigner(opts.signer);
@@ -104,6 +106,15 @@ export async function provisionAgentKey(opts: ProvisionAgentKeyOpts): Promise<Pr
     const { txHash } = await opts.client.addAgentKey({ publicKey, allowanceYocto: opts.allowanceYocto }, signer);
     return { accountId: signer.accountId, publicKey, keyPath, txHash };
   } catch (err) {
+    if (err instanceof TxTimeoutError) {
+      // The AddKey was sent and its outcome is unknown: it may still land, and then this file is
+      // the only copy of the key's secret. Keep it (still 0600) and say where it is.
+      throw err.withNote(
+        `The new agent key was kept: public key ${publicKey}, key file ${keyPath} (mode 0600). ` +
+          'If that transaction failed, delete the file before retrying',
+      );
+    }
+    // A definitive failure: the key was never added, so the file would name a dead key.
     await unlink(keyPath).catch(() => undefined);
     throw err;
   }

@@ -5,7 +5,7 @@ import { KeyPair } from 'near-api-js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentGateError, nearToYocto } from '@agentgate/shared';
 import type { AnySigner } from '@agentgate/shared';
-import { agentKeyAction, agentKeyPath, loadNearSigner, provisionAgentKey } from '../src/index';
+import { TxTimeoutError, agentKeyAction, agentKeyPath, loadNearSigner, provisionAgentKey } from '../src/index';
 
 // The agent key helper: the AddKey action it builds, the key file it writes, and the order it
 // does them in. No RPC here (the LiveNearClient side is in near-live.test.ts); the secret key is
@@ -67,11 +67,18 @@ describe('agentKeyAction', () => {
     expect(Object.entries(action).filter(([k, v]) => k !== 'enum' && v !== undefined).map(([k]) => k)).toEqual(['addKey']);
   });
 
-  it('refuses a zero, unlimited or malformed allowance and a malformed key (a zero allowance cannot pay gas)', () => {
+  it('refuses a zero, empty, negative, fractional, exponent, non-numeric or above-u128 allowance, and a malformed key (a zero allowance cannot pay gas)', () => {
     const key = KeyPair.fromRandom('ed25519').getPublicKey().toString();
-    for (const allowance of ['0', '', '-1', '0.5', '1e24', 'abc']) {
-      expect(() => agentKeyAction(REGISTRY, key, allowance), allowance).toThrow(AgentGateError);
+    const aboveU128 = (2n ** 128n).toString(); // one past u128::MAX: the AddKey would not even serialize
+    for (const allowance of ['0', '', '-1', '0.5', '1e24', 'abc', aboveU128]) {
+      expect(() => agentKeyAction(REGISTRY, key, allowance), allowance).toThrow(
+        expect.objectContaining({ code: 'INVALID_AMOUNT' }),
+      );
     }
+    // the largest valid allowance is still one
+    expect(agentKeyAction(REGISTRY, key, (2n ** 128n - 1n).toString()).addKey?.accessKey.permission.functionCall?.allowance).toBe(
+      2n ** 128n - 1n,
+    );
     expect(() => agentKeyAction(REGISTRY, key, '0')).toThrow(
       expect.objectContaining({ code: 'INVALID_AMOUNT', message: expect.stringMatching(/allowance must be greater than zero/) }),
     );
@@ -131,15 +138,18 @@ describe('provisionAgentKey', () => {
     expect((await stat(join(home, '.near-credentials', 'testnet'))).mode & 0o777).toBe(0o700);
   });
 
-  posixOnly('is 0600 whatever the umask', async () => {
+  posixOnly('is 0600 whatever the umask: a umask that would make it read-only (0400) is overridden by the chmod', async () => {
     vi.stubEnv('HOME', home);
-    const previous = process.umask(0o000);
+    // The folder exists already (0700), so the umask only touches the file: open() creates it 0600 & ~0200 = 0400.
+    await mkdir(join(home, '.near-credentials', 'testnet'), { recursive: true, mode: 0o700 });
+    const previous = process.umask(0o200);
     try {
       await provisionAgentKey({ client: fakeClient().client, signer: SIGNER, allowanceYocto: ALLOWANCE, network: 'testnet' });
     } finally {
       process.umask(previous);
     }
     expect((await stat(keyFile())).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(await readFile(keyFile(), 'utf8'))).toMatchObject({ account_id: ACCOUNT }); // and it was written
   });
 
   it('never returns the secret key; a failing AddKey reaches the caller untouched and takes the key file with it', async () => {
@@ -148,7 +158,7 @@ describe('provisionAgentKey', () => {
     const secret = (JSON.parse(await readFile(keyFile(), 'utf8')) as Record<string, string>)['private_key']!.slice('ed25519:'.length);
     expect(JSON.stringify(ok)).not.toContain(secret);
 
-    const boom = new AgentGateError('TX_FAILED', 'NEAR rejected the add_agent_key call: something', 502);
+    const boom = new AgentGateError('TX_FAILED', 'NEAR rejected the agent AddKey call: something', 502);
     const failing = fakeClient(boom);
     const other = { ...SIGNER, accountId: 'other.testnet' };
     const thrown = await provisionAgentKey({ client: failing.client, signer: other, allowanceYocto: ALLOWANCE, network: 'testnet' }).catch(
@@ -217,6 +227,37 @@ describe('provisionAgentKey', () => {
     // so a retry is not blocked by "already exists"
     await provisionAgentKey({ client: fakeClient().client, signer: SIGNER, allowanceYocto: ALLOWANCE, network: 'testnet' });
     expect((await stat(keyFile())).isFile()).toBe(true);
+  });
+
+  it('keeps the key file when the AddKey times out (TX_TIMEOUT): the tx may still land, so the secret must survive', async () => {
+    vi.stubEnv('HOME', home);
+    const hash = 'Akiy3SNDadKPsZw3dFkzzYAYyudnMqyhTkL5rUwCYZ6F';
+    const timeout = new TxTimeoutError('the NEAR RPC stopped waiting for the agent AddKey call', hash, 'https://testnet.nearblocks.io');
+    const { client, calls } = fakeClient(timeout);
+    const err = await provisionAgentKey({ client, signer: SIGNER, allowanceYocto: ALLOWANCE, network: 'testnet' }).catch((e: unknown) => e);
+
+    const publicKey = calls[0]!.input.publicKey;
+    expect(err).toBeInstanceOf(TxTimeoutError);
+    expect(err).toMatchObject({ code: 'TX_TIMEOUT', httpStatus: 504, txHash: hash });
+    expect((err as Error).message).toBe(
+      `the NEAR RPC stopped waiting for the agent AddKey call: tx ${hash} may still land; ` +
+        `check https://testnet.nearblocks.io/txns/${hash} before retrying. ` +
+        `The new agent key was kept: public key ${publicKey}, key file ${keyFile()} (mode 0600). ` +
+        'If that transaction failed, delete the file before retrying',
+    );
+    const file = JSON.parse(await readFile(keyFile(), 'utf8')) as Record<string, string>;
+    expect(file['public_key']).toBe(publicKey);
+    expect((err as Error).message).not.toContain(file['private_key']!.slice('ed25519:'.length));
+    if (process.platform !== 'win32') expect((await stat(keyFile())).mode & 0o777).toBe(0o600);
+  });
+
+  it('removes the key file only on a definitive failure, whatever kind (NEAR said no)', async () => {
+    vi.stubEnv('HOME', home);
+    for (const code of ['TX_FAILED', 'ERR_INSUFFICIENT_BALANCE', 'SIGNER_KEY_NOT_FOUND', 'RPC_TIMEOUT', 'RPC_ERROR']) {
+      const { client } = fakeClient(new AgentGateError(code, `${code}: x`, 400));
+      await expect(provisionAgentKey({ client, signer: SIGNER, allowanceYocto: ALLOWANCE, network: 'testnet' })).rejects.toMatchObject({ code });
+      await expect(stat(keyFile()), code).rejects.toMatchObject({ code: 'ENOENT' });
+    }
   });
 
   it('refuses a bad allowance and a non-NEAR signer before writing any file', async () => {

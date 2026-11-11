@@ -1,13 +1,14 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChainClient, Logger } from '@agentgate/shared';
+import type { ChainClient, Logger, ServiceRecord } from '@agentgate/shared';
 import {
   AgentGateError,
   isAgentGateError,
   encodeXPayment,
   encodeXPaymentResponse,
   decodeXPayment,
+  nativeNearOption,
   type PaymentRequiredResponse,
 } from '@agentgate/shared';
 import {
@@ -639,6 +640,39 @@ describe('createAgentGateClient · fetchPaid', () => {
 describe('createAgentGateClient · fetchPaid with payFrom: "escrow"', () => {
   const ESCROW_ENOUGH = '1000000000000000000000000'; // 1 NEAR, over price + fee
 
+  function onChainService(id: number, over: Partial<ServiceRecord> = {}): ServiceRecord {
+    return {
+      id,
+      name: `svc-${id}`,
+      description: '',
+      endpointUrl: `http://svc.test/svc/${id}`,
+      priceYocto: PRICE,
+      paymentTarget: 'seller.mock',
+      owner: 'owner.mock',
+      attestor: 'owner.mock',
+      active: true,
+      createdAt: 1_700_000_000_000,
+      accepts: [nativeNearOption(PRICE)],
+      ...over,
+    };
+  }
+
+  /** A chain whose registry prices service 1 at 0.5 NEAR (what the invoice says) and holds a full escrow. */
+  function escrowChain(over: Partial<ChainClient> = {}): ChainClient {
+    return makeChain({
+      escrowOf: vi.fn(async () => ESCROW_ENOUGH),
+      getService: vi.fn(async (id: number) => onChainService(id)),
+      ...over,
+    });
+  }
+
+  /** The invoice for service `serviceId` at the standard 0.502 NEAR total (service 1 is the default). */
+  function invoiceFor(serviceId: number, nonce = '42'): PaymentRequiredResponse {
+    const base = requirements(nonce, 'near-mock');
+    base.accepts[0]!.extra.serviceId = serviceId;
+    return base;
+  }
+
   function escrowClient(chain: ChainClient, over: { maxYocto?: string; payFrom?: 'deposit' | 'escrow' } = {}, impl?: typeof fetch) {
     return createAgentGateClient({
       chain,
@@ -651,7 +685,7 @@ describe('createAgentGateClient · fetchPaid with payFrom: "escrow"', () => {
 
   it('402 → payFromEscrow → retry with the proof: the escrow pays, `pay` is never called', async () => {
     const { impl, calls } = queuedFetch([json(requirements('42', 'near-mock'), 402), json({ gold: 3310.25 }, 200)]);
-    const chain = makeChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
+    const chain = escrowChain();
     const client = escrowClient(chain, {}, impl);
 
     const r = await client.fetchPaid('http://svc.test/svc/1');
@@ -677,12 +711,14 @@ describe('createAgentGateClient · fetchPaid with payFrom: "escrow"', () => {
     expect(chain.pay).toHaveBeenCalledTimes(1);
     expect(chain.escrowOf).not.toHaveBeenCalled();
     expect(chain.payFromEscrow).not.toHaveBeenCalled();
+    // the attached deposit is what a `pay` can cost, enforced on chain: no registry lookup needed
+    expect(chain.getService).not.toHaveBeenCalled();
   });
 
   it('refuses before sending when the escrow holds less than price + fee: ERR_ESCROW_INSUFFICIENT, nothing paid, no gas burned', async () => {
     const short = (BigInt(MAX_AMOUNT) - 1n).toString();
     const { impl, calls } = queuedFetch([json(requirements('42', 'near-mock'), 402)]);
-    const chain = makeChain({ escrowOf: vi.fn(async () => short) });
+    const chain = escrowChain({ escrowOf: vi.fn(async () => short) });
     const err = await escrowClient(chain, {}, impl).fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(AgentGateError);
@@ -697,33 +733,33 @@ describe('createAgentGateClient · fetchPaid with payFrom: "escrow"', () => {
   });
 
   it('an escrow of exactly price + fee is enough', async () => {
-    const chain = makeChain({ escrowOf: vi.fn(async () => MAX_AMOUNT) });
+    const chain = escrowChain({ escrowOf: vi.fn(async () => MAX_AMOUNT) });
     const r = await escrowClient(chain).fetchPaid('http://svc.test/svc/1');
     expect(r.paid).toBe(true);
     expect(chain.payFromEscrow).toHaveBeenCalledTimes(1);
   });
 
   it('an unknown escrow ("0") is insufficient, not an error of another kind', async () => {
-    const chain = makeChain({ escrowOf: vi.fn(async () => '0') });
+    const chain = escrowChain({ escrowOf: vi.fn(async () => '0') });
     await expect(escrowClient(chain).fetchPaid('http://svc.test/svc/1')).rejects.toMatchObject({ code: 'ERR_ESCROW_INSUFFICIENT' });
     expect(chain.payFromEscrow).not.toHaveBeenCalled();
   });
 
   it('the budget still compares the TOTAL (price + 0.002 NEAR): BUDGET_EXCEEDED first, the escrow is not even read', async () => {
     const { impl } = queuedFetch([json(requirements('42', 'near-mock'), 402)]);
-    const chain = makeChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
+    const chain = escrowChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
     const err = await escrowClient(chain, { maxYocto: PRICE }, impl).fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
     expect(err).toMatchObject({ code: 'BUDGET_EXCEEDED', httpStatus: 402 });
     expect(chain.escrowOf).not.toHaveBeenCalled();
     expect(chain.payFromEscrow).not.toHaveBeenCalled();
 
     // a cap equal to the total passes
-    const ok = makeChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
+    const ok = escrowChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
     expect((await escrowClient(ok, { maxYocto: MAX_AMOUNT }).fetchPaid('http://svc.test/svc/1')).paid).toBe(true);
   });
 
   it('the invoice refusals come first too: SERVICE_MISMATCH and REGISTRY_MISMATCH never touch the escrow', async () => {
-    const chain = makeChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
+    const chain = escrowChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
     const mismatch = createAgentGateClient({
       chain,
       signer: SIGNER,
@@ -732,7 +768,7 @@ describe('createAgentGateClient · fetchPaid with payFrom: "escrow"', () => {
       fetchImpl: queuedFetch([json(requirements('42', 'near-mock'), 402)]).impl,
     });
     await expect(mismatch.fetchPaid('http://svc.test/svc/2')).rejects.toMatchObject({ code: 'SERVICE_MISMATCH' });
-    const other = makeChain({ registryId: 'other-registry.mock', escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
+    const other = escrowChain({ registryId: 'other-registry.mock', escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
     await expect(escrowClient(other).fetchPaid('http://svc.test/svc/1')).rejects.toMatchObject({ code: 'REGISTRY_MISMATCH' });
     expect(chain.escrowOf).not.toHaveBeenCalled();
     expect(other.escrowOf).not.toHaveBeenCalled();
@@ -742,12 +778,12 @@ describe('createAgentGateClient · fetchPaid with payFrom: "escrow"', () => {
 
   it('a failing escrow read or payFromEscrow propagates as-is: nothing was paid, so it is not PAID_NOT_SERVED', async () => {
     const rpcDown = new AgentGateError('RPC_ERROR', 'the NEAR RPC was unreachable for the escrow_of view', 502);
-    const readFails = makeChain({ escrowOf: vi.fn(async () => { throw rpcDown; }) });
+    const readFails = escrowChain({ escrowOf: vi.fn(async () => { throw rpcDown; }) });
     await expect(escrowClient(readFails).fetchPaid('http://svc.test/svc/1')).rejects.toBe(rpcDown);
     expect(readFails.payFromEscrow).not.toHaveBeenCalled();
 
     const used = new AgentGateError('ERR_NONCE_USED', 'ERR_NONCE_USED: nonce already paid', 400);
-    const payFails = makeChain({
+    const payFails = escrowChain({
       escrowOf: vi.fn(async () => ESCROW_ENOUGH),
       payFromEscrow: vi.fn(async () => { throw used; }),
     });
@@ -759,12 +795,92 @@ describe('createAgentGateClient · fetchPaid with payFrom: "escrow"', () => {
 
   it('PAID_NOT_SERVED is unchanged: the escrow was debited, the gateway refused the proof, the error carries it', async () => {
     const { impl } = queuedFetch([json(requirements('42', 'near-mock'), 402), rejected402('42', 'not_found')]);
-    const chain = makeChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
+    const chain = escrowChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
     const err = await escrowClient(chain, {}, impl).fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(PaidNotServedError);
     expect(err).toMatchObject({ reason: 'refused', txHash: TX_HASH, nonce: '42', serviceId: 1, depositYocto: MAX_AMOUNT });
     expect(chain.payFromEscrow).toHaveBeenCalledTimes(1);
     expect(chain.pay).not.toHaveBeenCalled();
+  });
+
+  it('reads the service from the registry and checks the invoice total against its on-chain price (once, before any send)', async () => {
+    const chain = escrowChain();
+    await escrowClient(chain).fetchPaid('http://svc.test/svc/1');
+    expect(chain.getService).toHaveBeenCalledTimes(1);
+    expect(chain.getService).toHaveBeenCalledWith(1);
+  });
+
+  it('an invoice that understates the on-chain price is PRICE_MISMATCH: pay_from_escrow would debit more, so nothing is sent', async () => {
+    // The seller's invoice says 0.502 NEAR in total; the registry prices service 1 at 5 NEAR.
+    const chain = escrowChain({
+      getService: vi.fn(async (id: number) => onChainService(id, { priceYocto: '5000000000000000000000000' })),
+    });
+    const { impl, calls } = queuedFetch([json(requirements('42', 'near-mock'), 402)]);
+    // the budget would pass the understated invoice: only the registry check catches the lie
+    const err = await escrowClient(chain, { maxYocto: MAX_AMOUNT }, impl).fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(AgentGateError);
+    expect(err).toMatchObject({ code: 'PRICE_MISMATCH', httpStatus: 502 });
+    expect((err as Error).message).toContain('0.502 NEAR');
+    expect((err as Error).message).toContain('5 NEAR + 0.002 NEAR storage');
+    expect(chain.payFromEscrow).not.toHaveBeenCalled();
+    expect(chain.pay).not.toHaveBeenCalled();
+    expect(chain.escrowOf).not.toHaveBeenCalled(); // no escrow read needed to refuse
+    expect(calls).toHaveLength(1);
+  });
+
+  it('an invoice that overstates the on-chain price is refused as well (the totals must be equal)', async () => {
+    const chain = escrowChain({
+      getService: vi.fn(async (id: number) => onChainService(id, { priceYocto: '100000000000000000000000' })),
+    });
+    await expect(escrowClient(chain).fetchPaid('http://svc.test/svc/1')).rejects.toMatchObject({ code: 'PRICE_MISMATCH' });
+    expect(chain.payFromEscrow).not.toHaveBeenCalled();
+  });
+
+  it('with expectedServiceId unset, the service the invoice NAMES is the one whose on-chain price is checked', async () => {
+    const getService = vi.fn(async (id: number) =>
+      onChainService(id, id === 5 ? { priceYocto: '9000000000000000000000000' } : {}),
+    );
+    // service 5 is dear on chain; the invoice (for service 5) claims the 0.5 NEAR of service 1
+    const lying = escrowChain({ getService });
+    const { impl } = queuedFetch([json(invoiceFor(5), 402)]);
+    await expect(escrowClient(lying, {}, impl).fetchPaid('http://svc.test/svc/5')).rejects.toMatchObject({ code: 'PRICE_MISMATCH' });
+    expect(getService).toHaveBeenCalledWith(5);
+    expect(lying.payFromEscrow).not.toHaveBeenCalled();
+
+    // and an honest invoice for another service pays THAT service
+    const honest = escrowChain();
+    const { impl: impl2 } = queuedFetch([json(invoiceFor(7), 402), json({ ok: 1 }, 200)]);
+    const r = await escrowClient(honest, {}, impl2).fetchPaid('http://svc.test/svc/7');
+    expect(r.paid).toBe(true);
+    expect(honest.payFromEscrow).toHaveBeenCalledWith({ serviceId: 7, nonce: '42' }, SIGNER);
+  });
+
+  it('the budget runs on the verified total: a cap below the on-chain total refuses even for an honest invoice', async () => {
+    const chain = escrowChain();
+    const err = await escrowClient(chain, { maxYocto: PRICE }).fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: 'BUDGET_EXCEEDED' });
+    expect(chain.getService).toHaveBeenCalledTimes(1); // verified first, then budgeted
+    expect(chain.escrowOf).not.toHaveBeenCalled();
+    expect(chain.payFromEscrow).not.toHaveBeenCalled();
+  });
+
+  it('a missing or paused service is refused (SERVICE_NOT_FOUND / SERVICE_INACTIVE) before anything is sent', async () => {
+    const gone = escrowChain({ getService: vi.fn(async () => null) });
+    await expect(escrowClient(gone).fetchPaid('http://svc.test/svc/1')).rejects.toMatchObject({ code: 'SERVICE_NOT_FOUND', httpStatus: 404 });
+    const paused = escrowChain({ getService: vi.fn(async (id: number) => onChainService(id, { active: false })) });
+    await expect(escrowClient(paused).fetchPaid('http://svc.test/svc/1')).rejects.toMatchObject({ code: 'SERVICE_INACTIVE', httpStatus: 403 });
+    for (const chain of [gone, paused]) {
+      expect(chain.escrowOf).not.toHaveBeenCalled();
+      expect(chain.payFromEscrow).not.toHaveBeenCalled();
+    }
+  });
+
+  it('a failing registry read propagates as-is and nothing is sent', async () => {
+    const rpcDown = new AgentGateError('RPC_ERROR', 'the NEAR RPC was unreachable for the get_service view', 502);
+    const chain = escrowChain({ getService: vi.fn(async () => { throw rpcDown; }) });
+    await expect(escrowClient(chain).fetchPaid('http://svc.test/svc/1')).rejects.toBe(rpcDown);
+    expect(chain.payFromEscrow).not.toHaveBeenCalled();
   });
 
   it('rejects a payFrom other than "deposit" or "escrow" at construction (BAD_OPTS)', () => {

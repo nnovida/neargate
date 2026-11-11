@@ -25,6 +25,12 @@ const text = (page: () => React.JSX.Element): string =>
     .replace(/&amp;/g, '&')
     .replace(/\s+/g, ' ');
 
+/**
+ * The blast radius is NOT only the escrow: an agent key pays its gas from the account balance, up to
+ * its allowance. Every page that states the escrow-is-the-limit property must say so too.
+ */
+const GAS_CAVEAT = 'burn gas from the account balance up to its allowance';
+
 describe('CLI docs page', () => {
   const page = text(CliPage);
 
@@ -50,7 +56,7 @@ describe('CLI docs page', () => {
   });
 
   it('lists the three new registry codes and the agent key codes in the error codes', () => {
-    for (const code of ['ERR_ESCROW_INSUFFICIENT', 'ERR_ONE_YOCTO_REQUIRED', 'ERR_DEPOSIT_NOT_ALLOWED', 'AGENT_KEY_EXISTS', 'LIVE_ONLY']) {
+    for (const code of ['ERR_ESCROW_INSUFFICIENT', 'ERR_ONE_YOCTO_REQUIRED', 'ERR_DEPOSIT_NOT_ALLOWED', 'AGENT_KEY_EXISTS', 'LIVE_ONLY', 'PRICE_MISMATCH']) {
       expect(page, code).toContain(code);
     }
     expect(html(CliPage)).toMatch(/id="codes-escrow"/);
@@ -59,6 +65,12 @@ describe('CLI docs page', () => {
   it('says what a restricted key can do: spend the escrow and nothing else; only a full-access key withdraws', () => {
     expect(page).toContain('It can spend the escrow and nothing else');
     expect(page).toContain('only the account’s full-access key can sign it');
+  });
+
+  it('says the key can also burn gas from the account balance up to its allowance, and what a timed-out add keeps', () => {
+    expect(page).toContain(GAS_CAVEAT);
+    expect(page).toContain('drawn from the account balance, not the escrow');
+    expect(page).toContain('the file is kept, because the key may still be added');
   });
 
   it('never prints a secret in its examples', () => {
@@ -93,6 +105,14 @@ describe('contract docs page', () => {
     expect(page).toContain('Withdrawing needs a full-access key');
     expect(page).toContain('a leaked agent key can spend all of it, on any active service');
     expect(page).toContain('The escrow is the spending limit');
+    expect(page).toContain(GAS_CAVEAT);
+    expect(page).toContain('that gas comes from the account balance (not the escrow)');
+  });
+
+  it('says pay_from_escrow\'s escrow check replaces the deposit check and comes before the nonce checks', () => {
+    expect(page).toContain('except that the escrow check replaces');
+    expect(page).toContain('deposit check and comes before the nonce checks');
+    expect(page).toMatch(/ERR_STORAGE_EXCEEDED register_service, pay, pay_from_escrow, deposit_escrow/);
   });
 });
 
@@ -107,6 +127,9 @@ describe('security docs page', () => {
       'a leaked agent key can spend all of it, on any active service',
       'mode 0600',
       'refuses to overwrite',
+      GAS_CAVEAT,
+      'drawn from the account balance, not from the escrow',
+      'PRICE_MISMATCH',
     ]) {
       expect(page, needle).toContain(needle);
     }
@@ -126,5 +149,6 @@ describe('protocol docs page and home roadmap', () => {
     expect(page).toContain('Prepaid escrow · restricted agent keys');
     expect(page).toContain('NOW · shipped Prepaid escrow · restricted agent keys');
     expect(page).toContain('Planned: a buyer signs a NEP-366 delegate action');
+    expect(page).toContain(GAS_CAVEAT);
   });
 });

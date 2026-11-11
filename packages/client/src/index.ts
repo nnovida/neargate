@@ -55,10 +55,15 @@ export interface AgentGateClientOpts {
   expectedServiceId?: number;
   /**
    * Where the payment comes from. `'deposit'` (default) attaches price + storage fee to the
-   * registry's `pay`. `'escrow'` calls `pay_from_escrow` instead, which attaches nothing and debits
-   * the signer's prepaid escrow by the same total, so a function-call key restricted to that
-   * method can sign it. `maxYocto` caps the total either way; in escrow mode the client first
-   * reads the escrow and refuses (ERR_ESCROW_INSUFFICIENT) before sending when it holds less.
+   * registry's `pay`: the attached deposit is the most the call can cost, enforced on chain, so
+   * `maxYocto` against the invoice's total is a real cap. `'escrow'` calls `pay_from_escrow`
+   * instead, which attaches nothing and debits the signer's escrow by the ON-CHAIN price +
+   * storage fee, whatever the invoice says, so a function-call key restricted to that method can
+   * sign it. The invoice is seller data, so in escrow mode the client first reads the service from
+   * the registry (prices are immutable per service id) and refuses with PRICE_MISMATCH unless
+   * on-chain price + storage fee equals the invoice's total; `maxYocto` and the escrow pre-check
+   * (ERR_ESCROW_INSUFFICIENT, before sending, when the escrow holds less) then run on that
+   * verified total.
    */
   payFrom?: PayFrom;
   logger?: Logger;
@@ -357,6 +362,37 @@ async function readBody(res: Response): Promise<FetchedBody> {
   return { status: res.status, body, isJson, retryAfterMs, settlement };
 }
 
+/**
+ * Escrow mode: the registry debits the service's ON-CHAIN native price + storage fee, so the
+ * invoice's `maxAmountRequired` (seller data) must equal that. Reads the service from the registry
+ * (prices never change for a service id) and throws SERVICE_NOT_FOUND / SERVICE_INACTIVE the way
+ * `neargate buy` does, or PRICE_MISMATCH when the totals differ. Nothing is sent by then.
+ */
+async function assertInvoiceMatchesRegistry(chain: ChainClient, req: PaymentRequirements): Promise<void> {
+  const id = req.extra.serviceId;
+  const service = await chain.getService(id);
+  if (service === null) {
+    throw new AgentGateError('SERVICE_NOT_FOUND', `service ${id} not found on ${chain.registryId} — refusing to pay`, 404);
+  }
+  if (!service.active) {
+    throw new AgentGateError(
+      'SERVICE_INACTIVE',
+      `service ${id} (${service.name}) is paused by its owner — not paying`,
+      403,
+    );
+  }
+  const onChainTotal = addYocto(service.priceYocto, PAYMENT_STORAGE_FEE_YOCTO);
+  if (compareYocto(onChainTotal, req.maxAmountRequired) !== 0) {
+    throw new AgentGateError(
+      'PRICE_MISMATCH',
+      `the invoice asks ${formatNear(req.maxAmountRequired)} for service ${id}, but the registry prices it at ` +
+        `${formatPriceWithStorage(service.priceYocto)} (${formatNear(onChainTotal)}) and pay_from_escrow debits that ` +
+        '— refusing to pay from the escrow',
+      502,
+    );
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   if (ms <= 0) return Promise.resolve();
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -478,7 +514,13 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
       );
     }
 
-    // Budget cap on the total attached (price + storage fee) — never pay above it.
+    // `pay_from_escrow` carries no amount: the registry debits the on-chain price + storage fee.
+    // The invoice's total is the seller's word, so in escrow mode the budget and the escrow
+    // pre-check run on the total the registry will actually debit, and an invoice that differs is
+    // refused. (`pay` needs no such check: its attached deposit is what the call can cost.)
+    if (payFrom === 'escrow') await assertInvoiceMatchesRegistry(chain, req);
+
+    // Budget cap on the total (price + storage fee) — never pay above it.
     if (maxYocto !== undefined && compareYocto(req.maxAmountRequired, maxYocto) > 0) {
       throw new AgentGateError(
         'BUDGET_EXCEEDED',

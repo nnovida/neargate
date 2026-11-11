@@ -350,7 +350,8 @@ export class LiveNearClient implements ChainClient {
   ): Promise<{ txHash: string }> {
     const near = requireNearSigner(signer);
     const action = agentKeyAction(this.registryId, input.publicKey, input.allowanceYocto);
-    const { txHash } = await this.sender.send(near, near.accountId, 'add_agent_key', action, 'FINAL');
+    // not a contract method: the label only names the call in errors ("the agent AddKey call")
+    const { txHash } = await this.sender.send(near, near.accountId, 'agent AddKey', action, 'FINAL');
     return { txHash };
   }
 

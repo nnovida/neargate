@@ -520,8 +520,9 @@ export default function Page() {
             required: true,
             desc: (
               <>
-                The gas the key may spend, above zero (for example <M>0.25</M>). It is not the
-                spending limit: the escrow is.
+                The gas the key may spend, above zero (for example <M>0.25</M>). The gas is drawn from
+                the account balance, not the escrow, so a leaked key can burn gas from the account
+                balance up to its allowance: set it low. It is not the spending limit; the escrow is.
               </>
             ),
           },
@@ -535,7 +536,10 @@ export default function Page() {
         <M>0600</M>; it refuses to overwrite an existing file, <M>AGENT_KEY_EXISTS</M>) and adds the
         public key to the account as a function-call key whose receiver is the registry and whose
         only method is <M>pay_from_escrow</M>. It prints the public key, the path and the agent’s
-        next command, never the secret.
+        next command, never the secret. If NEAR rejects the AddKey the file is removed again; if
+        the outcome is unknown (<M>TX_TIMEOUT</M>) the file is kept, because the key may still be
+        added: the error names the file and the public key, so check the transaction and delete the
+        file before retrying if it failed.
       </P>
       <CodeBlock
         label="output"
@@ -554,8 +558,10 @@ export default function Page() {
       <Callout tone="warn" title="WHAT THE KEY CAN DO">
         It can spend the escrow and nothing else: it cannot withdraw, deposit, register, pause or
         move any other balance, and NEAR rejects any other call from it. A leaked agent key can spend
-        all of the escrow on any active service, and no more. Keep in the escrow only what the agent
-        may spend; see the{' '}
+        all of the escrow on any active service, and no more NEAR than that. It can also burn gas
+        from the account balance up to its allowance, because its gas is paid by the account, not
+        the escrow: keep the allowance low. Keep in the escrow only what the agent may spend; see
+        the{' '}
         <DocLink href="/docs/security#agent-keys">security model</DocLink>.
       </Callout>
 
@@ -809,6 +815,16 @@ export default function Page() {
               The invoice offers no payment on this client’s network (for example a testnet client
               and a mock gateway).
               <Sub>Point the client and the gateway at the same network.</Sub>
+            </span>,
+          ],
+          [
+            <M key="6b">PRICE_MISMATCH</M>,
+            <span key="6bm">
+              <M>--from-escrow</M> only: the invoice’s total is not the service’s on-chain price +
+              0.002 NEAR. <M>pay_from_escrow</M> carries no amount and debits the on-chain price, so
+              the client checks the registry before paying and refuses an invoice that differs.
+              Nothing was sent.
+              <Sub>Do not pay this service from the escrow; the gateway’s invoice is wrong.</Sub>
             </span>,
           ],
           [

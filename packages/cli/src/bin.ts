@@ -15,6 +15,7 @@ import { addAgentKey, assertAgentKeysAvailable, formatAgentKeyAdded } from './ag
 import { buyService, formatBuyBody, formatBuyReceipt } from './buy';
 import { createDemoAccounts } from './demo-accounts';
 import {
+  balanceAccountArg,
   depositToEscrow,
   escrowBalance,
   formatEscrowBalance,
@@ -82,6 +83,11 @@ function cliConfig(opts: CliConfigFlags): AgentGateConfig {
     }),
     { requireStrongAdminToken: false },
   );
+}
+
+/** The explorer link settings the receipts print: only live mode has an explorer. */
+function explorerOf(config: AgentGateConfig): { explorerUrl?: string } {
+  return config.mode === 'live' ? { explorerUrl: config.nearExplorerUrl } : {};
 }
 
 const program = new Command();
@@ -232,8 +238,7 @@ withConfigFlags(
   });
 
   // The receipt → stderr so the response body on stdout stays pipeable.
-  const explorer = config.mode === 'live' ? { explorerUrl: config.nearExplorerUrl } : {};
-  for (const line of formatBuyReceipt(bought, explorer)) console.error(line);
+  for (const line of formatBuyReceipt(bought, explorerOf(config))) console.error(line);
   console.log(formatBuyBody(bought.result.body));
 });
 
@@ -304,6 +309,20 @@ const escrowCommand = program
     'Prepaid escrow in the registry: fund it, read it, take it back; `buy --from-escrow` and restricted agent keys spend it',
   );
 
+/** Shared action for `escrow deposit` / `escrow withdraw`: move the amount and report the escrow. */
+async function escrowChange(
+  kind: 'deposit' | 'withdraw',
+  amountNear: string,
+  opts: CliConfigFlags & SignerFlags,
+): Promise<void> {
+  const config = cliConfig(opts);
+  const chain = createChainClient(config);
+  const signer = await cliSigner(config, 'buyer', signerFlags(opts));
+  const move = kind === 'deposit' ? depositToEscrow : withdrawFromEscrow;
+  const result = await move({ chain, signer, amountNear });
+  for (const line of formatEscrowChange(kind, result, explorerOf(config))) console.log(line);
+}
+
 withConfigFlags(
   withSignerFlags(
     escrowCommand
@@ -314,14 +333,7 @@ withConfigFlags(
       .argument('<near>', 'amount in NEAR (e.g. 1)'),
     'buyer',
   ),
-).action(async (amountNear: string, opts: CliConfigFlags & SignerFlags) => {
-  const config = cliConfig(opts);
-  const chain = createChainClient(config);
-  const signer = await cliSigner(config, 'buyer', signerFlags(opts));
-  const result = await depositToEscrow({ chain, signer, amountNear });
-  const explorer = config.mode === 'live' ? { explorerUrl: config.nearExplorerUrl } : {};
-  for (const line of formatEscrowChange('deposit', result, explorer)) console.log(line);
-});
+).action(async (amountNear: string, opts: CliConfigFlags & SignerFlags) => escrowChange('deposit', amountNear, opts));
 
 withConfigFlags(
   withSignerFlags(
@@ -333,14 +345,7 @@ withConfigFlags(
       .argument('<near>', 'amount in NEAR (at most the escrow balance)'),
     'buyer',
   ),
-).action(async (amountNear: string, opts: CliConfigFlags & SignerFlags) => {
-  const config = cliConfig(opts);
-  const chain = createChainClient(config);
-  const signer = await cliSigner(config, 'buyer', signerFlags(opts));
-  const result = await withdrawFromEscrow({ chain, signer, amountNear });
-  const explorer = config.mode === 'live' ? { explorerUrl: config.nearExplorerUrl } : {};
-  for (const line of formatEscrowChange('withdraw', result, explorer)) console.log(line);
-});
+).action(async (amountNear: string, opts: CliConfigFlags & SignerFlags) => escrowChange('withdraw', amountNear, opts));
 
 withConfigFlags(
   escrowCommand
@@ -353,7 +358,7 @@ withConfigFlags(
   const chain = createChainClient(config);
   const result = await escrowBalance({
     chain,
-    account: account ?? cliAccountId(config, 'buyer', signerFlags(opts)),
+    account: balanceAccountArg(account, opts.account) ?? cliAccountId(config, 'buyer'),
   });
   for (const line of formatEscrowBalance(result)) console.log(line);
 });
@@ -379,7 +384,7 @@ withConfigFlags(
   // The account's own full-access key signs the AddKey: --key-file here is that key, not the agent's.
   const signer = await cliSigner(config, 'buyer', signerFlags(opts));
   const added = await addAgentKey({ client, signer, allowanceNear: opts.allowance, network: config.nearNetwork });
-  for (const line of formatAgentKeyAdded(added, { explorerUrl: config.nearExplorerUrl })) console.log(line);
+  for (const line of formatAgentKeyAdded(added, explorerOf(config))) console.log(line);
 });
 
 withConfigFlags(

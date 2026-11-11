@@ -69,12 +69,29 @@ export async function withdrawFromEscrow(opts: {
     throw new AgentGateError(
       'ERR_ESCROW_INSUFFICIENT',
       `ERR_ESCROW_INSUFFICIENT: the amount must be between 1 and the escrow balance, ${escrowBeforeYocto} yocto; nothing was sent`,
-      400,
+      402, // like the client's own pre-send refusals (BUDGET_EXCEEDED, ERR_ESCROW_INSUFFICIENT)
     );
   }
   const { txHash } = await chain.withdrawEscrow(amountYocto, signer);
   const escrowYocto = await chain.escrowOf(signer.accountId);
   return { accountId: signer.accountId, amountYocto, escrowBeforeYocto, escrowYocto, txHash };
+}
+
+/**
+ * The account `escrow balance` reads when one is named: the `[account]` argument or `--account`
+ * (undefined when neither: the buyer account). Naming two different accounts is ambiguous, so it
+ * is refused rather than silently picking one.
+ */
+export function balanceAccountArg(positional: string | undefined, flag: string | undefined): string | undefined {
+  const named = (v: string | undefined): v is string => v !== undefined && v.trim() !== '';
+  if (named(positional) && named(flag) && positional.trim() !== flag.trim()) {
+    throw new AgentGateError(
+      'INVALID_INPUT',
+      `escrow balance got two different accounts, ${JSON.stringify(positional.slice(0, 64))} and --account ${JSON.stringify(flag.slice(0, 64))}: name one`,
+      400,
+    );
+  }
+  return named(positional) ? positional : named(flag) ? flag : undefined;
 }
 
 /** Programmatic `neargate escrow balance [account]`: the account's escrow, `"0"` if it never deposited. */

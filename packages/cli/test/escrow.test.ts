@@ -12,6 +12,7 @@ import {
   escrowBalance,
   formatEscrowBalance,
   formatEscrowChange,
+  balanceAccountArg,
   withdrawFromEscrow,
 } from '../src/escrow';
 
@@ -110,7 +111,8 @@ describe('withdrawFromEscrow', () => {
   it('refuses more than the escrow holds with ERR_ESCROW_INSUFFICIENT, before sending (no gas burned)', async () => {
     const chain = ledgerChain(BigInt(nearToYocto('1')));
     const err = await rejection(withdrawFromEscrow({ chain, signer: BUYER, amountNear: '1.000000000000000000000001' }));
-    expect(err).toMatchObject({ code: 'ERR_ESCROW_INSUFFICIENT' });
+    // 402, the status the client gives its own refusals before sending (BUDGET_EXCEEDED, ERR_ESCROW_INSUFFICIENT)
+    expect(err).toMatchObject({ code: 'ERR_ESCROW_INSUFFICIENT', httpStatus: 402 });
     expect(err.message).toBe(
       `ERR_ESCROW_INSUFFICIENT: the amount must be between 1 and the escrow balance, ${nearToYocto('1')} yocto; nothing was sent`,
     );
@@ -144,6 +146,29 @@ describe('escrowBalance', () => {
     }
     expect((await rejection(escrowBalance({ chain, account: '  ' }))).code).toBe('INVALID_INPUT'); // blank, like every account flag
     expect(chain.calls).toEqual([]);
+  });
+});
+
+describe('balanceAccountArg · [account] and --account', () => {
+  it('takes whichever one is named, or neither (the caller then uses the buyer account)', () => {
+    expect(balanceAccountArg('a.testnet', undefined)).toBe('a.testnet');
+    expect(balanceAccountArg(undefined, 'b.testnet')).toBe('b.testnet');
+    expect(balanceAccountArg(undefined, undefined)).toBeUndefined();
+    expect(balanceAccountArg('  ', '')).toBeUndefined();
+  });
+
+  it('accepts both when they are the same account', () => {
+    expect(balanceAccountArg('a.testnet', 'a.testnet')).toBe('a.testnet');
+  });
+
+  it('refuses two different accounts instead of silently picking one', () => {
+    expect(() => balanceAccountArg('a.testnet', 'b.testnet')).toThrow(
+      expect.objectContaining({
+        code: 'INVALID_INPUT',
+        httpStatus: 400,
+        message: expect.stringMatching(/two different accounts, "a\.testnet" and --account "b\.testnet": name one/),
+      }),
+    );
   });
 });
 

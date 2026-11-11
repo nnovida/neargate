@@ -38,7 +38,7 @@ const ROADMAP = [
   {
     tag: 'NOW',
     title: 'Prepaid escrow · restricted agent keys',
-    body: 'An agent prepays an escrow in the registry and pays each call out of it with pay_from_escrow. Its key is a NEAR function-call key restricted to that one method: it can spend the escrow and nothing else, and the escrow is its spending limit. Withdrawing needs the account’s full-access key.',
+    body: 'An agent prepays an escrow in the registry and pays each call out of it with pay_from_escrow. Its key is a NEAR function-call key restricted to that one method: it can spend the escrow and nothing else, and the escrow is its spending limit. It can also burn gas from the account balance up to its allowance, so keep that low. Withdrawing needs the account’s full-access key.',
     done: true,
   },
   {

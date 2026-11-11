@@ -51,16 +51,29 @@ export interface CallErrorContext extends NearErrorContext {
  */
 export class TxTimeoutError extends AgentGateError {
   readonly txHash: string;
+  private readonly lead: string;
+  private readonly explorerUrl: string;
 
-  /** `lead` says what happened, e.g. "the NEAR RPC failed (HTTP 502) after the pay tx was sent". */
-  constructor(lead: string, txHash: string, explorerUrl: string) {
+  /**
+   * `lead` says what happened, e.g. "the NEAR RPC failed (HTTP 502) after the pay tx was sent".
+   * `note`, when given, is appended as a further sentence (what the caller left behind to check).
+   */
+  constructor(lead: string, txHash: string, explorerUrl: string, note?: string) {
     super(
       'TX_TIMEOUT',
-      `${lead}: tx ${txHash} may still land; check ${explorerUrl}/txns/${txHash} before retrying`,
+      `${lead}: tx ${txHash} may still land; check ${explorerUrl}/txns/${txHash} before retrying` +
+        (note === undefined ? '' : `. ${note}`),
       504,
     );
     this.name = 'TxTimeoutError';
     this.txHash = txHash;
+    this.lead = lead;
+    this.explorerUrl = explorerUrl;
+  }
+
+  /** The same timeout with `note` appended to its message (same code, status and tx). */
+  withNote(note: string): TxTimeoutError {
+    return new TxTimeoutError(this.lead, this.txHash, this.explorerUrl, note);
   }
 }
 

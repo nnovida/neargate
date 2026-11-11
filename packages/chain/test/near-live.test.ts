@@ -717,7 +717,10 @@ describe('LiveNearClient.verifyPayment', () => {
       }));
       expect(await client.verifyPayment(query()), method).toEqual({ ok: false, reason: 'tx_mismatch' });
     }
-    rpc.method('tx', fixture('tx-pay-failed.json')); // a failed pay_from_escrow is no payment
+    // a failed pay_from_escrow (not a failed `pay`) is no payment either
+    rpc.method('tx', txWith('tx-pay-failed.json', (tx) => {
+      tx.actions[0].FunctionCall.method_name = 'pay_from_escrow';
+    }));
     expect(await client.verifyPayment(query())).toEqual({ ok: false, reason: 'tx_mismatch' });
   });
 
@@ -1432,17 +1435,38 @@ describe('LiveNearClient.addAgentKey and provisionAgentKey (restricted agent key
     });
   });
 
-  it('an unknown outcome is TX_TIMEOUT naming the AddKey tx (R45); the key file goes, the error never carries the secret', async () => {
+  it('an unknown outcome is TX_TIMEOUT (R45): the key file is KEPT at 0600, the error names its path and the public key, never the secret', async () => {
     rpc.sendTx('error-timeout.json');
+    const keyFile = join(home, '.near-credentials', 'testnet', 'buyer.testnet.neargate-agent.json');
     const err = await rejection(
       provisionAgentKey({ client, signer: nearSigner(BUYER).signer, allowanceYocto: ALLOWANCE, network: 'testnet' }),
     );
+    const hash = rpc.sent[0]!.hash;
     expect(err).toBeInstanceOf(TxTimeoutError);
-    expect(err).toMatchObject({ code: 'TX_TIMEOUT', txHash: rpc.sent[0]!.hash });
-    expect(err.message).toContain('the add_agent_key call');
-    await expect(stat(join(home, '.near-credentials', 'testnet', 'buyer.testnet.neargate-agent.json'))).rejects.toMatchObject({
-      code: 'ENOENT',
-    });
+    expect(err).toMatchObject({ code: 'TX_TIMEOUT', httpStatus: 504, txHash: hash });
+    // the file is still there, still private, and holds the key the AddKey may yet add
+    if (process.platform !== 'win32') expect((await stat(keyFile)).mode & 0o777).toBe(0o600);
+    const file = JSON.parse(await readFile(keyFile, 'utf8')) as Record<string, string>;
+    expect(onlyAddKey(rpc.sent[0]!).publicKey).toBe(file['public_key']);
+    // the message: the timeout's own advice (check the tx), then where the key is and what to do
+    expect(err.message).toContain('the agent AddKey call');
+    expect(err.message).toContain(`tx ${hash} may still land; check https://testnet.nearblocks.io/txns/${hash} before retrying`);
+    expect(err.message).toContain(`public key ${file['public_key']}`);
+    expect(err.message).toContain(`key file ${keyFile}`);
+    expect(err.message).toContain('If that transaction failed, delete the file before retrying');
+    const secret = file['private_key']!.slice('ed25519:'.length);
+    for (const text of [err.message, String(err.stack), JSON.stringify(err)]) expect(text).not.toContain(secret);
+    expect(JSON.stringify(rpc.calls)).not.toContain(secret);
+  });
+
+  it('while that key file is kept, a retry is refused (AGENT_KEY_EXISTS) instead of overwriting it', async () => {
+    rpc.sendTx('error-timeout.json');
+    const buyer = nearSigner(BUYER).signer;
+    await rejection(provisionAgentKey({ client, signer: buyer, allowanceYocto: ALLOWANCE, network: 'testnet' }));
+    const sent = rpc.sent.length;
+    const again = await rejection(provisionAgentKey({ client, signer: buyer, allowanceYocto: ALLOWANCE, network: 'testnet' }));
+    expect(again.code).toBe('AGENT_KEY_EXISTS');
+    expect(rpc.sent).toHaveLength(sent); // nothing more was sent
   });
 });
 

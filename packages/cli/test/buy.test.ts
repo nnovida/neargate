@@ -33,6 +33,8 @@ interface FakeChain extends ChainClient {
   escrowPayments: Array<{ input: { serviceId: number; nonce: string }; signer: AnySigner }>;
   /** What `escrowOf` answers (default: a full 1 NEAR). */
   escrow: Yocto;
+  /** Accounts `escrowOf` was asked about, in order. */
+  escrowReads: string[];
 }
 
 function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceRecord {
@@ -61,7 +63,9 @@ function makeFakeChain(service: ServiceRecord | null): FakeChain {
     payments,
     escrowPayments,
     escrow: '1000000000000000000000000',
-    async escrowOf() {
+    escrowReads: [],
+    async escrowOf(accountId) {
+      this.escrowReads.push(accountId);
       return this.escrow;
     },
     async depositEscrow() {
@@ -398,8 +402,18 @@ describe('buyService --from-escrow', () => {
       code: 'BUDGET_EXCEEDED',
     });
     expect(calls).toHaveLength(0);
+    expect(chain.escrowReads).toEqual([]); // refused before the escrow was even read
     const ok = await buyService({ ...baseOpts(chain, impl), fromEscrow: true, maxNear: '0.502' });
     expect(ok.result.paid).toBe(true);
+    expect(chain.escrowReads).toEqual(['buyer.mock']); // the payer's own escrow, read once the budget passed
+  });
+
+  it('an invoice that understates the on-chain price is PRICE_MISMATCH and nothing is paid (the client checks the registry)', async () => {
+    const chain = makeFakeChain(makeService(1, { priceYocto: '5000000000000000000000000' })); // on chain: 5 NEAR
+    const { impl } = gatewayFetch(() => Response.json({})); // the invoice still says 0.502 NEAR in total
+    await expect(buyService({ ...baseOpts(chain, impl), fromEscrow: true })).rejects.toMatchObject({ code: 'PRICE_MISMATCH' });
+    expect(chain.escrowPayments).toEqual([]);
+    expect(chain.escrowReads).toEqual([]);
   });
 
   it('the receipt says the escrow paid', async () => {

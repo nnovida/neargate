@@ -151,9 +151,10 @@ export default function Page() {
       <CodeBlock code="pay_from_escrow(service_id: u64, nonce: String)" />
       <P>
         <M>pay</M>, funded by the caller’s escrow. It is marked <M>payable</M> in the ABI but rejects any
-        attached deposit (<M>ERR_DEPOSIT_NOT_ALLOWED</M>). The same checks, in the same
-        order, then the escrow must hold at least <M>price + 0.002 NEAR</M>. It debits exactly that
-        from the escrow, sends the price to the payment target, keeps the fee and refunds nothing.
+        attached deposit (<M>ERR_DEPOSIT_NOT_ALLOWED</M>, the first check). Then the checks of{' '}
+        <M>pay</M>, in the same order, except that the escrow check replaces <M>pay</M>’s deposit
+        check and comes before the nonce checks: the escrow must hold at least{' '}
+        <M>price + 0.002 NEAR</M>. It debits exactly that from the escrow, sends the price to the payment target, keeps the fee and refunds nothing.
         The payment record, activity entry and <M>payment</M> event are the ones{' '}
         <M>pay</M> writes: the payer is the caller, so a score built on escrow payments is
         built on the same real transfers, and the same self-payment rule applies.
@@ -308,13 +309,16 @@ export default function Page() {
         nothing else. It cannot withdraw (that attaches 1 yocto), deposit, register or pause a
         service, or move any other balance, and NEAR rejects any other call from it. Withdrawing
         needs a full-access key. <strong className="text-white">The escrow is the spending
-        limit</strong>: a leaked agent key can spend all of it, on any active service, and no more.
-        Keep in it only what the agent may spend; top it up from the full-access key.
+        limit</strong>: a leaked agent key can spend all of it, on any active service, and no more
+        NEAR than that. Its gas is paid by the account, not the escrow, so a leaked key can also burn
+        gas from the account balance up to its allowance. Keep in the escrow only what the agent may
+        spend, keep the allowance low, and top the escrow up from the full-access key.
       </Callout>
       <P>
         Create such a key with <DocLink href="/docs/cli#agent-key">neargate agent-key add</DocLink>{' '}
         and fund the escrow with <DocLink href="/docs/cli#escrow">neargate escrow deposit</DocLink>.
-        The key’s <M>allowance</M> only pays its gas.
+        The key’s <M>allowance</M> only pays its gas, and that gas comes from the account balance
+        (not the escrow): it caps how much gas a leaked key can burn there.
       </P>
 
       <H2 id="errors">Error codes</H2>
@@ -331,7 +335,7 @@ export default function Page() {
           [<span key="2"><M>ERR_FIELD_TOO_LONG</M><Sub>register_service, record_attestation</Sub></span>, 'A field is over its byte limit: name, description, gateway_base_url, accepts.asset, accepts.symbol, payment_tx_hash.'],
           [<span key="3"><M>ERR_INVALID_PRICE</M><Sub>register_service</Sub></span>, 'accepts has fewer than 1 or more than 4 options, a "near" amount is below 10^18 yocto, another amount is zero, or more than one option is "near".'],
           [<span key="4"><M>ERR_DEPOSIT_TOO_LOW</M><Sub>register_service, pay, deposit_escrow</Sub></span>, 'Attached below 0.12 NEAR (registration) or below price + 0.002 NEAR (pay; the message states the required yocto). deposit_escrow: a first deposit that is not more than 0.002 NEAR, or a top-up that attaches nothing.'],
-          [<span key="5"><M>ERR_STORAGE_EXCEEDED</M><Sub>register_service, pay, pay_from_escrow</Sub></span>, 'The call’s measured storage cost is above its budget (the deposit, or the fee).'],
+          [<span key="5"><M>ERR_STORAGE_EXCEEDED</M><Sub>register_service, pay, pay_from_escrow, deposit_escrow</Sub></span>, 'The call’s measured storage cost is above its budget (the deposit, or the fee).'],
           [<span key="6"><M>ERR_SERVICE_NOT_FOUND</M><Sub>pay, pay_from_escrow, record_attestation, set_active, set_attestor</Sub></span>, 'No service with that id.'],
           [<span key="7"><M>ERR_SERVICE_INACTIVE</M><Sub>pay, pay_from_escrow, record_attestation</Sub></span>, 'The owner switched the service off.'],
           [<span key="8"><M>ERR_NO_NATIVE_PRICE</M><Sub>pay, pay_from_escrow</Sub></span>, 'The service has no "near" price option to settle.'],
