@@ -1,0 +1,16 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "error": {
+    "name": "HANDLER_ERROR",
+    "cause": {
+      "info": {
+        "error_message": "node is overloaded"
+      },
+      "name": "INTERNAL_ERROR"
+    },
+    "code": -32000,
+    "message": "Server error",
+    "data": "node is overloaded"
+  }
+}

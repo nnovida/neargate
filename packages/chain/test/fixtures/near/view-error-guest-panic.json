@@ -1,0 +1,10 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "result": {
+    "block_hash": "DwXQ7kyxTEupb1t6QmxetC9hzRzYAvzbM1mFFHUZ2U1b",
+    "block_height": 221004517,
+    "error": "wasm execution failed with error: FunctionCallError(HostError(GuestPanic { panic_msg: \"ERR_SERVICE_NOT_FOUND: no such service\" }))",
+    "logs": []
+  }
+}

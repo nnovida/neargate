@@ -1,0 +1,91 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "result": {
+    "final_execution_status": "FINAL",
+    "receipts_outcome": [
+      {
+        "block_hash": "DXtvrYfqC86WPE9BAv2Mpq6m9f7WJK5BPhGg6aFKQirs",
+        "id": "CXrkLXtYtepSStj4oTfR2Y4PxJnckzHQixjqEzdtPyKr",
+        "outcome": {
+          "executor_id": "neargate-registry.testnet",
+          "gas_burnt": 2428271317438,
+          "logs": [],
+          "metadata": {
+            "gas_profile": [],
+            "version": 3
+          },
+          "receipt_ids": [
+            "BFDDXcz11cxZmRHZv4mYXEgaeQwbVrcShnTgevkPTrsX"
+          ],
+          "status": {
+            "Failure": {
+              "ActionError": {
+                "index": 0,
+                "kind": {
+                  "FunctionCallError": {
+                    "ExecutionError": "Smart contract panicked: ERR_DEPOSIT_TOO_LOW: attach at least 502000000000000000000000 yocto (price + storage fee)"
+                  }
+                }
+              }
+            }
+          },
+          "tokens_burnt": "242827131743800000000"
+        },
+        "proof": []
+      }
+    ],
+    "status": {
+      "Failure": {
+        "ActionError": {
+          "index": 0,
+          "kind": {
+            "FunctionCallError": {
+              "ExecutionError": "Smart contract panicked: ERR_DEPOSIT_TOO_LOW: attach at least 502000000000000000000000 yocto (price + storage fee)"
+            }
+          }
+        }
+      }
+    },
+    "transaction": {
+      "actions": [
+        {
+          "FunctionCall": {
+            "method_name": "pay",
+            "args": "eyJzZXJ2aWNlX2lkIjoxLCJub25jZSI6IjQyNDIifQ==",
+            "gas": 30000000000000,
+            "deposit": "1"
+          }
+        }
+      ],
+      "hash": "Akiy3SNDadKPsZw3dFkzzYAYyudnMqyhTkL5rUwCYZ6F",
+      "nonce": 186000000000086,
+      "priority_fee": 0,
+      "public_key": "ed25519:3NeypegKDzgYPWKi8BcxUKgy5sNQB3if6BuJg3Koa9gP",
+      "receiver_id": "neargate-registry.testnet",
+      "signature": "ed25519:3RMP3q6hjyhZq3dKW5Q1CX5EZGySMGv4EDStyo3NVi8VZtCa6WRXz6oSNLexDRZquiywXtiSvon1RVexNTB7ZJXq",
+      "signer_id": "buyer.testnet"
+    },
+    "transaction_outcome": {
+      "block_hash": "DwXQ7kyxTEupb1t6QmxetC9hzRzYAvzbM1mFFHUZ2U1b",
+      "id": "Akiy3SNDadKPsZw3dFkzzYAYyudnMqyhTkL5rUwCYZ6F",
+      "outcome": {
+        "executor_id": "buyer.testnet",
+        "gas_burnt": 308066008128,
+        "logs": [],
+        "metadata": {
+          "gas_profile": null,
+          "version": 1
+        },
+        "receipt_ids": [
+          "CXrkLXtYtepSStj4oTfR2Y4PxJnckzHQixjqEzdtPyKr"
+        ],
+        "status": {
+          "SuccessReceiptId": "CXrkLXtYtepSStj4oTfR2Y4PxJnckzHQixjqEzdtPyKr"
+        },
+        "tokens_burnt": "30806600812800000000"
+      },
+      "proof": []
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "result": {
+    "block_hash": "DwXQ7kyxTEupb1t6QmxetC9hzRzYAvzbM1mFFHUZ2U1b",
+    "block_height": 221004517,
+    "error": "access key ed25519:3NeypegKDzgYPWKi8BcxUKgy5sNQB3if6BuJg3Koa9gP does not exist while viewing",
+    "logs": []
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "error": {
+    "name": "HANDLER_ERROR",
+    "cause": {
+      "info": {
+        "requested_transaction_hash": "Akiy3SNDadKPsZw3dFkzzYAYyudnMqyhTkL5rUwCYZ6F"
+      },
+      "name": "UNKNOWN_TRANSACTION"
+    },
+    "code": -32000,
+    "message": "Server error",
+    "data": "Transaction Akiy3SNDadKPsZw3dFkzzYAYyudnMqyhTkL5rUwCYZ6F doesn't exist"
+  }
+}

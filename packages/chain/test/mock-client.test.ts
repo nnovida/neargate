@@ -15,7 +15,7 @@ import {
   nearToYocto,
 } from '@agentgate/shared';
 import type { ChainClient, MockSigner, RegisterServiceInput } from '@agentgate/shared';
-import { MockChainHttpClient, createChainClient } from '../src/index';
+import { LiveNearClient, MockChainHttpClient, createChainClient } from '../src/index';
 
 const OWNER: MockSigner = { kind: 'mock', accountId: 'owner.mock' };
 const ATTESTOR: MockSigner = { kind: 'mock', accountId: 'attestor.mock' };
@@ -124,7 +124,7 @@ describe('createChainClient', () => {
     expect(chain.registryId).toBe(MOCK_REGISTRY_ID);
   });
 
-  it('refuses live mode with CONFIG_INVALID until the live NEAR client lands (Task 6)', () => {
+  it('refuses live mode with CONFIG_INVALID while no registry contract id is configured', () => {
     const config = loadConfig({ AGENTGATE_MODE: 'live', AGENTGATE_ADMIN_TOKEN: 'strong-token-for-tests' });
     let thrown: unknown;
     try {
@@ -133,7 +133,20 @@ describe('createChainClient', () => {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(AgentGateError);
-    expect(thrown).toMatchObject({ code: 'CONFIG_INVALID', message: expect.stringMatching(/Task 6/) });
+    expect(thrown).toMatchObject({ code: 'CONFIG_INVALID', message: expect.stringMatching(/REGISTRY_CONTRACT_ID/) });
+  });
+
+  it('selects LiveNearClient in live mode once a registry contract id is set', () => {
+    const live = createChainClient(
+      loadConfig({
+        AGENTGATE_MODE: 'live',
+        AGENTGATE_ADMIN_TOKEN: 'strong-token-for-tests',
+        REGISTRY_CONTRACT_ID: 'neargate-registry.testnet',
+      }),
+    );
+    expect(live).toBeInstanceOf(LiveNearClient);
+    expect(live.network).toBe('near-testnet');
+    expect(live.registryId).toBe('neargate-registry.testnet');
   });
 
   it('rejects a non-http devnet URL', () => {

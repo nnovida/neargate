@@ -1,0 +1,14 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "error": {
+    "name": "HANDLER_ERROR",
+    "cause": {
+      "info": {},
+      "name": "TIMEOUT_ERROR"
+    },
+    "code": -32000,
+    "message": "Server error",
+    "data": "Timeout"
+  }
+}

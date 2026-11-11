@@ -1,0 +1,30 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "result": {
+    "chain_id": "testnet",
+    "latest_protocol_version": 80,
+    "protocol_version": 80,
+    "rpc_addr": "0.0.0.0:3030",
+    "sync_info": {
+      "earliest_block_hash": "AHLrDdmf4WsJKuSFWp43uTgVLmpdk7ZcrwmaFHm5nwZM",
+      "earliest_block_height": 220788517,
+      "earliest_block_time": "2026-11-09T09:00:00.000000000Z",
+      "epoch_id": "2PnHSyHA6u3E3N5JXAWwiF25y81WfaT5VXAsxgzfMNJA",
+      "epoch_start_height": 221001517,
+      "latest_block_hash": "DwXQ7kyxTEupb1t6QmxetC9hzRzYAvzbM1mFFHUZ2U1b",
+      "latest_block_height": 221004517,
+      "latest_block_time": "2026-11-11T10:00:00.000000000Z",
+      "latest_state_root": "DffqtuRWH8MheadHyhkYuJ4NdkjemvhnHdSV4YFGE2cp",
+      "syncing": false
+    },
+    "uptime_sec": 1209600,
+    "validator_account_id": null,
+    "validators": [],
+    "version": {
+      "build": "2.9.0",
+      "rustc_version": "1.86.0",
+      "version": "2.9.0"
+    }
+  }
+}

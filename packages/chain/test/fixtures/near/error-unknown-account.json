@@ -1,0 +1,18 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "error": {
+    "name": "HANDLER_ERROR",
+    "cause": {
+      "info": {
+        "block_hash": "DwXQ7kyxTEupb1t6QmxetC9hzRzYAvzbM1mFFHUZ2U1b",
+        "block_height": 221004517,
+        "requested_account_id": "ghost.testnet"
+      },
+      "name": "UNKNOWN_ACCOUNT"
+    },
+    "code": -32000,
+    "message": "Server error",
+    "data": "account ghost.testnet does not exist while viewing"
+  }
+}

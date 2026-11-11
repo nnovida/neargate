@@ -1,0 +1,49 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "result": {
+    "final_execution_status": "INCLUDED",
+    "receipts_outcome": [],
+    "status": "Started",
+    "transaction": {
+      "actions": [
+        {
+          "FunctionCall": {
+            "method_name": "pay",
+            "args": "eyJzZXJ2aWNlX2lkIjoxLCJub25jZSI6IjQyNDIifQ==",
+            "gas": 30000000000000,
+            "deposit": "502000000000000000000000"
+          }
+        }
+      ],
+      "hash": "Akiy3SNDadKPsZw3dFkzzYAYyudnMqyhTkL5rUwCYZ6F",
+      "nonce": 186000000000086,
+      "priority_fee": 0,
+      "public_key": "ed25519:3NeypegKDzgYPWKi8BcxUKgy5sNQB3if6BuJg3Koa9gP",
+      "receiver_id": "neargate-registry.testnet",
+      "signature": "ed25519:3RMP3q6hjyhZq3dKW5Q1CX5EZGySMGv4EDStyo3NVi8VZtCa6WRXz6oSNLexDRZquiywXtiSvon1RVexNTB7ZJXq",
+      "signer_id": "buyer.testnet"
+    },
+    "transaction_outcome": {
+      "block_hash": "DwXQ7kyxTEupb1t6QmxetC9hzRzYAvzbM1mFFHUZ2U1b",
+      "id": "Akiy3SNDadKPsZw3dFkzzYAYyudnMqyhTkL5rUwCYZ6F",
+      "outcome": {
+        "executor_id": "buyer.testnet",
+        "gas_burnt": 308066008128,
+        "logs": [],
+        "metadata": {
+          "gas_profile": null,
+          "version": 1
+        },
+        "receipt_ids": [
+          "CXrkLXtYtepSStj4oTfR2Y4PxJnckzHQixjqEzdtPyKr"
+        ],
+        "status": {
+          "SuccessReceiptId": "CXrkLXtYtepSStj4oTfR2Y4PxJnckzHQixjqEzdtPyKr"
+        },
+        "tokens_burnt": "30806600812800000000"
+      },
+      "proof": []
+    }
+  }
+}

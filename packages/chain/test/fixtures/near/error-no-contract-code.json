@@ -1,0 +1,18 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "error": {
+    "name": "HANDLER_ERROR",
+    "cause": {
+      "info": {
+        "block_hash": "DwXQ7kyxTEupb1t6QmxetC9hzRzYAvzbM1mFFHUZ2U1b",
+        "block_height": 221004517,
+        "contract_account_id": "neargate-registry.testnet"
+      },
+      "name": "NO_CONTRACT_CODE"
+    },
+    "code": -32000,
+    "message": "Server error",
+    "data": "Contract code for contract ID #neargate-registry.testnet has never been observed on the node"
+  }
+}

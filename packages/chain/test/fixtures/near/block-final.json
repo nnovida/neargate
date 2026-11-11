@@ -1,0 +1,16 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "result": {
+    "author": "node1.testnet",
+    "chunks": [],
+    "header": {
+      "epoch_id": "2PnHSyHA6u3E3N5JXAWwiF25y81WfaT5VXAsxgzfMNJA",
+      "hash": "DwXQ7kyxTEupb1t6QmxetC9hzRzYAvzbM1mFFHUZ2U1b",
+      "height": 221004517,
+      "prev_hash": "DAYSLquAHgvpttLd1HEJTHg7odz2bibueEtmzWpqohMe",
+      "timestamp": 1794391200000000000,
+      "timestamp_nanosec": "1794391200000000000"
+    }
+  }
+}

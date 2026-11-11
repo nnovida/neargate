@@ -1,0 +1,7 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "result": {
+    "final_execution_status": "NONE"
+  }
+}

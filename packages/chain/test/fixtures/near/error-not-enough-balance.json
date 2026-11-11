@@ -1,0 +1,24 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "error": {
+    "name": "HANDLER_ERROR",
+    "cause": {
+      "info": {},
+      "name": "INVALID_TRANSACTION"
+    },
+    "code": -32000,
+    "message": "Server error",
+    "data": {
+      "TxExecutionError": {
+        "InvalidTxError": {
+          "NotEnoughBalance": {
+            "balance": "100000000000000000000000",
+            "cost": "502310000000000000000000",
+            "signer_id": "buyer.testnet"
+          }
+        }
+      }
+    }
+  }
+}
