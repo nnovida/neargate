@@ -30,6 +30,9 @@ fn ctx_at(predecessor: &str, deposit: u128, timestamp_ms: u64, height: u64) {
             .attached_deposit(NearToken::from_yoctonear(deposit))
             .block_timestamp(timestamp_ms * 1_000_000)
             .block_height(height)
+            // a large base, so a call that shrinks storage cannot underflow the mock's counter;
+            // tests only ever look at deltas
+            .storage_usage(1 << 40)
             .build()
     );
 }
@@ -65,7 +68,7 @@ fn register_with(c: &mut Registry, accepts: Vec<PaymentOption>) -> u64 {
     c.register_service(
         "Weather API".to_string(),
         "Hourly forecasts".to_string(),
-        "https://gw.example/svc/1".to_string(),
+        "https://gateway.example.com".to_string(),
         accepts,
         acct("seller.near"),
         acct("attestor.near"),
@@ -188,13 +191,35 @@ fn register_rejects_price_below_min() {
     expect_err("ERR_INVALID_PRICE", || {
         register_with(&mut c, vec![native(MIN_PRICE_YOCTO - 1)])
     });
+    expect_err("ERR_INVALID_PRICE", || {
+        register_with(&mut c, vec![native(0)])
+    });
     assert_eq!(c.services_count(), 0);
     // exactly the minimum is fine
     assert_eq!(register_with(&mut c, vec![native(MIN_PRICE_YOCTO)]), 1);
-    // the minimum applies to non-native options too
+}
+
+#[test]
+fn non_native_options_are_priced_in_their_own_units() {
+    let mut c = setup();
+    // 0.01 USDC (6 decimals) is far below 10^18 units and must be accepted
+    let usdc = PaymentOption {
+        asset: "usdc.testnet".to_string(),
+        amount: U128(10_000),
+        decimals: 6,
+        symbol: "USDC".to_string(),
+    };
+    assert_eq!(register_with(&mut c, vec![native(PRICE), usdc.clone()]), 1);
+    assert_eq!(c.get_service(1).unwrap().accepts[1], usdc);
+    // the smallest unit is fine, zero is not
+    assert_eq!(register_with(&mut c, vec![token(1)]), 2);
     expect_err("ERR_INVALID_PRICE", || {
-        register_with(&mut c, vec![native(PRICE), token(MIN_PRICE_YOCTO - 1)])
+        register_with(&mut c, vec![token(0)])
     });
+    expect_err("ERR_INVALID_PRICE", || {
+        register_with(&mut c, vec![native(PRICE), token(0)])
+    });
+    assert_eq!(c.services_count(), 2);
 }
 
 #[test]
@@ -260,6 +285,55 @@ fn register_rejects_long_fields() {
         go(&mut c, "a".repeat(64), "d".repeat(280), "u".repeat(200)),
         1
     );
+}
+
+#[test]
+fn length_limits_count_bytes_not_chars() {
+    let e = "é"; // two bytes in UTF-8
+    let mut c = setup();
+    let go = |c: &mut Registry, name: String, desc: String, url: String| {
+        ctx("owner.near", REGISTRATION_DEPOSIT_YOCTO);
+        c.register_service(
+            name,
+            desc,
+            url,
+            vec![native(PRICE)],
+            acct("seller.near"),
+            acct("attestor.near"),
+        )
+    };
+    // 33 chars = 66 bytes > NAME_MAX; 32 chars = 64 bytes is fine
+    expect_err("ERR_FIELD_TOO_LONG", || {
+        go(&mut c, e.repeat(33), String::new(), String::new())
+    });
+    expect_err("ERR_FIELD_TOO_LONG", || {
+        go(&mut c, "a".into(), e.repeat(141), String::new())
+    });
+    expect_err("ERR_FIELD_TOO_LONG", || {
+        go(&mut c, "a".into(), String::new(), e.repeat(101))
+    });
+    let mut wide_asset = token(5);
+    wide_asset.asset = e.repeat(33);
+    expect_err("ERR_FIELD_TOO_LONG", || {
+        register_with(&mut c, vec![native(PRICE), wide_asset])
+    });
+    let mut wide_symbol = native(PRICE);
+    wide_symbol.symbol = e.repeat(33);
+    expect_err("ERR_FIELD_TOO_LONG", || {
+        register_with(&mut c, vec![wide_symbol])
+    });
+    assert_eq!(c.services_count(), 0);
+    assert_eq!(go(&mut c, e.repeat(32), e.repeat(140), e.repeat(100)), 1);
+
+    // payment_tx_hash: 64 chars of 2 bytes is 128 bytes
+    pay_as(&mut c, "buyer.near", 1, "1");
+    ctx("attestor.near", 0);
+    expect_err("ERR_FIELD_TOO_LONG", || {
+        c.record_attestation(1, "1".to_string(), e.repeat(64), true)
+    });
+    assert!(!c.get_payment("1".to_string()).unwrap().attested);
+    c.record_attestation(1, "1".to_string(), e.repeat(32), true);
+    assert!(c.get_payment("1".to_string()).unwrap().attested);
 }
 
 #[test]
@@ -363,6 +437,24 @@ fn pay_rejects_low_deposit() {
     let mut c = setup();
     let id = register(&mut c);
     ctx("buyer.near", PRICE + PAYMENT_STORAGE_FEE_YOCTO - 1);
+    expect_err("ERR_DEPOSIT_TOO_LOW", || c.pay(id, "1".to_string()));
+    assert_eq!(c.get_payment("1".to_string()), None);
+}
+
+#[test]
+fn pay_with_a_price_near_u128_max_is_a_deposit_error_not_an_overflow() {
+    let mut c = setup();
+    let id = register_with(&mut c, vec![native(u128::MAX - 5)]);
+    // price + fee overflows u128; the check must still be a clean ERR_DEPOSIT_TOO_LOW
+    // (the mocked VM adds the deposit to the account balance, so start that at zero)
+    testing_env!(
+        VMContextBuilder::new()
+            .current_account_id(acct("registry.near"))
+            .predecessor_account_id(acct("buyer.near"))
+            .account_balance(NearToken::from_yoctonear(0))
+            .attached_deposit(NearToken::from_yoctonear(u128::MAX - 1))
+            .build()
+    );
     expect_err("ERR_DEPOSIT_TOO_LOW", || c.pay(id, "1".to_string()));
     assert_eq!(c.get_payment("1".to_string()), None);
 }
@@ -544,7 +636,7 @@ fn attest_rejects_long_tx_hash() {
         c.record_attestation(id, "1".to_string(), "h".repeat(65), true)
     });
     assert!(!c.get_payment("1".to_string()).unwrap().attested);
-    // 64 chars is fine
+    // 64 bytes is fine
     c.record_attestation(id, "1".to_string(), "h".repeat(64), true);
     assert!(c.get_payment("1".to_string()).unwrap().attested);
 }
@@ -822,35 +914,196 @@ fn storage_guard_rejects_cost_above_budget() {
     });
 }
 
-#[test]
-fn register_storage_fits_the_deposit_with_the_longest_inputs() {
-    let mut c = setup();
-    let accepts: Vec<PaymentOption> = (0..4)
+/// Four options with every string at its byte maximum.
+fn max_accepts() -> Vec<PaymentOption> {
+    (0..4)
         .map(|i| PaymentOption {
             asset: if i == 0 {
                 "near".to_string()
             } else {
-                format!("{}{i}", "t".repeat(60))
+                format!("{}{i}", "t".repeat(63))
             },
             amount: U128(PRICE),
             decimals: 24,
             symbol: "s".repeat(64),
         })
-        .collect();
+        .collect()
+}
+
+#[test]
+fn register_storage_plus_reserve_fits_the_deposit_with_the_longest_inputs() {
+    let mut c = setup();
     ctx(IMPLICIT, REGISTRATION_DEPOSIT_YOCTO);
     let before = storage_bytes();
     c.register_service(
         "n".repeat(64),
         "d".repeat(280),
         "u".repeat(200),
-        accepts,
+        max_accepts(),
         acct(IMPLICIT),
         acct(IMPLICIT),
     );
     let bytes = storage_bytes() - before;
     let yocto = u128::from(bytes) * near_sdk::env::storage_byte_cost().as_yoctonear();
-    println!("worst-case register storage: {bytes} bytes = {yocto} yocto");
-    assert!(yocto <= REGISTRATION_DEPOSIT_YOCTO);
+    println!(
+        "worst-case register storage: {bytes} bytes = {yocto} yocto; with the reserve {} of {}",
+        yocto + ATTESTATION_RESERVE_YOCTO,
+        REGISTRATION_DEPOSIT_YOCTO
+    );
+    assert!(yocto + ATTESTATION_RESERVE_YOCTO <= REGISTRATION_DEPOSIT_YOCTO);
+}
+
+fn max_attestation() -> Attestation {
+    Attestation {
+        nonce: "9".repeat(NONCE_MAX),
+        payment_tx_hash: "h".repeat(TX_HASH_MAX),
+        success: true,
+        timestamp_ms: u64::MAX,
+    }
+}
+
+#[test]
+fn attestation_reserve_matches_the_stored_layout() {
+    use near_sdk::borsh::to_vec;
+    // the protocol constant the reserve is derived from
+    assert_eq!(
+        near_sdk::env::storage_byte_cost().as_yoctonear(),
+        STORAGE_BYTE_COST_YOCTO
+    );
+    // one maximal entry, and a full list of them, serialize to the sizes the reserve assumes
+    let one = to_vec(&max_attestation()).unwrap().len() as u128;
+    assert_eq!(one, MAX_ATTESTATION_BYTES);
+    assert_eq!(one, 101);
+    let list = vec![max_attestation(); MAX_ATTESTATIONS];
+    assert_eq!(to_vec(&list).unwrap().len() as u128, 4 + 100 * 101);
+    assert_eq!(to_vec(&(u64::MAX, u64::MAX)).unwrap().len(), 16);
+    // score record 40 + 9 + 16, list record 40 + 9 + 4 + 100 * 101
+    assert_eq!(SCORE_RECORD_BYTES, 65);
+    assert_eq!(ATTESTATION_LIST_RECORD_BYTES, 10_153);
+    assert_eq!(ATTESTATION_RESERVE_BYTES, 10_218);
+    assert_eq!(ATTESTATION_RESERVE_YOCTO, 102_180_000_000_000_000_000_000);
+}
+
+/// A pre-written `ActivityEntry::Empty` slot: record overhead 40 + key 9 + one value byte.
+const PLACEHOLDER_RECORD_BYTES: u128 = 40 + 9 + 1;
+
+/// The largest ring record: the biggest serialized `ActivityEntry` plus key and record overhead.
+fn max_ring_record_bytes() -> u128 {
+    use near_sdk::borsh::to_vec;
+    let a64 = acct(IMPLICIT);
+    let entries = [
+        ActivityEntry::ServiceRegistered {
+            service_id: u64::MAX,
+            account: a64.clone(),
+            timestamp_ms: u64::MAX,
+            block_height: u64::MAX,
+        },
+        ActivityEntry::Payment {
+            nonce: "9".repeat(NONCE_MAX),
+        },
+        ActivityEntry::Attestation {
+            service_id: u64::MAX,
+            account: a64,
+            success: true,
+            nonce: "9".repeat(NONCE_MAX),
+            payment_tx_hash: "h".repeat(TX_HASH_MAX),
+            timestamp_ms: u64::MAX,
+            block_height: u64::MAX,
+        },
+    ];
+    let value = entries
+        .iter()
+        .map(|e| to_vec(e).unwrap().len() as u128)
+        .max()
+        .unwrap();
+    40 + 9 + value
+}
+
+/// One service used as hostilely as the contract allows: every field at its byte maximum, 100
+/// pays from a 64-char payer with 20-digit nonces, 100 attestations with 64-byte hashes. Returns
+/// the net storage growth in bytes (sum of per-call deltas) and the largest single `pay` delta.
+fn adversarial_cycle(c: &mut Registry, first_nonce: u128) -> (i128, u64) {
+    let owner = "a".repeat(64);
+    let target = "b".repeat(64);
+    let attestor = "c".repeat(64);
+    let payer = "d".repeat(64);
+    let mut grown = 0i128;
+    let mut delta = |before: u64| grown += i128::from(storage_bytes()) - i128::from(before);
+
+    ctx(&owner, REGISTRATION_DEPOSIT_YOCTO);
+    let before = storage_bytes();
+    let id = c.register_service(
+        "n".repeat(64),
+        "d".repeat(280),
+        "u".repeat(200),
+        max_accepts(),
+        acct(&target),
+        acct(&attestor),
+    );
+    delta(before);
+
+    let mut worst_pay = 0u64;
+    let nonces: Vec<String> = (0..100u128)
+        .map(|i| format!("{:020}", 10u128.pow(19) + first_nonce + i))
+        .collect();
+    for nonce in &nonces {
+        ctx(&payer, PRICE + PAYMENT_STORAGE_FEE_YOCTO);
+        let before = storage_bytes();
+        c.pay(id, nonce.clone());
+        worst_pay = worst_pay.max(storage_bytes().saturating_sub(before));
+        delta(before);
+    }
+    for nonce in &nonces {
+        ctx(&attestor, 0);
+        let before = storage_bytes();
+        c.record_attestation(id, nonce.clone(), "h".repeat(64), true);
+        delta(before);
+    }
+    assert_eq!(c.get_attestations(id).len(), 100);
+    assert_eq!(
+        c.get_score(id),
+        ScoreView {
+            total_calls: 100,
+            success_calls: 100
+        }
+    );
+    (grown, worst_pay)
+}
+
+fn bytes_to_yocto(bytes: i128) -> u128 {
+    u128::try_from(bytes).expect("storage must have grown") * STORAGE_BYTE_COST_YOCTO
+}
+
+#[test]
+fn adversarial_services_are_self_funded() {
+    let mut c = setup();
+    let deposit = REGISTRATION_DEPOSIT_YOCTO;
+    let fees = 100 * PAYMENT_STORAGE_FEE_YOCTO;
+    // The ring starts as 200 one-byte placeholders (paid at init); at most it can grow to 200
+    // maximal records. That is the only part of a cycle that is not prepaid per service.
+    let ring_max = u128::from(ACTIVITY_CAP)
+        * (max_ring_record_bytes() - PLACEHOLDER_RECORD_BYTES)
+        * STORAGE_BYTE_COST_YOCTO;
+
+    let (grown_a, worst_pay_a) = adversarial_cycle(&mut c, 0);
+    let cost_a = bytes_to_yocto(grown_a);
+    println!(
+        "cycle A: {grown_a} bytes = {cost_a} yocto; budget {} (deposit {deposit} + fees {fees} + ring {ring_max}); worst pay {worst_pay_a} bytes",
+        deposit + fees + ring_max
+    );
+    assert!(cost_a <= deposit + fees + ring_max);
+    assert!(worst_pay_a <= 200);
+
+    // Steady state: the ring is full, so another hostile service costs the registry nothing.
+    let (grown_b, worst_pay_b) = adversarial_cycle(&mut c, 1_000);
+    let cost_b = bytes_to_yocto(grown_b);
+    println!(
+        "cycle B: {grown_b} bytes = {cost_b} yocto; budget {} (deposit {deposit} + fees {fees}); worst pay {worst_pay_b} bytes",
+        deposit + fees
+    );
+    assert!(cost_b <= deposit + fees);
+    assert!(worst_pay_b <= 200);
+    assert_eq!(c.services_count(), 2);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -918,5 +1171,102 @@ fn views_serialize_to_the_documented_json() {
     assert_eq!(p["self_paid"], false);
     let a = near_sdk::serde_json::to_value(c.get_recent_activity(1)).unwrap();
     assert_eq!(a[0]["kind"], "payment");
+    // an absent option is an explicit null, not a missing key
+    assert!(a[0].as_object().unwrap().contains_key("success"));
     assert!(a[0]["success"].is_null());
+    assert!(a[0]["payment_tx_hash"].is_null());
+}
+
+/// Tasks 3 and 6 copy these field names verbatim: pin the exact key set of every view.
+#[test]
+fn views_have_exactly_the_documented_keys() {
+    use near_sdk::serde_json::{Value, to_value};
+    fn keys(v: &Value) -> Vec<&str> {
+        let mut k: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        k.sort_unstable();
+        k
+    }
+    fn sorted(mut k: Vec<&'static str>) -> Vec<&'static str> {
+        k.sort_unstable();
+        k
+    }
+
+    let mut c = setup();
+    let id = register(&mut c);
+    pay_as(&mut c, "buyer.near", id, "9");
+    attest_as(&mut c, "attestor.near", id, "9", "txhash", true);
+
+    let service = to_value(c.get_service(id).unwrap()).unwrap();
+    assert_eq!(
+        keys(&service),
+        sorted(vec![
+            "id",
+            "name",
+            "description",
+            "gateway_base_url",
+            "accepts",
+            "payment_target",
+            "owner",
+            "attestor",
+            "active",
+            "created_at_ms"
+        ])
+    );
+    assert_eq!(
+        keys(&service["accepts"][0]),
+        sorted(vec!["asset", "amount", "decimals", "symbol"])
+    );
+    // list_services returns the same shape
+    let listed = to_value(c.list_services(1, 1)).unwrap();
+    assert_eq!(keys(&listed[0]), keys(&service));
+
+    let score = to_value(c.get_score(id)).unwrap();
+    assert_eq!(keys(&score), sorted(vec!["total_calls", "success_calls"]));
+
+    let attestations = to_value(c.get_attestations(id)).unwrap();
+    assert_eq!(
+        keys(&attestations[0]),
+        sorted(vec!["nonce", "payment_tx_hash", "success", "timestamp_ms"])
+    );
+
+    let payment = to_value(c.get_payment("9".to_string()).unwrap()).unwrap();
+    assert_eq!(
+        keys(&payment),
+        sorted(vec![
+            "nonce",
+            "service_id",
+            "payer",
+            "amount",
+            "timestamp_ms",
+            "block_height",
+            "self_paid",
+            "attested"
+        ])
+    );
+
+    // all three activity kinds carry every key; absent ones are explicit nulls
+    let activity = to_value(c.get_recent_activity(10)).unwrap();
+    let activity = activity.as_array().unwrap();
+    assert_eq!(activity.len(), 3);
+    let expected = sorted(vec![
+        "kind",
+        "service_id",
+        "account",
+        "amount",
+        "success",
+        "nonce",
+        "payment_tx_hash",
+        "timestamp_ms",
+        "block_height",
+    ]);
+    for entry in activity {
+        assert_eq!(keys(entry), expected);
+    }
+    let kinds: Vec<&str> = activity
+        .iter()
+        .map(|a| a["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["attestation", "payment", "service_registered"]);
+    assert!(activity[2]["amount"].is_null());
+    assert!(activity[2]["nonce"].is_null());
 }

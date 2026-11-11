@@ -7,7 +7,7 @@
 //! `NEARGATE_REGISTRY_WASM` overrides the wasm path. `NEAR_SANDBOX_BIN_PATH` points at an
 //! already-downloaded `near-sandbox` binary (otherwise near-workspaces downloads one).
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, anyhow, ensure};
 use near_workspaces::result::ExecutionFinalResult;
 use near_workspaces::types::{Gas, NearToken};
 use near_workspaces::{Account, Contract};
@@ -15,8 +15,11 @@ use serde_json::{Value, json};
 
 const PRICE: u128 = 10_000_000_000_000_000_000_000; // 0.01 NEAR
 const FEE: u128 = 2_000_000_000_000_000_000_000; // 0.002 NEAR
-const REGISTRATION_DEPOSIT: u128 = 100_000_000_000_000_000_000_000; // 0.1 NEAR
+const REGISTRATION_DEPOSIT: u128 = 120_000_000_000_000_000_000_000; // 0.12 NEAR
 const BYTE_COST: u128 = 10_000_000_000_000_000_000; // 10^19 yocto per byte
+/// Storage a service can later fill through `record_attestation`: the score record
+/// (40 + 9 + 16) plus a full list of 100 maximal attestations (40 + 9 + 4 + 100 * 101).
+const ATTESTATION_RESERVE_BYTES: u128 = 65 + 10_153;
 const CALL_GAS: Gas = Gas::from_tgas(30);
 
 fn yocto(n: u128) -> NearToken {
@@ -30,8 +33,12 @@ fn wasm() -> Result<Vec<u8>> {
             env!("CARGO_MANIFEST_DIR")
         )
     });
-    std::fs::read(&path).with_context(|| {
-        format!("cannot read {path}; build it first with `cargo near build non-reproducible-wasm`")
+    std::fs::read(&path).map_err(|_| {
+        anyhow!(
+            "registry wasm not found at {path}. Build it first with \
+             `cd contracts/registry && cargo near build non-reproducible-wasm` \
+             (or point NEARGATE_REGISTRY_WASM at a built file)"
+        )
     })
 }
 
@@ -82,7 +89,7 @@ fn register_args(env: &Env) -> Value {
     json!({
         "name": "Weather API",
         "description": "Hourly forecasts",
-        "gateway_base_url": "https://gw.example/svc/1",
+        "gateway_base_url": "https://gateway.example.com",
         "accepts": [{"asset": "near", "amount": PRICE.to_string(), "decimals": 24, "symbol": "NEAR"}],
         "payment_target": env.seller.id(),
         "attestor": env.attestor.id(),
@@ -141,6 +148,7 @@ async fn pay_refunds_excess_and_forwards_exact_price() -> Result<()> {
 
     let seller_before = balance(&env.seller).await?;
     let buyer_before = balance(&env.buyer).await?;
+    let registry_before = env.registry.view_account().await?.balance.as_yoctonear();
     let res = pay(
         &env,
         &env.buyer,
@@ -157,8 +165,10 @@ async fn pay_refunds_excess_and_forwards_exact_price() -> Result<()> {
     let seller_after = balance(&env.seller).await?;
     let buyer_after = balance(&env.buyer).await?;
 
-    // The seller receives exactly the price.
+    // The seller receives exactly the price; the registry keeps exactly the fee.
     assert_eq!(seller_after - seller_before, PRICE);
+    let registry_after = env.registry.view_account().await?.balance.as_yoctonear();
+    assert_eq!(registry_after - registry_before, FEE);
 
     // The buyer is out price + fee + gas; the other ~0.99 NEAR came back.
     let spent = buyer_before - buyer_after;
@@ -223,9 +233,10 @@ async fn full_flow_register_pay_attest() -> Result<()> {
     let grown = storage_usage(&env).await? - usage_before;
     let cost = u128::from(grown) * BYTE_COST;
     println!(
-        "[register] storage grew by {grown} bytes = {cost} yocto (deposit {REGISTRATION_DEPOSIT})"
+        "[register] storage grew by {grown} bytes = {cost} yocto; with the attestation reserve {} of {REGISTRATION_DEPOSIT}",
+        cost + ATTESTATION_RESERVE_BYTES * BYTE_COST
     );
-    assert!(cost <= REGISTRATION_DEPOSIT);
+    assert!(cost + ATTESTATION_RESERVE_BYTES * BYTE_COST <= REGISTRATION_DEPOSIT);
     let kept = env.registry.view_account().await?.balance.as_yoctonear() - balance_before;
     assert_eq!(kept, REGISTRATION_DEPOSIT);
 

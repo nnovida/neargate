@@ -25,12 +25,14 @@ mod tests;
 // Constants (D2)
 // ---------------------------------------------------------------------------------------------
 
-/// 0.000001 NEAR.
+/// 0.000001 NEAR. The floor for the `"near"` option only: other assets are priced in their own
+/// base units (a 6-decimal token needs `amount > 0`, not 10^18 units).
 pub const MIN_PRICE_YOCTO: u128 = 1_000_000_000_000_000_000;
 /// 0.002 NEAR: kept by the registry on every `pay` to cover the payment record's storage.
 pub const PAYMENT_STORAGE_FEE_YOCTO: u128 = 2_000_000_000_000_000_000_000;
-/// 0.1 NEAR: kept by the registry on every `register_service`.
-pub const REGISTRATION_DEPOSIT_YOCTO: u128 = 100_000_000_000_000_000_000_000;
+/// 0.12 NEAR: kept by the registry on every `register_service`. It prepays the service record
+/// and [`ATTESTATION_RESERVE_YOCTO`], the storage the service can later fill with attestations.
+pub const REGISTRATION_DEPOSIT_YOCTO: u128 = 120_000_000_000_000_000_000_000;
 
 pub const MAX_ATTESTATIONS: usize = 100;
 pub const ACTIVITY_CAP: u64 = 200;
@@ -41,6 +43,41 @@ pub const ACCEPTS_MAX: usize = 4;
 pub const TX_HASH_MAX: usize = 64;
 pub const NONCE_MAX: usize = 20;
 pub const LIST_LIMIT_MAX: u64 = 50;
+
+/// Yocto per stored byte (protocol constant `storage_amount_per_byte`; asserted against
+/// `env::storage_byte_cost()` in the unit tests).
+pub const STORAGE_BYTE_COST_YOCTO: u128 = 10_000_000_000_000_000_000;
+
+/// Bytes the protocol adds to every trie record on top of its key and value
+/// (`num_extra_bytes_record`).
+const RECORD_OVERHEAD_BYTES: u128 = 40;
+/// A `LookupMap<u64, _>` key: one prefix byte plus the Borsh `u64`.
+const U64_KEY_BYTES: u128 = 1 + 8;
+/// Borsh size of the largest `Attestation`: `nonce` (4-byte length + 20 digits), `payment_tx_hash`
+/// (4 + 64 bytes), `success` (1) and `timestamp_ms` (8).
+const MAX_ATTESTATION_BYTES: u128 = (4 + NONCE_MAX as u128) + (4 + TX_HASH_MAX as u128) + 1 + 8;
+/// The `scores` record of a service: key + `(u64, u64)` value + record overhead.
+const SCORE_RECORD_BYTES: u128 = RECORD_OVERHEAD_BYTES + U64_KEY_BYTES + 16;
+/// The `attestations` record of a service at its cap: key + (4-byte Vec length + 100 maximal
+/// entries) + record overhead.
+const ATTESTATION_LIST_RECORD_BYTES: u128 =
+    RECORD_OVERHEAD_BYTES + U64_KEY_BYTES + 4 + MAX_ATTESTATIONS as u128 * MAX_ATTESTATION_BYTES;
+/// Everything `record_attestation` can store for one service, in bytes:
+/// score `40 + 9 + 16 = 65`, plus list `40 + 9 + 4 + 100 * 101 = 10_153`, in total 10_218.
+pub const ATTESTATION_RESERVE_BYTES: u128 = SCORE_RECORD_BYTES + ATTESTATION_LIST_RECORD_BYTES;
+/// [`ATTESTATION_RESERVE_BYTES`] in yocto: `10_218 * 10^19 = 1.0218 * 10^23` (0.10218 NEAR).
+///
+/// `record_attestation` is not payable and has no storage check, so a service's attestation
+/// storage must be paid up front. `register_service` therefore requires the measured cost of the
+/// registration plus this reserve to fit inside [`REGISTRATION_DEPOSIT_YOCTO`]. The attestation
+/// list is capped at [`MAX_ATTESTATIONS`] entries and every field in it is bounded in bytes, so a
+/// service can never store more than this, however it is used. The other 1_782 bytes of the
+/// deposit cover the registration itself: at most 1_466 bytes with every field at its maximum,
+/// counting its activity-ring entry.
+pub const ATTESTATION_RESERVE_YOCTO: u128 = ATTESTATION_RESERVE_BYTES * STORAGE_BYTE_COST_YOCTO;
+
+// The deposit must leave room for a service record on top of the reserve.
+const _: () = assert!(ATTESTATION_RESERVE_YOCTO < REGISTRATION_DEPOSIT_YOCTO);
 
 /// The `asset` string of the one option `pay` can settle.
 pub const NATIVE_ASSET: &str = "near";
@@ -134,10 +171,12 @@ fn is_valid_nonce(nonce: &str) -> bool {
     (1..=NONCE_MAX).contains(&nonce.len()) && nonce.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// Limits are in bytes (UTF-8), not characters: storage is paid per byte, and a character can
+/// take four.
 fn check_len(field: &str, value: &str, max: usize) {
-    if value.chars().count() > max {
+    if value.len() > max {
         env::panic_str(&format!(
-            "ERR_FIELD_TOO_LONG: {field} is longer than {max} characters"
+            "ERR_FIELD_TOO_LONG: {field} is longer than {max} bytes"
         ));
     }
 }
@@ -149,15 +188,20 @@ fn validate_accepts(accepts: &[PaymentOption]) {
     );
     let mut natives = 0;
     for option in accepts {
-        ensure!(
-            option.amount.0 >= MIN_PRICE_YOCTO,
-            "ERR_INVALID_PRICE: every amount must be at least 1000000000000000000 yocto"
-        );
-        check_len("accepts.asset", &option.asset, NAME_MAX);
-        check_len("accepts.symbol", &option.symbol, NAME_MAX);
         if option.asset == NATIVE_ASSET {
             natives += 1;
+            ensure!(
+                option.amount.0 >= MIN_PRICE_YOCTO,
+                "ERR_INVALID_PRICE: the near amount must be at least 1000000000000000000 yocto"
+            );
+        } else {
+            ensure!(
+                option.amount.0 > 0,
+                "ERR_INVALID_PRICE: the amount must be greater than zero"
+            );
         }
+        check_len("accepts.asset", &option.asset, NAME_MAX);
+        check_len("accepts.symbol", &option.symbol, NAME_MAX);
     }
     ensure!(
         natives <= 1,
@@ -321,7 +365,9 @@ impl Registry {
 
     /// Registers a service owned by the caller and returns its id (1-based).
     ///
-    /// The registry keeps `REGISTRATION_DEPOSIT_YOCTO` and refunds anything above it.
+    /// The registry keeps `REGISTRATION_DEPOSIT_YOCTO` and refunds anything above it. The deposit
+    /// prepays the service record and `ATTESTATION_RESERVE_YOCTO`; the call panics
+    /// `ERR_STORAGE_EXCEEDED` if those together would not fit.
     #[payable]
     pub fn register_service(
         &mut self,
@@ -347,7 +393,7 @@ impl Registry {
         let attached = env::attached_deposit().as_yoctonear();
         ensure!(
             attached >= REGISTRATION_DEPOSIT_YOCTO,
-            "ERR_DEPOSIT_TOO_LOW: attach at least 100000000000000000000000 yocto (0.1 NEAR)"
+            "ERR_DEPOSIT_TOO_LOW: attach at least 120000000000000000000000 yocto (0.12 NEAR)"
         );
 
         let owner = env::predecessor_account_id();
@@ -375,8 +421,10 @@ impl Registry {
             block_height: env::block_height(),
         });
 
+        // The registration's own storage plus the reserve for everything the service can later
+        // store through `record_attestation` (which is not payable) must fit in the deposit.
         check_storage(
-            self.storage_cost_since(usage_before),
+            self.storage_cost_since(usage_before) + ATTESTATION_RESERVE_YOCTO,
             REGISTRATION_DEPOSIT_YOCTO,
         );
         refund(&owner, attached, REGISTRATION_DEPOSIT_YOCTO);
@@ -469,7 +517,7 @@ impl Registry {
     /// Records the outcome of the service call that followed a payment. Only the service's
     /// attestor or owner may call it, once per payment, and never for a self-payment.
     ///
-    /// `payment_tx_hash` is the transaction that paid (informational, at most 64 characters).
+    /// `payment_tx_hash` is the transaction that paid (informational, at most 64 bytes).
     pub fn record_attestation(
         &mut self,
         service_id: u64,
@@ -555,6 +603,9 @@ impl Registry {
     }
 
     /// Owner only. Replaces the account that may record attestations (the owner always may).
+    /// Its storage growth (at most 60 bytes, a short account id swapped for a 64-byte one) is
+    /// inside the registration deposit: even a service registered with every field at its maximum
+    /// leaves 316 of the 12_000 deposit bytes unused.
     pub fn set_attestor(&mut self, service_id: u64, attestor: AccountId) {
         self.owned_service_mut(service_id).attestor = attestor.clone();
         self.flush_all();
