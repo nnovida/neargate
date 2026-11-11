@@ -1,5 +1,5 @@
 import type { AnySigner, ChainClient, ServiceRecord } from '@agentgate/shared';
-import { AgentGateError, isAgentGateError } from '@agentgate/shared';
+import { AgentGateError, chainErrorCode } from '@agentgate/shared';
 
 export interface SetServiceActiveOpts {
   chain: ChainClient;
@@ -17,11 +17,11 @@ export interface SetServiceActiveResult {
 }
 
 /**
- * Programmatic `agentgate pause/resume <id>`: flips the on-chain active flag
+ * Programmatic `neargate pause/resume <id>`: flips the on-chain active flag
  * via `set_active` (owner only), then re-fetches the record so callers can
  * report the new state. Throws AgentGateError('INVALID_SERVICE_ID', 400) for
- * bad ids and rewords the chain's 403 `not_authorized` into a clear
- * owner-only message; every other AgentGateError passes through unchanged.
+ * bad ids and rewords the registry's `ERR_NOT_AUTHORIZED` into a clear
+ * owner-only message; every other error passes through unchanged.
  */
 export async function setServiceActive(
   opts: SetServiceActiveOpts,
@@ -39,10 +39,11 @@ export async function setServiceActive(
   try {
     ({ txHash } = await chain.setActive(id, active, signer));
   } catch (err) {
-    if (isAgentGateError(err) && err.code === 'not_authorized') {
+    if (chainErrorCode(err) === 'ERR_NOT_AUTHORIZED') {
       throw new AgentGateError(
-        'not_authorized',
-        `only the service owner can pause/resume service ${id} — sign with the owner key (mock: MOCK_SELLER_ACCOUNT, live: SELLER_KEY_PATH or SELLER_PRIVATE_KEY)`,
+        'ERR_NOT_AUTHORIZED',
+        `ERR_NOT_AUTHORIZED: only the service owner can pause/resume service ${id} — sign as the owner ` +
+          '(--account <owner> with --key-file <path>; mock: MOCK_SELLER_ACCOUNT, live: SELLER_ACCOUNT_ID with SELLER_KEY_PATH or SELLER_PRIVATE_KEY)',
         403,
       );
     }

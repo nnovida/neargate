@@ -202,6 +202,17 @@ export class MockChainHttpClient implements ChainClient {
     return result.fullAccess;
   }
 
+  /** The devnet knows an account once it holds a balance record (faucet-funded or paid to). */
+  async accountExists(accountId: string): Promise<boolean> {
+    assertNonEmpty(accountId, 'accountId');
+    const result = await this.get<{ exists?: unknown } | undefined>(`/accounts/${encodeURIComponent(accountId)}`);
+    // `wrap` registers a payment target on this answer: anything but a boolean is a broken devnet.
+    if (typeof result?.exists !== 'boolean') {
+      throw new AgentGateError('devnet_bad_response', 'devnet account check did not answer { exists: boolean }', 502);
+    }
+    return result.exists;
+  }
+
   /**
    * Checks the registry's payment record for the nonce: not_found, wrong_service,
    * amount_too_low, expired, already_attested, then ok. `pending` never occurs in mock mode

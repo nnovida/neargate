@@ -1,82 +1,100 @@
-# @neargate/cli
+# @neargate/cli — the `neargate` CLI
 
-Wrap any HTTP API into a **paid x402 service on Casper** — HTTP 402 micropayments in native CSPR, with on-chain discovery and reputation. One command turns your endpoint into a machine-payable service that AI agents can discover, pay, and rate autonomously.
+Wrap any HTTP API into a **paid x402 service on NEAR**: HTTP 402 micropayments in native NEAR, with on-chain discovery and a payment-backed reputation score kept by the `neargate-registry` contract. One command turns your endpoint into a machine-payable service that AI agents can discover, pay and rate on their own.
 
-Services carry an on-chain **`accepts[]` price list** (registry v2): native CSPR, or a CEP-18 token like WCSPR settled through the official Casper x402 facilitator (gas sponsored — true sub-CSPR micropayments). `buy` auto-detects the rail from the 402.
+The package installs one binary, `neargate`. From a clone of the repository: `npm install`, then `npm run neargate -- <command>`.
 
-## Read the live catalog — zero setup
+## How a paid call works
 
-The read commands run against Casper Testnet with **no configuration and no keys**:
+1. The gateway answers an unpaid request with **HTTP 402** and an x402 invoice: the price, a fixed **0.002 NEAR storage fee** (the registry stores a record of every payment), the total to attach, a one-time nonce and the registry contract id.
+2. The buyer calls the registry's `pay` method with that nonce, attaching price + storage fee. The registry forwards the price to the seller's payment target.
+3. The buyer retries with the `pay` transaction as its `X-PAYMENT` proof. The gateway checks the payment on chain, serves the call and attests the outcome on chain; the score counts those attestations. A call the owner pays for itself is served but never attested.
 
-```bash
-npx @neargate/cli list        # on-chain service catalog with scores + trust tiers
-npx @neargate/cli status 1    # one service: record, price, trust, attestations
-```
-
-## Wrap your API (writes)
-
-`wrap` registers your service **on Casper Testnet** and drops a 402 paywall in front of it — one line, the only thing besides the args is your funded wallet key:
+## Read the catalog
 
 ```bash
-npx @neargate/cli wrap https://api.example.com/gold --price 2.5 --name "Gold Spot Feed" --pem ./key.pem
+neargate list            # id  name  price(NEAR)  calls  tier  active
+neargate status 1        # one service: record, price, trust tier, recent attestations
 ```
 
-It signs the on-chain registration with `--pem`, then maps your upstream on the gateway by **signing an ownership challenge with the same key** — no shared admin token. `--gateway` defaults to the hosted gateway; pass it to target a local or self-hosted one. (`--pem` is irreducible: registering on-chain is a signed, gas-paying transaction.)
+The read commands need no key.
 
-## Buy a call (writes)
-
-`buy` runs the whole x402 exchange for you: fetch the `402` invoice, pay it with a **native CSPR transfer carrying the invoice nonce as `transfer_id`**, retry with the `X-PAYMENT` proof, and print the result — response body on **stdout** (pipeable), payment receipt on **stderr**:
+## Wrap your API (seller)
 
 ```bash
-npx @neargate/cli buy 2 --pem ./buyer.pem --max 5
+neargate wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" \
+  --account seller.testnet --key-file ~/.near-credentials/testnet/seller.testnet.json
 ```
 
-`--max` is a budget cap: any invoice priced above it is refused (`PRICE_EXCEEDED`) before a single mote moves. Unknown or paused services fail fast before any payment.
+Before anything goes on chain, `wrap` resolves your key and checks that the payment target exists (it defaults to `--account`; a missing account would strand every payment). It then registers the service (registering attaches a 0.12 NEAR deposit) and maps your upstream on the gateway by **signing an ownership challenge with the same key** — no shared admin token. The upstream URL is only ever sent to the gateway. In mock mode the mapping goes through the gateway admin token instead.
+
+## Buy a call (buyer)
+
+```bash
+neargate buy 2 --account buyer.testnet --max 1
+```
+
+`buy` runs the whole exchange: fetch the 402 invoice, pay it with a registry `pay` call (price + 0.002 NEAR storage attached), retry with the transaction as proof, and print the result — the response body on **stdout** (pipeable), the receipt on **stderr** (what was paid, the payment tx, an explorer link).
+
+`--max` caps the **total** a call attaches, price plus storage fee: above it the CLI refuses with `BUDGET_EXCEEDED` before anything is paid. Unknown or paused services also fail before any payment.
 
 ## Use from any MCP agent
 
-`mcp` serves AgentGate as a Model Context Protocol **stdio server**, so any MCP-capable agent (Claude Desktop, a custom client, an MCP-aware framework) gets AgentGate as native tools — discover, inspect, and pay services:
-
 ```bash
-npx @neargate/cli mcp
+neargate mcp --account buyer.testnet
 ```
 
-Tools: `agentgate_list_services`, `agentgate_get_service`, `agentgate_get_invoice` (read-only, no key) and `agentgate_buy` (pays a 402 invoice in native CSPR from the buyer key, capped by `maxCspr`). Wire it into Claude Desktop's `claude_desktop_config.json`:
+`mcp` serves NearGate as a Model Context Protocol **stdio server**. Tools: `neargate_list_services`, `neargate_get_service`, `neargate_get_invoice` (read-only, no key) and `neargate_buy` (pays the 402 invoice in NEAR from the buyer key, capped by `maxNear` on the total attached). The buyer key is resolved only when `neargate_buy` runs, so the read tools work without one. Claude Desktop (`claude_desktop_config.json`):
 
 ```json
-{ "mcpServers": { "agentgate": { "command": "npx", "args": ["-y", "@neargate/cli", "mcp"] } } }
+{ "mcpServers": { "neargate": { "command": "node", "args": ["/path/to/repo/packages/cli/dist/bin.js", "mcp", "--account", "buyer.testnet"] } } }
 ```
+
+(`npm run build -w @neargate/cli` produces `packages/cli/dist/bin.js`.)
 
 ## Flags & environment
 
-Every config value can be given as a flag **or** an env var; precedence is **flag > env var > built-in default**.
+Precedence is **flag > env var > built-in default**.
 
-| Flag | Env var | Needed for |
+| Flag | Env var | Used by |
 |---|---|---|
-| `--mode <mock\|live>` | `AGENTGATE_MODE` | all (CLI defaults to `live`) |
-| `--node-url <url>` | `CASPER_NODE_URL` | all (defaults to Testnet) |
-| `--registry <hash>` | `REGISTRY_CONTRACT_PACKAGE_HASH` | all (defaults to the deployed registry) |
-| `--gateway <url>` | — | wrap (defaults to the hosted gateway in live) · buy (defaults to the service's on-chain endpoint) |
-| `--pem <path>` | `SELLER_SIGNER_PEM_PATH` (wrap/pause/resume) · `BUYER_SIGNER_PEM_PATH` (buy) | live writes — your wallet key |
-| `--max <cspr>` | — | buy: refuse invoices priced above this many CSPR |
-| `--api-key <key>` | `CSPR_CLOUD_API_KEY` | `status` attestation history only |
-| `--admin-token <token>` | `AGENTGATE_ADMIN_TOKEN` | mock / self-hosted-admin mapping only |
+| `--mode <mock\|live>` | `AGENTGATE_MODE` | all (the CLI defaults to `live`) |
+| `--rpc <url>` | `NEAR_RPC_URL` | live (default: the `NEAR_NETWORK` RPC) |
+| `--registry <contract id>` | `REGISTRY_CONTRACT_ID` | live: the registry contract account |
+| — | `NEAR_NETWORK` | `testnet` (default) or `mainnet`: default RPC and explorer, and the `~/.near-credentials/<network>` folder |
+| `--account <id>` | `SELLER_ACCOUNT_ID` (wrap/pause/resume) · `BUYER_ACCOUNT_ID` (buy/mcp) | live writes: the account you act as (mock: `MOCK_SELLER_ACCOUNT` / `MOCK_BUYER_ACCOUNT`) |
+| `--key-file <path>` | `SELLER_KEY_PATH` · `BUYER_KEY_PATH` | live writes: that account's near-cli credentials JSON |
+| — | `SELLER_PRIVATE_KEY` · `BUYER_PRIVATE_KEY` | live writes: an `ed25519:…` secret key instead of a file |
+| `--price <near>` | — | wrap: price per call in NEAR (at least 0.000001; buyers also attach the 0.002 NEAR storage fee) |
+| `--max <near>` | — | buy: cap on the total a call attaches (price + storage fee) |
+| `--gateway <url>` | — | wrap (default: the hosted gateway in live, `http://localhost:4021` in mock) · buy (default: the service's on-chain endpoint) |
+| `--admin-token <token>` | `AGENTGATE_ADMIN_TOKEN` | mock `wrap` only: the gateway admin mapping |
 
-> Live `wrap` uses owner-signature auth, so no admin token is needed. `--pem` is a **path**, not a secret — safe in shell history. `--api-key` / `--admin-token` **are** secrets (visible in history and `ps`); prefer their env vars.
+**Key resolution** for live writes, first match wins:
 
-On an invalid value the CLI fails fast with a clear one-line message (e.g. `error: SIGNER_MISSING: live mode needs a seller key — pass --pem <path> or set SELLER_SIGNER_PEM_PATH`) — never a stack trace.
+1. `SELLER_PRIVATE_KEY` / `BUYER_PRIVATE_KEY` (`ed25519:…`). It takes precedence over `--key-file`, and the CLI notes it when both are set.
+2. `--key-file <path>`, else `SELLER_KEY_PATH` / `BUYER_KEY_PATH`: a near-cli credentials JSON (`account_id`, `public_key`, `private_key`) whose `account_id` must match the account.
+3. `~/.near-credentials/<NEAR_NETWORK>/<account>.json`, where `near login` writes it.
+
+The CLI warns when a key file is readable by group or others (`chmod 600` it) and never prints key material. `--key-file` is a path, not a secret; `--admin-token` **is** a secret (visible in shell history and `ps`), so prefer its env var.
+
+On an invalid value the CLI fails fast with a one-line message — e.g. `error: SIGNER_MISSING: live mode needs a seller account — pass --account <id> or set SELLER_ACCOUNT_ID (…)` — never a stack trace.
 
 ## Commands
 
-- `list` — list on-chain services (zero-config)
-- `status <id>` — service detail + reputation (zero-config; `--api-key` adds attestation history)
-- `wrap <url> --price <CSPR> --name <name>` — register + put a 402 paywall in front of an API
-- `buy <id> --pem <key>` — pay a service's 402 invoice and print the response (`--max` caps the price)
-- `mcp` — serve AgentGate as an MCP stdio server (agent tools: list / inspect / buy)
+- `list` — the on-chain catalog with scores and trust tiers
+- `status <id>` — one service: record, price, trust tier, recent attestations
+- `wrap <url> --price <near> --name <name>` — register a service and put a 402 paywall in front of an API (name up to 64 bytes, description up to 280 bytes)
+- `buy <id>` — pay a service's 402 invoice and print the response (`--max` caps the total)
+- `mcp` — serve NearGate as an MCP stdio server (agent tools: list / inspect / invoice / buy)
 - `pause <id>` / `resume <id>` — toggle a service you own
 - `demo-accounts` — mint faucet-funded buyer/seller accounts on the mock devnet (mock mode only)
 
+## Try it offline
+
+`npm run demo` runs the whole loop on an in-process mock chain — register, 402 invoice, pay, serve, attest, score — with no network access and no keys. `npm run dev` keeps the same mock stack up for the CLI (`--mode mock`), the buyer agent and the dashboard.
+
 ## Notes
 
-- Node ≥ 22 required.
+- Node ≥ 22.22.2 required.
 - Source: https://example.invalid/AgentGate

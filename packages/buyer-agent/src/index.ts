@@ -4,15 +4,16 @@ import type {
   AttestationRecord,
   ChainClient,
   Logger,
-  NearKeySigner,
   Yocto,
 } from '@agentgate/shared';
 import {
   AgentGateError,
+  PAYMENT_STORAGE_FEE_YOCTO,
   addYocto,
   compareYocto,
   createLogger,
   formatNear,
+  formatPriceWithStorage,
   isAgentGateError,
   loadConfig,
   nearToYocto,
@@ -20,7 +21,7 @@ import {
   trustTier,
   yoctoToNear,
 } from '@agentgate/shared';
-import { createChainClient } from '@agentgate/chain';
+import { createChainClient, loadNearSigner } from '@agentgate/chain';
 import { createAgentGateClient } from '@agentgate/client';
 import type { CatalogEntry, LlmClient } from './llm';
 import { AnthropicLlm, MockLlm } from './llm';
@@ -35,11 +36,14 @@ export { DecisionLog, DEFAULT_DECISIONS_LOG } from './decision-log';
 export interface RunBuyerAgentOpts {
   /** Natural-language task, e.g. "Get today's USD/IDR rate and gold price, summarize for a treasury report". */
   task: string;
-  /** Budget cap in NEAR (decimal string). Defaults to config.buyerBudgetNear (BUYER_BUDGET_NEAR). */
+  /**
+   * Budget cap in NEAR (decimal string) on everything the run attaches: price + the 0.002 NEAR
+   * storage fee per call. Defaults to config.buyerBudgetNear (BUYER_BUDGET_NEAR).
+   */
   budgetNear?: string;
   /** ChainClient to use. Defaults to createChainClient(config). */
   chain?: ChainClient;
-  /** Buyer signer. Defaults per mode: mock → MOCK_BUYER_ACCOUNT, live → BUYER_ACCOUNT_ID + its key. */
+  /** Buyer signer. Defaults to defaultBuyerSigner(config). */
   signer?: AnySigner;
   /** LLM seam. Defaults to AnthropicLlm when ANTHROPIC_API_KEY is set, else MockLlm. */
   llm?: LlmClient;
@@ -68,6 +72,7 @@ export interface BuyerRunReport {
   paymentTxHash: string | null;
   attestationTxHash: string | null;
   summary: string;
+  /** Everything the run attached: price + storage fee. */
   spentYocto: Yocto;
 }
 
@@ -79,28 +84,35 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Derives the default buyer signer from config per mode. */
-export function defaultBuyerSigner(config: AgentGateConfig): AnySigner {
+/**
+ * The buyer signer from config: mock → MOCK_BUYER_ACCOUNT; live → BUYER_ACCOUNT_ID with its key
+ * resolved now by `loadNearSigner` (BUYER_PRIVATE_KEY, then BUYER_KEY_PATH, then
+ * ~/.near-credentials/<NEAR_NETWORK>/<account>.json), so a run never starts without a usable key.
+ */
+export async function defaultBuyerSigner(config: AgentGateConfig): Promise<AnySigner> {
   if (config.mode === 'mock') {
     if (config.mockBuyerAccount === '') {
       throw new AgentGateError(
-        'NO_SIGNER',
-        'mock mode needs MOCK_BUYER_ACCOUNT (run `agentgate demo-accounts` and export the printed lines)',
-        500,
+        'SIGNER_MISSING',
+        'mock mode needs MOCK_BUYER_ACCOUNT (run `neargate demo-accounts` and export the printed lines)',
+        400,
       );
     }
     return { kind: 'mock', accountId: config.mockBuyerAccount };
   }
   if (config.buyerAccountId === '') {
     throw new AgentGateError(
-      'NO_SIGNER',
-      'live mode needs BUYER_ACCOUNT_ID (key: BUYER_KEY_PATH or BUYER_PRIVATE_KEY)',
-      500,
+      'SIGNER_MISSING',
+      'live mode needs BUYER_ACCOUNT_ID (key: BUYER_PRIVATE_KEY, BUYER_KEY_PATH or ~/.near-credentials/<network>/<account>.json)',
+      400,
     );
   }
-  const signer: NearKeySigner = { kind: 'near', accountId: config.buyerAccountId };
-  if (config.buyerKeyPath !== '') signer.keyPath = config.buyerKeyPath;
-  if (config.buyerPrivateKey !== '') signer.secretKey = config.buyerPrivateKey;
+  const { signer } = await loadNearSigner({
+    accountId: config.buyerAccountId,
+    network: config.nearNetwork,
+    ...(config.buyerPrivateKey !== '' ? { secretKey: config.buyerPrivateKey } : {}),
+    ...(config.buyerKeyPath !== '' ? { keyPath: config.buyerKeyPath } : {}),
+  });
   return signer;
 }
 
@@ -142,7 +154,7 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
   };
 
   const chain = opts.chain ?? createChainClient(getConfig());
-  const signer = opts.signer ?? defaultBuyerSigner(getConfig());
+  const signer = opts.signer ?? (await defaultBuyerSigner(getConfig()));
   const llm: LlmClient =
     opts.llm ??
     (getConfig().anthropicApiKey !== ''
@@ -209,7 +221,7 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
   }
   print(
     renderBlock(`STEP 2 · DECISION (${llm.name})`, [
-      `chose #${chosen.service.id} "${chosen.service.name}" at ${formatNear(chosen.service.priceYocto)}`,
+      `chose #${chosen.service.id} "${chosen.service.name}" at ${formatPriceWithStorage(chosen.service.priceYocto)}`,
       `reason: ${choice.reason}`,
     ]),
   );
@@ -221,23 +233,24 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
     llm: llm.name,
   });
 
-  // 3. Budget enforcement BEFORE paying: cumulative spend + next price must fit the budget.
-  // TODO(Task 5): a NEAR invoice quotes price + PAYMENT_STORAGE_FEE_YOCTO (D3) — budget
-  // and the client cap below must include the fee, or every live invoice is refused.
+  // 3. Budget enforcement BEFORE paying: cumulative spend + what the call attaches
+  // (price + the registry storage fee) must fit the budget.
   const price = chosen.service.priceYocto;
-  const projected = addYocto(spentYocto, price);
+  const callTotal = addYocto(price, PAYMENT_STORAGE_FEE_YOCTO);
+  const projected = addYocto(spentYocto, callTotal);
   if (compareYocto(projected, budgetYocto) > 0) {
     const refusal =
-      `refused: price ${formatNear(price)} would exceed budget ` +
+      `refused: ${formatPriceWithStorage(price)} would exceed budget ` +
       `${formatNear(budgetYocto)} (already spent ${formatNear(spentYocto)})`;
     print(renderBlock('STEP 3 · BUDGET — REFUSED', [refusal]));
     decisions.append('budget_refusal', {
       serviceId: chosen.service.id,
       priceYocto: price,
+      depositYocto: callTotal,
       spentYocto,
       budgetYocto,
     });
-    logger.warn('budget refusal', { priceYocto: price, budgetYocto });
+    logger.warn('budget refusal', { priceYocto: price, depositYocto: callTotal, budgetYocto });
     return {
       chosenServiceId: chosen.service.id,
       reason: choice.reason,
@@ -250,19 +263,21 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
   }
   print(
     renderBlock('STEP 3 · BUDGET — OK', [
-      `price ${formatNear(price)} fits budget ${formatNear(budgetYocto)} (spent so far ${formatNear(spentYocto)})`,
+      `${formatPriceWithStorage(price)} fits budget ${formatNear(budgetYocto)} (spent so far ${formatNear(spentYocto)})`,
     ]),
   );
-  decisions.append('budget_ok', { priceYocto: price, budgetYocto, spentYocto });
+  decisions.append('budget_ok', { priceYocto: price, depositYocto: callTotal, budgetYocto, spentYocto });
 
-  // 4. Pay & consume via the 402 client. maxPriceYocto is bound to the on-chain
-  // price the budget gate just approved — NOT the whole remaining budget — so a
+  // 4. Pay & consume via the 402 client. The cap is the total the budget gate just
+  // approved (on-chain price + storage fee) — NOT the whole remaining budget — so a
   // 402 invoice that quotes more than the advertised price is refused instead of
-  // silently charged up to the full budget.
+  // silently charged up to the full budget, and an invoice for another service is
+  // refused outright.
   const client = createAgentGateClient({
     chain,
     signer,
-    maxPriceYocto: price,
+    maxYocto: callTotal,
+    expectedServiceId: chosen.service.id,
     logger,
     ...(opts.settleDelayMs !== undefined ? { settleDelayMs: opts.settleDelayMs } : {}),
     ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
@@ -272,8 +287,8 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
   try {
     result = await client.fetchPaid(chosen.service.endpointUrl);
   } catch (err) {
-    if (isAgentGateError(err) && err.code === 'PRICE_EXCEEDED') {
-      const refusal = `refused: invoice price exceeded remaining budget — ${err.message}`;
+    if (isAgentGateError(err) && err.code === 'BUDGET_EXCEEDED') {
+      const refusal = `refused: the invoice asks more than the approved ${formatNear(callTotal)} — ${err.message}`;
       print(renderBlock('STEP 4 · PAYMENT — REFUSED', [refusal]));
       decisions.append('budget_refusal', { serviceId: chosen.service.id, error: err.message });
       return {
@@ -294,14 +309,17 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
   }
 
   const paymentTxHash = result.txHash ?? null;
-  if (result.paid && result.priceYocto !== undefined) {
-    spentYocto = addYocto(spentYocto, result.priceYocto);
+  if (result.paid && result.depositYocto !== undefined) {
+    spentYocto = addYocto(spentYocto, result.depositYocto);
   }
   const remainingAfter: Yocto = (parseYocto(budgetYocto) - parseYocto(spentYocto)).toString();
   print(
     renderBlock('STEP 4 · PAYMENT', [
       result.paid
-        ? `paid ${formatNear(result.priceYocto ?? '0')} → tx ${paymentTxHash ?? '?'}`
+        ? `paid ${formatPriceWithStorage(
+            result.priceYocto ?? price,
+            result.requirements?.extra.storageFeeYocto,
+          )} → tx ${paymentTxHash ?? '?'}`
         : 'no payment was required',
       `upstream status: ${result.status}`,
       `remaining budget: ${yoctoToNear(remainingAfter)} NEAR`,
@@ -312,6 +330,7 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
     paid: result.paid,
     paymentTxHash,
     priceYocto: result.priceYocto ?? null,
+    depositYocto: result.depositYocto ?? null,
     status: result.status,
     spentYocto,
   });
@@ -330,16 +349,25 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
   print(renderBlock('STEP 5 · REPORT', summary.split('\n')));
   decisions.append('summary', { serviceId: chosen.service.id, ok, summary });
 
-  // 6. Receipt: poll the chain (≤5 s) for the attestation our payment triggered.
+  // 6. Receipt: poll the chain (≤5 s) for the attestation our payment triggered. The
+  // payment has already gone through, so a failing read only loses the receipt.
   let attestationTxHash: string | null = null;
   if (paymentTxHash !== null) {
     const timeoutMs = opts.attestationTimeoutMs ?? DEFAULT_ATTESTATION_TIMEOUT_MS;
     const pollMs = opts.attestationPollIntervalMs ?? DEFAULT_ATTESTATION_POLL_MS;
     const deadline = Date.now() + timeoutMs;
     let found: AttestationRecord | undefined;
+    let pollWarned = false;
     for (;;) {
-      const attestations = await chain.listAttestations(chosen.service.id, 50);
-      found = attestations.find((a) => a.paymentTxHash === paymentTxHash);
+      try {
+        const attestations = await chain.listAttestations(chosen.service.id, 50);
+        found = attestations.find((a) => a.paymentTxHash === paymentTxHash);
+      } catch (err) {
+        if (!pollWarned) {
+          pollWarned = true;
+          logger.warn('attestation poll failed', { error: err instanceof Error ? err.message : String(err) });
+        }
+      }
       if (found !== undefined || Date.now() >= deadline) break;
       await sleep(pollMs);
     }

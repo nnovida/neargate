@@ -73,6 +73,11 @@ describe('AnthropicLlm (raw /v1/messages via injected fetch)', () => {
     expect(body.max_tokens).toBeGreaterThan(0);
     expect(body.messages[0]?.role).toBe('user');
     expect(body.messages[0]?.content).toContain('Gold Spot Feed');
+    // prices are NEAR: the prompt says so and the catalog quotes NEAR amounts
+    expect(body.system).toContain('NearGate');
+    expect(body.system).toContain('NEAR');
+    expect(body.system).not.toContain('AgentGate');
+    expect(body.messages[0]?.content).toContain('0.5 NEAR');
   });
 
   it('extracts JSON wrapped in prose/fences', async () => {

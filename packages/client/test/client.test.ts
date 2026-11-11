@@ -8,10 +8,10 @@ import {
   type PaymentRequiredResponse,
 } from '@agentgate/shared';
 import {
+  assertFetchableUrl,
   createAgentGateClient,
   parsePaymentRequired,
 } from '@agentgate/client';
-// TODO(Task 5): budget cap (maxYocto → BUDGET_EXCEEDED) and the settlement_pending retry policy.
 
 const TX_HASH = 'Eky1UaWkroENJrfa2yjf8PR7pFbznerFT7UDpUBuodUd';
 const REGISTRY = 'registry.mock';
@@ -56,6 +56,7 @@ function makeChain(overrides: Partial<ChainClient> = {}): ChainClient {
     getPayment: vi.fn(async () => null),
     verifyPayment: vi.fn(async () => ({ ok: false as const, reason: 'not_found' as const })),
     isFullAccessKey: vi.fn(async () => false),
+    accountExists: vi.fn(async () => true),
     registerService: vi.fn(async () => ({ serviceId: 1, txHash: 'tx' })),
     pay: vi.fn(async () => ({ txHash: TX_HASH })),
     recordAttestation: vi.fn(async () => ({ txHash: 'tx' })),
@@ -71,11 +72,28 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-/** A 402 response with a Retry-After header (seconds), used to simulate a pending settlement. */
-function pending402(nonce: string, retryAfterSec = 0): Response {
-  return new Response(JSON.stringify(requirements(nonce, 'near-mock')), {
+/**
+ * The gateway's "still settling" answer: a 402 whose error is `settlement_pending`, carrying the
+ * SAME invoice and a Retry-After header (seconds; omitted when `retryAfterSec` is null).
+ */
+function pending402(nonce: string, retryAfterSec: number | null = 0): Response {
+  return new Response(JSON.stringify({ ...requirements(nonce, 'near-mock'), error: 'settlement_pending' }), {
     status: 402,
-    headers: { 'content-type': 'application/json', 'retry-after': String(retryAfterSec) },
+    headers: {
+      'content-type': 'application/json',
+      ...(retryAfterSec === null ? {} : { 'retry-after': String(retryAfterSec) }),
+    },
+  });
+}
+
+/** A rejected proof: a fresh-invoice 402 whose error is the verdict (e.g. `not_found`). */
+function rejected402(nonce: string, error: string, retryAfterSec?: number): Response {
+  return new Response(JSON.stringify({ ...requirements(nonce, 'near-mock'), error }), {
+    status: 402,
+    headers: {
+      'content-type': 'application/json',
+      ...(retryAfterSec === undefined ? {} : { 'retry-after': String(retryAfterSec) }),
+    },
   });
 }
 
@@ -115,9 +133,11 @@ describe('createAgentGateClient · fetchPaid', () => {
     expect(r.requirements?.maxAmountRequired).toBe(MAX_AMOUNT);
     expect(r.settlement?.success).toBe(true);
     expect(r.txHash).toBe(TX_HASH);
-    expect(r.priceYocto).toBe(MAX_AMOUNT);
+    // the bare price and the attached total (price + storage fee) are both reported
+    expect(r.priceYocto).toBe(PRICE);
+    expect(r.depositYocto).toBe(MAX_AMOUNT);
 
-    // exactly one registry pay, carrying the invoice's service id + nonce
+    // exactly one registry pay, carrying the invoice's service id + nonce and maxAmountRequired attached
     expect(chain.pay).toHaveBeenCalledTimes(1);
     expect(chain.pay).toHaveBeenCalledWith(
       { serviceId: 1, nonce: '42', depositYocto: MAX_AMOUNT },
@@ -178,40 +198,57 @@ describe('createAgentGateClient · fetchPaid', () => {
     expect(r.settlement).toBeUndefined(); // decode failure → silently undefined
   });
 
-  it('refuses to pay when invoice price exceeds maxPriceYocto (PRICE_EXCEEDED)', async () => {
-    const req = requirements('42', 'near-mock'); // maxAmountRequired = MAX_AMOUNT
+  it('refuses above maxYocto with BUDGET_EXCEEDED — the cap is the total attached, not the bare price', async () => {
+    const req = requirements('42', 'near-mock'); // price 0.5, maxAmountRequired 0.502
     const { impl, calls } = queuedFetch([json(req, 402)]);
     const chain = makeChain();
-    const client = createAgentGateClient({
-      chain,
-      signer: SIGNER,
-      maxPriceYocto: '100000000000000000000000',
-      fetchImpl: impl,
-    });
+    // A cap equal to the bare price is still below price + storage fee.
+    const client = createAgentGateClient({ chain, signer: SIGNER, maxYocto: PRICE, fetchImpl: impl });
 
     const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
     expect(isAgentGateError(err)).toBe(true);
     if (isAgentGateError(err)) {
-      expect(err.code).toBe('PRICE_EXCEEDED');
+      expect(err.code).toBe('BUDGET_EXCEEDED');
       expect(err.httpStatus).toBe(402);
+      expect(err.message).toContain('0.5 NEAR + 0.002 NEAR storage');
     }
     expect(chain.pay).not.toHaveBeenCalled();
     expect(calls).toHaveLength(1); // never retried
   });
 
-  it('pays when invoice price equals maxPriceYocto exactly', async () => {
+  it('pays maxAmountRequired when it equals maxYocto exactly', async () => {
     const req = requirements('42', 'near-mock'); // maxAmountRequired = MAX_AMOUNT
     const { impl } = queuedFetch([json(req, 402), json({ ok: 1 }, 200)]);
     const chain = makeChain();
-    const client = createAgentGateClient({
-      chain,
-      signer: SIGNER,
-      maxPriceYocto: MAX_AMOUNT,
-      fetchImpl: impl,
-    });
+    const client = createAgentGateClient({ chain, signer: SIGNER, maxYocto: MAX_AMOUNT, fetchImpl: impl });
     const result = await client.fetchPaid('http://svc.test/svc/1');
     expect(result.paid).toBe(true);
-    expect(chain.pay).toHaveBeenCalledTimes(1);
+    expect(chain.pay).toHaveBeenCalledWith({ serviceId: 1, nonce: '42', depositYocto: MAX_AMOUNT }, SIGNER);
+  });
+
+  it('with expectedServiceId, refuses an invoice for another service (SERVICE_MISMATCH) and never pays', async () => {
+    const { impl } = queuedFetch([json(requirements('42', 'near-mock'), 402)]); // invoice is for service 1
+    const chain = makeChain();
+    const client = createAgentGateClient({ chain, signer: SIGNER, expectedServiceId: 2, fetchImpl: impl });
+    const err = await client.fetchPaid('http://svc.test/svc/2').catch((e: unknown) => e);
+    expect(isAgentGateError(err)).toBe(true);
+    if (isAgentGateError(err)) expect(err.code).toBe('SERVICE_MISMATCH');
+    expect(chain.pay).not.toHaveBeenCalled();
+  });
+
+  it('refuses an invoice that pays a different registry than the chain client (REGISTRY_MISMATCH)', async () => {
+    const req = requirements('42', 'near-mock');
+    const other = {
+      ...req,
+      accepts: [{ ...req.accepts[0]!, payTo: 'other-registry.mock', extra: { ...req.accepts[0]!.extra, contractId: 'other-registry.mock' } }],
+    };
+    const { impl } = queuedFetch([json(other, 402)]);
+    const chain = makeChain();
+    const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
+    const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
+    expect(isAgentGateError(err)).toBe(true);
+    if (isAgentGateError(err)) expect(err.code).toBe('REGISTRY_MISMATCH');
+    expect(chain.pay).not.toHaveBeenCalled();
   });
 
   // helpers for bad-fixture tests (captured at describe-parse time; 300s window is plenty)
@@ -234,6 +271,12 @@ describe('createAgentGateClient · fetchPaid', () => {
     ['bad maxAmountRequired', { ...validReq, accepts: [{ ...validAccept, maxAmountRequired: '0.5' }] }],
     ['bad payTo',             { ...validReq, accepts: [{ ...validAccept, payTo: 'Not A NEAR id' }] }],
     ['expired expiresAtMs',   { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, expiresAtMs: Date.now() - 1000 } }] }],
+    ['wrong settlement',      { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, settlement: 'transfer' } }] }],
+    ['wrong method',          { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, method: 'ft_transfer' } }] }],
+    ['contractId ≠ payTo',    { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, contractId: 'other.mock' } }] }],
+    ['bad priceYocto',        { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, priceYocto: '0.5' } }] }],
+    ['bad storageFeeYocto',   { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, storageFeeYocto: undefined } }] }],
+    ['price + fee ≠ total',   { ...validReq, accepts: [{ ...validAccept, maxAmountRequired: '503000000000000000000000' }] }],
   ] as [string, unknown][])('rejects invalid invoice (%s) with BAD_INVOICE and never pays', async (_name, bad) => {
     const { impl } = queuedFetch([json(bad, 402)]);
     const chain = makeChain();
@@ -253,12 +296,12 @@ describe('createAgentGateClient · fetchPaid', () => {
     if (isAgentGateError(err)) expect(err.code).toBe('BAD_INVOICE');
   });
 
-  it('retries on 402 Retry-After (pending) and then succeeds', async () => {
+  it('retries on settlement_pending with the same proof, then succeeds (paid once)', async () => {
     const req = requirements('42', 'near-mock');
     const { impl, calls } = queuedFetch([
       json(req, 402),          // initial → pay
-      pending402('42', 0),     // proof attempt 1 → pending (retry-after: 0s)
-      pending402('42', 0),     // proof attempt 2 → pending (retry-after: 0s)
+      pending402('42', 0),     // proof attempt 1 → settlement_pending (retry-after: 0s)
+      pending402('42', 0),     // proof attempt 2 → settlement_pending
       json({ usd_idr: 16250.5 }, 200),
     ]);
     const chain = makeChain();
@@ -270,12 +313,14 @@ describe('createAgentGateClient · fetchPaid', () => {
     expect(result.body).toEqual({ usd_idr: 16250.5 });
     expect(chain.pay).toHaveBeenCalledTimes(1); // paid once, never twice
     expect(calls).toHaveLength(4); // 1 initial + 3 with X-PAYMENT (1 first + 2 retries)
+    const proofs = calls.slice(1).map((c) => new Headers(c.init?.headers).get('X-PAYMENT'));
+    expect(new Set(proofs).size).toBe(1); // the identical proof every time
   });
 
-  it('gives up after 5 pending retries and returns the final 402 (still marked paid)', async () => {
+  it('gives up after 3 pending retries and returns the final 402 (still marked paid)', async () => {
     const { impl, calls } = queuedFetch([
       json(requirements('42', 'near-mock'), 402),
-      ...Array.from({ length: 6 }, () => pending402('42', 0)),
+      ...Array.from({ length: 5 }, () => pending402('42', 0)),
     ]);
     const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
 
@@ -283,19 +328,63 @@ describe('createAgentGateClient · fetchPaid', () => {
     expect(result.status).toBe(402);
     expect(result.paid).toBe(true);
     expect(result.txHash).toBe(TX_HASH);
-    // 1 invoice fetch + 1 first proof attempt + 5 pending retries = 7
-    expect(calls).toHaveLength(7);
+    expect(result.body).toMatchObject({ error: 'settlement_pending' });
+    // 1 invoice fetch + 1 first proof attempt + 3 pending retries = 5
+    expect(calls).toHaveLength(5);
   });
 
-  it('returns a non-pending 402 proof rejection without retrying (no Retry-After header)', async () => {
-    const req = requirements('42', 'near-mock');
-    // 2nd 402 has no retry-after header → stop immediately
-    const { impl, calls } = queuedFetch([json(req, 402), json(req, 402)]);
+  it('waits the Retry-After seconds between pending retries', async () => {
+    vi.useFakeTimers();
+    try {
+      const { impl, calls } = queuedFetch([
+        json(requirements('42', 'near-mock'), 402),
+        pending402('42', 2),
+        json({ ok: true }, 200),
+      ]);
+      const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
+      const done = client.fetchPaid('http://svc.test/svc/1');
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(calls).toHaveLength(2); // still waiting out Retry-After: 2
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await done).status).toBe(200);
+      expect(calls).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a settlement_pending answer without Retry-After still retries, after a default wait', async () => {
+    vi.useFakeTimers();
+    try {
+      const { impl, calls } = queuedFetch([
+        json(requirements('42', 'near-mock'), 402),
+        pending402('42', null),
+        json({ ok: true }, 200),
+      ]);
+      const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
+      const done = client.fetchPaid('http://svc.test/svc/1');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect((await done).status).toBe(200);
+      expect(calls).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['without Retry-After', undefined],
+    ['even with Retry-After', 0],
+  ])('returns a rejected proof (not_found) without retrying, %s', async (_name, retryAfter) => {
+    const { impl, calls } = queuedFetch([
+      json(requirements('42', 'near-mock'), 402),
+      rejected402('43', 'not_found', retryAfter),
+    ]);
     const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
 
     const result = await client.fetchPaid('http://svc.test/svc/1');
     expect(result.status).toBe(402);
     expect(result.paid).toBe(true);
+    expect(result.body).toMatchObject({ error: 'not_found' });
     expect(calls).toHaveLength(2);
   });
 
@@ -360,16 +449,30 @@ describe('createAgentGateClient · fetchPaid', () => {
     ).toThrowError(/accountId must be a NEAR account id/);
   });
 
-  it('rejects garbage maxPriceYocto at construction time', () => {
+  it('rejects garbage maxYocto at construction time', () => {
     expect(() =>
       createAgentGateClient({
         chain: makeChain(),
         signer: SIGNER,
-        maxPriceYocto: '0.5',
+        maxYocto: '0.5',
         fetchImpl: queuedFetch([]).impl,
       }),
     ).toThrowError(/invalid amount/);
   });
+
+  it.each(['javascript:alert(1)', 'ftp://svc.test/svc/1', 'file:///etc/passwd', 'not a url'])(
+    'refuses a non-http(s) endpoint %j before fetching (BAD_URL)',
+    async (url) => {
+      const { impl, calls } = queuedFetch([json({ never: true }, 200)]);
+      const chain = makeChain();
+      const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
+      const err = await client.fetchPaid(url).catch((e: unknown) => e);
+      expect(isAgentGateError(err)).toBe(true);
+      if (isAgentGateError(err)) expect(err.code).toBe('BAD_URL');
+      expect(calls).toHaveLength(0);
+      expect(chain.pay).not.toHaveBeenCalled();
+    },
+  );
 
   it('refuses a private/loopback host in live mode (SSRF guard)', async () => {
     const { impl } = queuedFetch([json({ unreachable: true }, 200)]);
@@ -467,5 +570,28 @@ describe('parsePaymentRequired', () => {
       accepts: [{ ...req.accepts[0]!, extra: { ...req.accepts[0]!.extra, expiresAtMs: NaN } }],
     };
     expect(() => parsePaymentRequired(badReq, 'near-mock')).toThrowError(/invalid 402 invoice/);
+  });
+});
+
+describe('assertFetchableUrl (registry-sourced endpoint URLs)', () => {
+  it('accepts http(s) and returns the parsed URL', async () => {
+    const url = await assertFetchableUrl('http://127.0.0.1:4021/svc/1', { rejectPrivateHosts: false });
+    expect(url.href).toBe('http://127.0.0.1:4021/svc/1');
+  });
+
+  it.each(['javascript:alert(1)', 'data:text/plain,hi', 'ftp://svc.test/x', '', 'nope'])(
+    'refuses %j with BAD_URL',
+    async (raw) => {
+      await expect(assertFetchableUrl(raw, { rejectPrivateHosts: false })).rejects.toMatchObject({ code: 'BAD_URL' });
+    },
+  );
+
+  it('refuses private/loopback hosts only when asked (live), with FORBIDDEN_HOST', async () => {
+    await expect(assertFetchableUrl('http://127.0.0.1:4021/svc/1', { rejectPrivateHosts: true })).rejects.toMatchObject({
+      code: 'FORBIDDEN_HOST',
+    });
+    await expect(assertFetchableUrl('http://10.0.0.8/svc/1', { rejectPrivateHosts: true })).rejects.toMatchObject({
+      code: 'FORBIDDEN_HOST',
+    });
   });
 });

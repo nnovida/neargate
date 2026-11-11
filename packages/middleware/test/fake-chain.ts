@@ -185,6 +185,13 @@ export class FakeChainClient implements ChainClient {
     return Promise.resolve(this.fullAccessKeys.get(accountId)?.has(publicKey) ?? false);
   }
 
+  /** Accounts that exist: any added to `knownAccounts`, plus every account holding a full-access key. */
+  readonly knownAccounts = new Set<string>();
+
+  accountExists(accountId: string): Promise<boolean> {
+    return Promise.resolve(this.knownAccounts.has(accountId) || this.fullAccessKeys.has(accountId));
+  }
+
   registerService(input: RegisterServiceInput, signer: AnySigner): Promise<{ serviceId: number; txHash: string }> {
     const serviceId = this.services.size + 1;
     this.addService({

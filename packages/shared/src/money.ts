@@ -100,6 +100,14 @@ export function formatNear(y: Yocto): string {
 }
 
 /**
+ * What a buyer attaches to one registry `pay`, spelled out: the service price plus the storage
+ * fee the registry keeps, e.g. "0.5 NEAR + 0.002 NEAR storage".
+ */
+export function formatPriceWithStorage(priceYocto: Yocto, storageFeeYocto: Yocto = PAYMENT_STORAGE_FEE_YOCTO): string {
+  return `${formatNear(priceYocto)} + ${formatNear(storageFeeYocto)} storage`;
+}
+
+/**
  * Format an atomic token amount for a token with `decimals` places, trimming
  * trailing zeros — e.g. formatUnits("1500000", 6) === "1.5".
  */

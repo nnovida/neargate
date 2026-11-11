@@ -1,27 +1,30 @@
 #!/usr/bin/env bash
-# AgentGate MCP smoke helper — drive the live MCP server over stdio and pretty-print.
+# NearGate MCP smoke helper — drive the `neargate mcp` server over stdio and pretty-print.
 #
-# Zero setup: the published CLI defaults to live Casper Testnet + the deployed
-# registry, and the read tools go through the public node RPC (no cspr.cloud key,
-# no .env, no clone required). See README → "For judges / reviewers".
+# Only the read tools are driven here, so no key is needed. The CLI defaults to live
+# mode on NEAR testnet: point it at the registry with REGISTRY_CONTRACT_ID (and
+# NEAR_RPC_URL / NEAR_NETWORK if needed), or use the offline mock stack:
+#   npm run dev:seed      # in another shell
+#   MCP_CMD="npx tsx packages/cli/src/bin.ts mcp --mode mock" scripts/mcp.sh list
 #
 #   scripts/mcp.sh tools          # list the MCP tools
-#   scripts/mcp.sh list           # live on-chain service catalog
+#   scripts/mcp.sh list           # on-chain service catalog
 #   scripts/mcp.sh service 5      # one service's full detail + trust score
-#   scripts/mcp.sh invoice 5      # the live HTTP 402 invoice (no payment)
+#   scripts/mcp.sh invoice 5      # the HTTP 402 invoice: price + storage fee in NEAR (no payment)
 #
-# Requirements: Node >= 22 (for npx). jq is optional — with it the output is
+# Requirements: Node >= 22.22.2. jq is optional — with it the output is
 # pretty-printed and unwrapped; without it you get the raw JSON-RPC frames.
 #
 # Server command resolution (first match wins):
 #   1. $MCP_CMD if set          e.g. MCP_CMD="node packages/cli/dist/bin.js mcp"
 #   2. the local build if present (packages/cli/dist/bin.js)
-#   3. npx -y @neargate/cli@latest mcp   (published package)
+#   3. the CLI source through tsx (npx tsx packages/cli/src/bin.ts mcp)
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOCAL_BIN="$REPO_ROOT/packages/cli/dist/bin.js"
+SOURCE_BIN="$REPO_ROOT/packages/cli/src/bin.ts"
 MCP_WAIT="${MCP_WAIT:-8}"   # seconds to hold stdin open for the async on-chain read
 
 if [ -n "${MCP_CMD:-}" ]; then
@@ -29,16 +32,16 @@ if [ -n "${MCP_CMD:-}" ]; then
 elif [ -f "$LOCAL_BIN" ]; then
   MCP_CMD="node $LOCAL_BIN mcp"                # local build (fast, exact)
 else
-  MCP_CMD="npx -y @neargate/cli@latest mcp" # published package
+  MCP_CMD="$REPO_ROOT/node_modules/.bin/tsx $SOURCE_BIN mcp" # CLI source (needs `npm install`)
 fi
 
 usage() {
   cat >&2 <<'EOF'
 usage: scripts/mcp.sh <command>
   tools            list the available MCP tools
-  list             live on-chain service catalog
+  list             on-chain service catalog
   service <id>     one service's full detail
-  invoice <id>     the live HTTP 402 invoice for a service (no payment)
+  invoice <id>     the HTTP 402 invoice for a service (no payment)
 
 env: MCP_CMD (override server command), MCP_WAIT (stdin hold seconds, default 8)
 EOF
@@ -52,13 +55,13 @@ case "$cmd" in
   tools)
     req='{"jsonrpc":"2.0","id":2,"method":"tools/list"}' ;;
   list)
-    req='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"agentgate_list_services","arguments":{}}}' ;;
+    req='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"neargate_list_services","arguments":{}}}' ;;
   service)
     [ -n "$id" ] || { echo "error: 'service' needs an <id>" >&2; usage; }
-    req="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"agentgate_get_service\",\"arguments\":{\"id\":$id}}}" ;;
+    req="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"neargate_get_service\",\"arguments\":{\"id\":$id}}}" ;;
   invoice)
     [ -n "$id" ] || { echo "error: 'invoice' needs an <id>" >&2; usage; }
-    req="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"agentgate_get_invoice\",\"arguments\":{\"id\":$id}}}" ;;
+    req="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"neargate_get_invoice\",\"arguments\":{\"id\":$id}}}" ;;
   -h|--help) usage ;;
   *) echo "error: unknown command '$cmd'" >&2; usage ;;
 esac

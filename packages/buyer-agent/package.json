@@ -13,5 +13,8 @@
     "@agentgate/chain": "*",
     "@agentgate/client": "*",
     "@agentgate/shared": "*"
+  },
+  "devDependencies": {
+    "near-api-js": "7.4.0"
   }
 }

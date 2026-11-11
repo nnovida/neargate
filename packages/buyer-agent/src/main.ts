@@ -52,7 +52,7 @@ async function main(): Promise<void> {
 
   const config = loadConfig();
   const chain = createChainClient(config);
-  const signer = defaultBuyerSigner(config);
+  const signer = await defaultBuyerSigner(config);
   const llm: LlmClient =
     config.anthropicApiKey !== ''
       ? new AnthropicLlm({ apiKey: config.anthropicApiKey, model: config.llmModel, logger })

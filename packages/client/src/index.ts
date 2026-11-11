@@ -1,5 +1,15 @@
 import type { AnySigner, ChainClient, Logger, Yocto } from '@agentgate/shared';
-import { AgentGateError, compareYocto, isMockNetwork, isNearAccountId, isValidNonce, parseYocto } from '@agentgate/shared';
+import {
+  AgentGateError,
+  addYocto,
+  compareYocto,
+  formatNear,
+  formatPriceWithStorage,
+  isMockNetwork,
+  isNearAccountId,
+  isValidNonce,
+  parseYocto,
+} from '@agentgate/shared';
 import {
   encodeXPayment, decodeXPaymentResponse,
   X402_VERSION, X402_SCHEME,
@@ -15,17 +25,22 @@ export interface PayAndFetchResult {
   requirements?: PaymentRequirements;
   settlement?: SettlementResponse;
   txHash?: string;
+  /** The service price the seller receives (`extra.priceYocto`). Set when paid. */
   priceYocto?: Yocto;
+  /** What the payment attached: price + registry storage fee (`maxAmountRequired`). Set when paid. */
+  depositYocto?: Yocto;
 }
 
 export interface AgentGateClientOpts {
   chain: ChainClient;
   signer: AnySigner;
   /**
-   * Refuse to pay any invoice whose maxAmountRequired is above this (yocto decimal string).
-   * TODO(Task 5): budget cap `maxYocto` → BUDGET_EXCEEDED.
+   * Budget cap (yocto decimal string): refuse, with BUDGET_EXCEEDED, any invoice whose
+   * maxAmountRequired — the total attached, price + storage fee — is above it.
    */
-  maxPriceYocto?: Yocto;
+  maxYocto?: Yocto;
+  /** Refuse (SERVICE_MISMATCH) an invoice for any other service id than this one. */
+  expectedServiceId?: number;
   logger?: Logger;
   /** Wait after the on-chain payment before retrying with proof. Default: 0 (mock) / 3000 (live). */
   settleDelayMs?: number;
@@ -44,19 +59,26 @@ export interface AgentGateClientOpts {
 export interface AgentGateClient {
   /**
    * GET the URL; on 402 parse+validate the PaymentRequiredResponse (refuse if
-   * maxAmountRequired > maxPriceYocto), pay via chain.pay with the invoice's
-   * serviceId + nonce, then retry with the X-PAYMENT header (base64-encoded proof).
-   * Retries on 402 + Retry-After (seconds) up to 5×. Non-402 first responses
-   * pass through. Exposes `requirements` (parsed entry) and `settlement` (decoded
+   * maxAmountRequired > maxYocto), pay via chain.pay with the invoice's serviceId +
+   * nonce and maxAmountRequired attached, then retry with the X-PAYMENT header
+   * (base64-encoded proof). While the gateway answers `settlement_pending`, waits
+   * Retry-After and retries the same proof, up to 3×. Non-402 first responses pass
+   * through. Exposes `requirements` (parsed entry) and `settlement` (decoded
    * X-PAYMENT-RESPONSE) on success.
    */
   fetchPaid(url: string, init?: RequestInit): Promise<PayAndFetchResult>;
 }
 
-/** Maximum number of extra retries when the middleware answers 402 + Retry-After (pending). */
-const MAX_PENDING_RETRIES = 5;
+/** Extra proof attempts while the gateway answers `settlement_pending`. */
+const MAX_PENDING_RETRIES = 3;
+/** Wait before retrying a `settlement_pending` answer that names no Retry-After. */
+const DEFAULT_PENDING_RETRY_MS = 2_000;
 /** Never sleep longer than this per pending retry, regardless of what the server asks for. */
 const MAX_RETRY_AFTER_MS = 30_000;
+/** The 402 error the gateway sends while a payment is still settling (same invoice, retry later). */
+const SETTLEMENT_PENDING = 'settlement_pending';
+/** The only settlement rail this client pays: the registry's `pay` method. */
+const REGISTRY_PAY_SETTLEMENT = 'neargate-registry-pay';
 
 const U64_MAX = 18_446_744_073_709_551_615n; // 2^64 - 1
 
@@ -68,14 +90,50 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+function isYocto(v: unknown): v is Yocto {
+  if (typeof v !== 'string') return false;
+  try {
+    parseYocto(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validates a URL taken from the registry (a seller-controlled `endpointUrl`) before
+ * anything fetches it: http(s) only, and with `rejectPrivateHosts` (live mode) no
+ * private/loopback/link-local host, including DNS names that resolve to one.
+ * Throws BAD_URL or FORBIDDEN_HOST; returns the parsed URL.
+ */
+export async function assertFetchableUrl(raw: string, opts: { rejectPrivateHosts: boolean }): Promise<URL> {
+  const parsed = validateHttpUrl(raw, { rejectPrivateHosts: opts.rejectPrivateHosts });
+  if (!parsed.ok) {
+    throw new AgentGateError(
+      parsed.error === 'forbidden_host' ? 'FORBIDDEN_HOST' : 'BAD_URL',
+      `refusing to fetch ${JSON.stringify(String(raw).slice(0, 200))}: ${parsed.error}`,
+      400,
+    );
+  }
+  if (opts.rejectPrivateHosts && !(await resolvedHostIsPublic(parsed.url.hostname))) {
+    throw new AgentGateError(
+      'FORBIDDEN_HOST',
+      `refusing to fetch ${raw}: host resolves to a private/unreachable address`,
+      400,
+    );
+  }
+  return parsed.url;
+}
+
 /**
  * Strict runtime validation of a PaymentRequiredResponse body. Finds the first
  * accepts[] entry matching scheme==="exact" and network===chainNetwork, then
  * validates maxAmountRequired (yocto), payTo (NEAR account id),
- * extra.serviceId (positive safe integer), extra.nonce (u64 decimal) and
- * extra.expiresAtMs (future unix ms).
+ * extra.serviceId (positive safe integer), extra.nonce (u64 decimal),
+ * extra.expiresAtMs (future unix ms) and the registry rail: settlement
+ * "neargate-registry-pay", method "pay", contractId === payTo, and
+ * priceYocto + storageFeeYocto === maxAmountRequired.
  * Throws AgentGateError('BAD_INVOICE') on any violation.
- * TODO(Task 5): validate the NEAR registry extra (contractId, method, priceYocto, storageFeeYocto).
  */
 export function parsePaymentRequired(
   raw: unknown, chainNetwork: string, now: number = Date.now(),
@@ -111,7 +169,23 @@ export function parsePaymentRequired(
   if (typeof req.extra?.expiresAtMs !== 'number' || !Number.isFinite(req.extra.expiresAtMs) || req.extra.expiresAtMs <= now) {
     throw badInvoice('invoice is expired — refusing to pay');
   }
+  // The registry rail: pay(service_id, nonce) on the contract the invoice names.
+  if (req.extra.settlement !== REGISTRY_PAY_SETTLEMENT) {
+    throw badInvoice(`extra.settlement must be "${REGISTRY_PAY_SETTLEMENT}"`);
+  }
+  if (req.extra.method !== 'pay') throw badInvoice('extra.method must be "pay"');
+  if (req.extra.contractId !== req.payTo) throw badInvoice('extra.contractId must equal payTo');
+  if (!isYocto(req.extra.priceYocto)) throw badInvoice('extra.priceYocto must be a yocto decimal string');
+  if (!isYocto(req.extra.storageFeeYocto)) throw badInvoice('extra.storageFeeYocto must be a yocto decimal string');
+  if (compareYocto(addYocto(req.extra.priceYocto, req.extra.storageFeeYocto), req.maxAmountRequired) !== 0) {
+    throw badInvoice('maxAmountRequired must equal extra.priceYocto + extra.storageFeeYocto');
+  }
   return req;
+}
+
+/** True for the gateway's "still settling" 402 body (same invoice; retry the same proof later). */
+function isSettlementPending(body: unknown): boolean {
+  return isRecord(body) && body['error'] === SETTLEMENT_PENDING;
 }
 
 interface FetchedBody {
@@ -171,7 +245,7 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
   if (!opts || typeof opts !== 'object') {
     throw new AgentGateError('BAD_OPTS', 'createAgentGateClient requires an options object', 500);
   }
-  const { chain, signer, maxPriceYocto, logger } = opts;
+  const { chain, signer, maxYocto, expectedServiceId, logger } = opts;
   if (!chain || typeof chain.pay !== 'function') {
     throw new AgentGateError('BAD_OPTS', 'opts.chain must be a ChainClient', 500);
   }
@@ -182,8 +256,11 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
   if (!isNearAccountId(signer.accountId)) {
     throw new AgentGateError('BAD_OPTS', 'opts.signer.accountId must be a NEAR account id', 500);
   }
-  if (maxPriceYocto !== undefined) {
-    parseYocto(maxPriceYocto); // throws AgentGateError('INVALID_AMOUNT') on garbage
+  if (maxYocto !== undefined) {
+    parseYocto(maxYocto); // throws AgentGateError('INVALID_AMOUNT') on garbage
+  }
+  if (expectedServiceId !== undefined && (!Number.isSafeInteger(expectedServiceId) || expectedServiceId < 1)) {
+    throw new AgentGateError('BAD_OPTS', 'opts.expectedServiceId must be a positive integer', 500);
   }
   const fetchImpl: typeof fetch = opts.fetchImpl ?? fetch;
   const settleDelayMs = opts.settleDelayMs ?? (isMockNetwork(chain.network) ? 0 : 3000);
@@ -221,21 +298,7 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
     // SSRF guard: the URL is seller-controlled (on-chain endpointUrl). Require
     // http(s) and, in live mode, refuse private/loopback/link-local hosts —
     // including DNS names that resolve to them (rebinding) — before connecting.
-    const parsed = validateHttpUrl(url, { rejectPrivateHosts });
-    if (!parsed.ok) {
-      throw new AgentGateError(
-        parsed.error === 'forbidden_host' ? 'FORBIDDEN_HOST' : 'BAD_URL',
-        `fetchPaid refused url ${url}: ${parsed.error}`,
-        400,
-      );
-    }
-    if (rejectPrivateHosts && !(await resolvedHostIsPublic(parsed.url.hostname))) {
-      throw new AgentGateError(
-        'FORBIDDEN_HOST',
-        `fetchPaid refused url ${url}: host resolves to a private/unreachable address`,
-        400,
-      );
-    }
+    await assertFetchableUrl(url, { rejectPrivateHosts });
 
     const first = await doFetch(url, withTimeout(init));
 
@@ -257,11 +320,29 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
       nonce: req.extra.nonce,
     });
 
-    // Price guard — never pay above the caller's cap.
-    if (maxPriceYocto !== undefined && compareYocto(req.maxAmountRequired, maxPriceYocto) > 0) {
+    // `chain.pay` always calls this client's registry: an invoice naming another one would
+    // pay a service the gateway never sees.
+    if (req.payTo !== chain.registryId) {
       throw new AgentGateError(
-        'PRICE_EXCEEDED',
-        `invoice price ${req.maxAmountRequired} yocto exceeds maxPriceYocto ${maxPriceYocto}`,
+        'REGISTRY_MISMATCH',
+        `invoice pays registry ${req.payTo}, this client settles on ${chain.registryId} — refusing to pay`,
+        502,
+      );
+    }
+    if (expectedServiceId !== undefined && req.extra.serviceId !== expectedServiceId) {
+      throw new AgentGateError(
+        'SERVICE_MISMATCH',
+        `invoice is for service ${req.extra.serviceId}, not service ${expectedServiceId} — refusing to pay`,
+        502,
+      );
+    }
+
+    // Budget cap on the total attached (price + storage fee) — never pay above it.
+    if (maxYocto !== undefined && compareYocto(req.maxAmountRequired, maxYocto) > 0) {
+      throw new AgentGateError(
+        'BUDGET_EXCEEDED',
+        `invoice asks ${formatPriceWithStorage(req.extra.priceYocto, req.extra.storageFeeYocto)} ` +
+          `(${formatNear(req.maxAmountRequired)} attached), above the ${formatNear(maxYocto)} cap`,
         402,
       );
     }
@@ -275,7 +356,8 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
 
     await sleep(settleDelayMs);
 
-    // Retry with x402 proof header; on 402 + Retry-After (verification pending) retry up to 5×.
+    // Retry with the x402 proof header; while the gateway answers settlement_pending, wait
+    // Retry-After and resend the same proof, up to MAX_PENDING_RETRIES times.
     const headers = new Headers(init?.headers);
     headers.set('X-PAYMENT', encodeXPayment({
       x402Version: X402_VERSION,
@@ -285,35 +367,27 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
     }));
     const proofInit: RequestInit = { ...init, headers };
 
+    const paidFields = {
+      paid: true,
+      requirements: req,
+      txHash,
+      priceYocto: req.extra.priceYocto,
+      depositYocto: req.maxAmountRequired,
+    };
     let pendingRetries = 0;
     for (;;) {
       const res = await doFetch(url, withTimeout(proofInit));
       if (res.status !== 402) {
         logger?.info('fetchPaid: paid request completed', { url, status: res.status });
-        return {
-          status: res.status,
-          body: res.body,
-          paid: true,
-          requirements: req,
-          settlement: res.settlement,
-          txHash,
-          priceYocto: req.maxAmountRequired,
-        };
+        return { status: res.status, body: res.body, settlement: res.settlement, ...paidFields };
       }
-      const wait = res.retryAfterMs;
-      if (wait === undefined || pendingRetries >= MAX_PENDING_RETRIES) {
+      if (!isSettlementPending(res.body) || pendingRetries >= MAX_PENDING_RETRIES) {
         logger?.warn('fetchPaid: proof rejected', { url, status: res.status, pendingRetries });
-        return {
-          status: res.status,
-          body: res.body,
-          paid: true,
-          requirements: req,
-          txHash,
-          priceYocto: req.maxAmountRequired,
-        };
+        return { status: res.status, body: res.body, ...paidFields };
       }
       pendingRetries += 1;
-      logger?.debug('fetchPaid: verification pending, retrying', { wait, attempt: pendingRetries });
+      const wait = res.retryAfterMs ?? DEFAULT_PENDING_RETRY_MS;
+      logger?.debug('fetchPaid: settlement pending, retrying', { wait, attempt: pendingRetries });
       await sleep(wait);
     }
   }

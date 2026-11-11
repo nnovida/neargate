@@ -3,6 +3,7 @@ import {
   addYocto,
   compareYocto,
   formatNear,
+  formatPriceWithStorage,
   formatToken,
   formatUnits,
   MIN_PRICE_YOCTO,
@@ -184,6 +185,19 @@ describe('formatNear', () => {
     expect(formatNear('500000000000000000000000')).toBe('0.5 NEAR');
     expect(formatNear('1000000000000000000000000')).toBe('1 NEAR');
     expect(formatNear('0')).toBe('0 NEAR');
+  });
+});
+
+describe('formatPriceWithStorage', () => {
+  it('prints the price and the registry storage fee the buyer attaches on top', () => {
+    expect(formatPriceWithStorage(nearToYocto('0.5'))).toBe('0.5 NEAR + 0.002 NEAR storage');
+    expect(formatPriceWithStorage(nearToYocto('2.5'), PAYMENT_STORAGE_FEE_YOCTO)).toBe('2.5 NEAR + 0.002 NEAR storage');
+    expect(formatPriceWithStorage(nearToYocto('1'), nearToYocto('0.01'))).toBe('1 NEAR + 0.01 NEAR storage');
+  });
+
+  it('rejects non-yocto input like the other money helpers', () => {
+    expect(errorCode(() => formatPriceWithStorage('0.5'))).toBe('INVALID_AMOUNT');
+    expect(errorCode(() => formatPriceWithStorage(nearToYocto('1'), '-1'))).toBe('INVALID_AMOUNT');
   });
 });
 

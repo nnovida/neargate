@@ -1,6 +1,7 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { KeyPair } from 'near-api-js';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   ActivityEvent,
@@ -10,8 +11,16 @@ import type {
   ServiceRecord,
   ServiceScore,
 } from '@agentgate/shared';
-import { decodeXPayment, isAgentGateError, trustTier, X402_SCHEME, X402_VERSION } from '@agentgate/shared';
-import { MockLlm, runBuyerAgent } from '@agentgate/buyer-agent';
+import {
+  addYocto,
+  decodeXPayment,
+  isAgentGateError,
+  loadConfig,
+  trustTier,
+  X402_SCHEME,
+  X402_VERSION,
+} from '@agentgate/shared';
+import { defaultBuyerSigner, MockLlm, runBuyerAgent } from '@agentgate/buyer-agent';
 import type { BuyerRunReport, CatalogEntry } from '@agentgate/buyer-agent';
 
 /** Base58 strings of NEAR tx-hash length. */
@@ -71,6 +80,7 @@ function makeChain(opts: FakeChainOpts = {}): ChainClient {
     getPayment: vi.fn(async () => null),
     verifyPayment: vi.fn(async () => ({ ok: false as const, reason: 'not_found' as const })),
     isFullAccessKey: vi.fn(async () => false),
+    accountExists: vi.fn(async () => true),
     registerService: vi.fn(async () => ({ serviceId: 1, txHash: 'tx' })),
     pay: vi.fn(async () => ({ txHash: PAYMENT_TX })),
     recordAttestation: vi.fn(async () => ({ txHash: 'tx' })),
@@ -78,11 +88,7 @@ function makeChain(opts: FakeChainOpts = {}): ChainClient {
   };
 }
 
-/**
- * TODO(Task 5): a D3 invoice quotes price + storage fee as maxAmountRequired; the
- * agent's budget gate and client cap still use the bare price, so this fixture
- * quotes the price alone.
- */
+/** The gateway's D3 invoice: maxAmountRequired = price + the 0.002 NEAR storage fee. */
 function invoiceFor(service: ServiceRecord): PaymentRequiredResponse {
   return {
     x402Version: X402_VERSION,
@@ -91,7 +97,7 @@ function invoiceFor(service: ServiceRecord): PaymentRequiredResponse {
       {
         scheme: X402_SCHEME,
         network: 'near-mock',
-        maxAmountRequired: service.priceYocto,
+        maxAmountRequired: addYocto(service.priceYocto, STORAGE_FEE),
         asset: 'NEAR',
         payTo: REGISTRY,
         resource: service.endpointUrl,
@@ -275,13 +281,14 @@ describe('runBuyerAgent', () => {
     expect(report.paid).toBe(true);
     expect(report.paymentTxHash).toBe(PAYMENT_TX);
     expect(report.attestationTxHash).toBe(ATTEST_TX);
-    expect(report.spentYocto).toBe('500000000000000000000000');
+    // the budget counts what left the wallet: 0.5 NEAR price + 0.002 NEAR storage
+    expect(report.spentYocto).toBe('502000000000000000000000');
     expect(report.summary).toContain('3310.25');
     expect(report.reason.length).toBeGreaterThan(0);
 
     expect(chain.pay).toHaveBeenCalledTimes(1);
     expect(chain.pay).toHaveBeenCalledWith(
-      { serviceId: 1, nonce: '424242', depositYocto: '500000000000000000000000' },
+      { serviceId: 1, nonce: '424242', depositYocto: '502000000000000000000000' },
       SIGNER,
     );
 
@@ -333,13 +340,37 @@ describe('runBuyerAgent', () => {
     expect(steps).not.toContain('payment');
   });
 
-  it('allows a price exactly equal to the budget', async () => {
+  it('refuses BEFORE paying when the price fits but price + storage fee does not', async () => {
+    const gold = makeService(); // 0.5 NEAR, attaches 0.502 NEAR
+    const chain = makeChain({ services: [gold] });
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const lines: string[] = [];
+
+    const report = await runBuyerAgent({
+      task: 'gold price',
+      budgetNear: '0.5',
+      chain,
+      signer: SIGNER,
+      llm: new MockLlm(),
+      fetchImpl,
+      decisionLogPath: tmpLogPath(),
+      print: (text) => lines.push(text),
+    });
+
+    expect(report.paid).toBe(false);
+    expect(report.summary).toContain('refused');
+    expect(report.summary).toContain('0.5 NEAR + 0.002 NEAR storage');
+    expect(chain.pay).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('allows price + storage fee exactly equal to the budget', async () => {
     const gold = makeService(); // 0.5 NEAR
     const chain = makeChain({ services: [gold] });
 
     const report = await runBuyerAgent({
       task: 'gold price',
-      budgetNear: '0.5',
+      budgetNear: '0.502',
       chain,
       signer: SIGNER,
       llm: new MockLlm(),
@@ -350,10 +381,10 @@ describe('runBuyerAgent', () => {
       print: silent,
     });
     expect(report.paid).toBe(true);
-    expect(report.spentYocto).toBe('500000000000000000000000');
+    expect(report.spentYocto).toBe('502000000000000000000000');
   });
 
-  it('converts a PRICE_EXCEEDED invoice (server asks more than budget) into a refusal report', async () => {
+  it('converts a BUDGET_EXCEEDED invoice (server asks more than the approved price) into a refusal report', async () => {
     // On-chain price fits the budget, but the invoice demands more.
     const gold = makeService({ priceYocto: '400000000000000000000000' });
     const chain = makeChain({ services: [gold] });
@@ -362,7 +393,13 @@ describe('runBuyerAgent', () => {
       json(
         {
           ...base,
-          accepts: [{ ...base.accepts[0], maxAmountRequired: '900000000000000000000000' }],
+          accepts: [
+            {
+              ...base.accepts[0],
+              maxAmountRequired: '900000000000000000000000',
+              extra: { ...base.accepts[0]!.extra, priceYocto: '898000000000000000000000' },
+            },
+          ],
         },
         402,
       ),
@@ -442,6 +479,35 @@ describe('runBuyerAgent', () => {
     expect(steps).toEqual(expect.arrayContaining(['attestation', 'run_end']));
   });
 
+  it('keeps the paid report (attestationTxHash null) when the attestation poll itself fails', async () => {
+    const gold = makeService();
+    const chain = makeChain({ services: [gold] });
+    chain.listAttestations = vi.fn(async () => {
+      throw new Error('attestation read unavailable');
+    });
+    const logPath = tmpLogPath();
+
+    const report = await runBuyerAgent({
+      task: 'gold price',
+      budgetNear: '5',
+      chain,
+      signer: SIGNER,
+      llm: new MockLlm(),
+      fetchImpl: paywallFetch(gold, { xau_usd: 3310.25 }),
+      decisionLogPath: logPath,
+      attestationTimeoutMs: 100,
+      attestationPollIntervalMs: 10,
+      print: silent,
+    });
+
+    expect(chain.listAttestations).toHaveBeenCalled();
+    expect(report.paid).toBe(true);
+    expect(report.paymentTxHash).toBe(PAYMENT_TX);
+    expect(report.attestationTxHash).toBeNull();
+    const steps = readFileSync(logPath, 'utf8').trim().split('\n').map((l) => (JSON.parse(l) as { step: string }).step);
+    expect(steps).toEqual(expect.arrayContaining(['attestation', 'run_end']));
+  });
+
   it('produces the exact BuyerRunReport shape', async () => {
     const gold = makeService();
     const chain = makeChain({ services: [gold] });
@@ -501,5 +567,49 @@ describe('runBuyerAgent', () => {
     }).catch((e: unknown) => e);
     expect(isAgentGateError(err)).toBe(true);
     if (isAgentGateError(err)) expect(err.code).toBe('BAD_TASK');
+  });
+});
+
+describe('defaultBuyerSigner', () => {
+  it('mock mode: MOCK_BUYER_ACCOUNT, no key material', async () => {
+    const config = loadConfig({ AGENTGATE_MODE: 'mock', MOCK_BUYER_ACCOUNT: 'b-1.mock' });
+    expect(await defaultBuyerSigner(config)).toEqual({ kind: 'mock', accountId: 'b-1.mock' });
+  });
+
+  it('live mode: resolves the buyer key through loadNearSigner (BUYER_KEY_PATH)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'neargate-buyer-key-'));
+    const keyPair = KeyPair.fromRandom('ed25519');
+    const keyPath = join(dir, 'buyer.json');
+    writeFileSync(
+      keyPath,
+      JSON.stringify({
+        account_id: 'buyer.testnet',
+        public_key: keyPair.getPublicKey().toString(),
+        private_key: keyPair.toString(),
+      }),
+    );
+    chmodSync(keyPath, 0o600);
+    const config = loadConfig(
+      { AGENTGATE_MODE: 'live', BUYER_ACCOUNT_ID: 'buyer.testnet', BUYER_KEY_PATH: keyPath },
+      { requireStrongAdminToken: false },
+    );
+    expect(await defaultBuyerSigner(config)).toEqual({ kind: 'near', accountId: 'buyer.testnet', keyPath });
+  });
+
+  it('live mode without a resolvable key fails fast (no run with an unusable signer)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'neargate-buyer-home-'));
+    mkdirSync(join(home, '.near-credentials', 'testnet'), { recursive: true });
+    vi.stubEnv('HOME', home);
+    try {
+      const config = loadConfig(
+        { AGENTGATE_MODE: 'live', BUYER_ACCOUNT_ID: 'buyer.testnet' },
+        { requireStrongAdminToken: false },
+      );
+      await expect(defaultBuyerSigner(config)).rejects.toMatchObject({ code: 'SIGNER_MISSING' });
+      const noAccount = loadConfig({ AGENTGATE_MODE: 'live' }, { requireStrongAdminToken: false });
+      await expect(defaultBuyerSigner(noAccount)).rejects.toMatchObject({ code: 'SIGNER_MISSING' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

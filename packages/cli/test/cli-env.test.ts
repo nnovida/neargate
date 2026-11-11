@@ -23,7 +23,6 @@ describe('resolveCliEnv', () => {
       {
         mode: 'mock',
         registry: 'flag-registry.testnet',
-        keyFile: '/k.json',
         adminToken: 'T',
         rpc: 'http://n',
       },
@@ -31,7 +30,6 @@ describe('resolveCliEnv', () => {
     );
     expect(out.AGENTGATE_MODE).toBe('mock');
     expect(out.REGISTRY_CONTRACT_ID).toBe('flag-registry.testnet');
-    expect(out.SELLER_KEY_PATH).toBe('/k.json');
     expect(out.AGENTGATE_ADMIN_TOKEN).toBe('T');
     expect(out.NEAR_RPC_URL).toBe('http://n');
   });
@@ -41,9 +39,16 @@ describe('resolveCliEnv', () => {
     expect(out.AGENTGATE_MODE).toBe('live');
   });
 
-  it('does not inject NEAR_RPC_URL/SELLER_KEY_PATH when neither flag nor env is set', () => {
+  it('does not inject NEAR_RPC_URL when neither flag nor env is set', () => {
     const out = resolveCliEnv({}, {});
     expect(out.NEAR_RPC_URL).toBeUndefined();
+  });
+
+  it('leaves the signer flags (--account, --key-file) to the role-aware signer, never to env', () => {
+    const out = resolveCliEnv({ account: 'someone.testnet', keyFile: '/k.json' } as never, {});
     expect(out.SELLER_KEY_PATH).toBeUndefined();
+    expect(out.BUYER_KEY_PATH).toBeUndefined();
+    expect(out.SELLER_ACCOUNT_ID).toBeUndefined();
+    expect(out.BUYER_ACCOUNT_ID).toBeUndefined();
   });
 });

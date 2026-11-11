@@ -2,15 +2,24 @@ import type {
   AgentGateMode,
   AnySigner,
   ChainClient,
+  NearNetwork,
   RegisterServiceInput,
   Yocto,
 } from '@agentgate/shared';
-import { AgentGateError, buildSelfMapMessage, nearToYocto, parseYocto } from '@agentgate/shared';
-import { signerAccountId, signMessage } from './identity';
+import {
+  AgentGateError,
+  MIN_PRICE_YOCTO,
+  buildSelfMapMessage,
+  compareYocto,
+  formatNear,
+  nearToYocto,
+} from '@agentgate/shared';
+import { loadNearSigner, signerAccountId, type LoadedNearSigner } from './identity';
 import type { FetchLike } from './types';
 import {
-  MAX_DESCRIPTION_LENGTH,
-  MAX_NAME_LENGTH,
+  MAX_DESCRIPTION_BYTES,
+  MAX_GATEWAY_URL_BYTES,
+  MAX_NAME_BYTES,
   normalizeBaseUrl,
   optionalSafeText,
   requireAccountId,
@@ -28,7 +37,7 @@ export const DEFAULT_WRAP_FETCH_TIMEOUT_MS = 15_000;
 export interface WrapServiceOpts {
   /** Upstream API URL to wrap. Kept private — only ever sent to the gateway admin API. */
   upstreamUrl: string;
-  /** Price per call in NEAR (decimal string, max 24 dp, must be > 0). */
+  /** Price per call in NEAR (decimal string, max 24 dp, at least the registry minimum 0.000001). */
   priceNear: string;
   name: string;
   description?: string;
@@ -41,13 +50,19 @@ export interface WrapServiceOpts {
   /** Base URL for the printed dashboard link (default http://localhost:3000). */
   dashboardBaseUrl?: string;
   chain: ChainClient;
+  /**
+   * The seller. A NEAR key signer (live) maps the upstream through the gateway's self-map route
+   * with a signature from its key; a mock signer uses the admin-token route.
+   */
   signer: AnySigner;
-  /** Bearer token for `POST <gateway>/admin/services`. */
-  adminToken: string;
-  /** Runtime mode; in 'live' a non-localhost gateway must use https:// (token safety). */
+  /** Bearer token for `POST <gateway>/admin/services` — required with a mock signer only. */
+  adminToken?: string;
+  /** Runtime mode; in 'live' a non-localhost gateway must use https://. */
   mode?: AgentGateMode;
-  /** `chain.network`, bound into the live self-map signature. Defaults to '' (mock ignores it). */
+  /** Network bound into the self-map signature. Defaults to `chain.network`. */
   network?: string;
+  /** NEAR network whose `~/.near-credentials` holds the seller key file. Default 'testnet'. */
+  nearNetwork?: NearNetwork;
   /** Timeout (ms) for the admin-mapping POST. Defaults to DEFAULT_WRAP_FETCH_TIMEOUT_MS. */
   timeoutMs?: number;
   fetchImpl?: FetchLike;
@@ -86,39 +101,47 @@ export function adminRetryCurl(adminUrl: string, serviceId: number, upstreamUrl:
 }
 
 /**
- * Programmatic `agentgate wrap` (used by scripts/demo.ts and the bin):
+ * Programmatic `neargate wrap` (used by scripts/demo.ts and the bin):
  *
- * 1. Registers the service on-chain FIRST. The registry stores the **gateway
- *    base URL** (`gatewayBaseUrl`) and every reader computes
- *    `endpointUrl = <gateway>/svc/<id>`.
- * 2. POSTs `{serviceId, upstreamUrl}` to `<gateway>/admin/services` with the admin
- *    Bearer token. If this step fails the on-chain registration is NOT rolled back:
- *    a precise warning (with the exact retry curl) is printed to stderr and
- *    returned as `adminWarning`.
+ * 1. Validates everything and, with a NEAR key signer, resolves the seller key and
+ *    checks the payment target exists on chain — all before any side effect.
+ * 2. Registers the service on-chain. The registry stores the **gateway base URL**
+ *    (`gatewayBaseUrl`) and every reader computes `endpointUrl = <gateway>/svc/<id>`.
+ * 3. Maps the upstream at the gateway: a NEAR key signer POSTs a signed
+ *    `{upstreamUrl, accountId, publicKey, signature, timestamp}` to
+ *    `<gateway>/services/<id>/map`; a mock signer POSTs `{serviceId, upstreamUrl}` to
+ *    `<gateway>/admin/services` with the admin Bearer token. If this step fails the
+ *    on-chain registration is NOT rolled back: a precise warning is printed to stderr
+ *    and returned as `adminWarning`.
  */
 export async function wrapService(opts: WrapServiceOpts): Promise<WrapServiceResult> {
   // -- validation (fail fast, before any side effect) ------------------------
-  const name = requireSafeText(opts.name, 'name', MAX_NAME_LENGTH);
-  const description = optionalSafeText(opts.description, 'description', MAX_DESCRIPTION_LENGTH);
+  const name = requireSafeText(opts.name, 'name', MAX_NAME_BYTES);
+  const description = optionalSafeText(opts.description, 'description', MAX_DESCRIPTION_BYTES);
   requireHttpUrl(opts.upstreamUrl, 'upstreamUrl');
   const upstreamUrl = opts.upstreamUrl.trim();
-  // The admin Bearer token is POSTed to the gateway, so reject cleartext http
-  // to a non-localhost gateway in live mode.
+  // The upstream URL (and, on the admin route, the admin token) is POSTed to the
+  // gateway, so reject cleartext http to a non-localhost gateway in live mode.
   const gatewayBase = normalizeBaseUrl(opts.gateway, 'gateway', {
     mode: opts.mode,
     requireHttpsInLiveMode: true,
+    maxBytes: MAX_GATEWAY_URL_BYTES,
   });
   const dashboardBase = normalizeBaseUrl(
     opts.dashboardBaseUrl ?? DEFAULT_DASHBOARD_BASE_URL,
     'dashboardBaseUrl',
   );
-  const adminToken = requireNonEmpty(opts.adminToken, 'adminToken');
+  // near signer → owner-signature self-map (no admin token); mock signer → admin token.
+  // (In production near ⟺ live and mock ⟺ mock; keying off the signer keeps a mock
+  //  signer out of the self-map path even when mode is forced to 'live'.)
+  const useSelfMap = opts.signer.kind === 'near';
+  const adminToken = useSelfMap ? '' : requireNonEmpty(opts.adminToken, 'adminToken');
 
   const priceYocto: Yocto = nearToYocto(opts.priceNear);
-  if (parseYocto(priceYocto) <= 0n) {
+  if (compareYocto(priceYocto, MIN_PRICE_YOCTO) < 0) {
     throw new AgentGateError(
       'INVALID_PRICE',
-      `price must be > 0 NEAR, got ${JSON.stringify(opts.priceNear)}`,
+      `price must be at least ${formatNear(MIN_PRICE_YOCTO)} (the registry minimum), got ${JSON.stringify(opts.priceNear)}`,
       400,
     );
   }
@@ -132,6 +155,26 @@ export async function wrapService(opts: WrapServiceOpts): Promise<WrapServiceRes
       ? requireAccountId(opts.attestor, 'attestor')
       : signerAccountId(opts.signer);
 
+  // Live: prove we can sign the mapping, and that the payment target exists, BEFORE
+  // registering — the registry forwards every price to that account, and a missing one
+  // would strand the funds.
+  let nearKey: LoadedNearSigner | undefined;
+  if (opts.signer.kind === 'near') {
+    nearKey = await loadNearSigner({
+      accountId: opts.signer.accountId,
+      network: opts.nearNetwork ?? 'testnet',
+      ...(opts.signer.secretKey !== undefined ? { secretKey: opts.signer.secretKey } : {}),
+      ...(opts.signer.keyPath !== undefined ? { keyPath: opts.signer.keyPath } : {}),
+    });
+    if (!(await opts.chain.accountExists(paymentTarget))) {
+      throw new AgentGateError(
+        'ACCOUNT_NOT_FOUND',
+        `payment target ${paymentTarget} does not exist on ${opts.chain.network} — create it (or pass --payment-target <existing account>) before wrapping`,
+        400,
+      );
+    }
+  }
+
   // -- step 1: on-chain registration -----------------------------------------
   const input: RegisterServiceInput = {
     name,
@@ -141,42 +184,36 @@ export async function wrapService(opts: WrapServiceOpts): Promise<WrapServiceRes
     paymentTarget,
     attestor,
   };
-  const { serviceId, txHash } = await opts.chain.registerService(input, opts.signer);
+  const { serviceId, txHash } = await opts.chain.registerService(input, nearKey?.signer ?? opts.signer);
 
   const publicUrl = `${gatewayBase}/svc/${serviceId}`;
   const dashboardUrl = `${dashboardBase}/services/${serviceId}`;
   const adminUrl = `${gatewayBase}/admin/services`;
 
   // -- step 2: gateway upstream mapping ---------------------------------------
-  // near signer → owner-signature self-map (no admin token): sign a canonical
-  //   challenge with the seller key and POST it to <gateway>/services/<id>/map.
-  // mock signer → shared admin token POST to <gateway>/admin/services.
-  // (In production near ⟺ live and mock ⟺ mock; keying off the signer keeps a
-  //  mock signer out of the self-map path even when mode is forced to 'live'.)
-  const useSelfMap = opts.signer.kind === 'near';
-  const mapUrl = useSelfMap ? `${gatewayBase}/services/${serviceId}/map` : adminUrl;
+  const mapUrl = nearKey !== undefined ? `${gatewayBase}/services/${serviceId}/map` : adminUrl;
   const fetchImpl: FetchLike = opts.fetchImpl ?? ((u, i) => fetch(u, i));
   const timeoutMs = opts.timeoutMs ?? DEFAULT_WRAP_FETCH_TIMEOUT_MS;
   let adminFailure: string | undefined;
   try {
     let init: Parameters<FetchLike>[1];
-    if (useSelfMap) {
+    if (nearKey !== undefined) {
+      // Sign the canonical challenge with the seller's full-access key (base64 ed25519).
       const timestamp = Date.now();
       const message = buildSelfMapMessage({
-        network: opts.network ?? '',
+        network: opts.network ?? opts.chain.network,
         serviceId,
         upstreamUrl,
         timestamp,
       });
-      const { publicKey, signature } = await signMessage(opts.signer, message);
       init = {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           upstreamUrl,
-          accountId: opts.signer.accountId,
-          publicKey,
-          signature,
+          accountId: nearKey.signer.accountId,
+          publicKey: nearKey.publicKey,
+          signature: nearKey.sign(message),
           timestamp,
         }),
         signal: AbortSignal.timeout(timeoutMs),

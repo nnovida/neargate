@@ -21,7 +21,7 @@
     "test": "vitest run",
     "build": "npm run build -w dashboard",
     "agent": "tsx packages/buyer-agent/src/main.ts",
-    "agentgate": "tsx packages/cli/src/bin.ts"
+    "neargate": "tsx packages/cli/src/bin.ts"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

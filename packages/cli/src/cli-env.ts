@@ -1,14 +1,16 @@
 import { DEFAULT_REGISTRY_CONTRACT_ID } from '@agentgate/shared';
 
-/** Config-bearing CLI flags shared across commands (all optional). */
+/**
+ * Config-bearing CLI flags shared across commands (all optional). The signer flags
+ * (`--account`, `--key-file`) are not config: they mean the seller on `wrap`/`pause`/
+ * `resume` and the buyer on `buy`/`mcp`, so `cliSigner` (identity.ts) takes them.
+ */
 export interface CliConfigFlags {
   mode?: string;
   /** NEAR RPC URL (`--rpc`). */
   rpc?: string;
   /** Registry contract id (`--registry`). */
   registry?: string;
-  /** Seller key file (`--key-file`, near-cli credentials JSON). */
-  keyFile?: string;
   adminToken?: string;
 }
 
@@ -42,7 +44,6 @@ export function resolveCliEnv(flags: CliConfigFlags, env: Env = process.env): En
     pick(flags.registry, env.REGISTRY_CONTRACT_ID, DEFAULT_REGISTRY_CONTRACT_ID),
   );
   set('NEAR_RPC_URL', pick(flags.rpc, env.NEAR_RPC_URL));
-  set('SELLER_KEY_PATH', pick(flags.keyFile, env.SELLER_KEY_PATH));
   set('AGENTGATE_ADMIN_TOKEN', pick(flags.adminToken, env.AGENTGATE_ADMIN_TOKEN));
   return overlay;
 }

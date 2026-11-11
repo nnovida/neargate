@@ -212,6 +212,12 @@ export class DevnetState {
     return this.balanceOf(accountId).toString();
   }
 
+  /** An account exists once it has a balance record: the faucet created it or it received funds. */
+  accountExists(accountId: string): boolean {
+    assertAccountId(accountId, 'accountId');
+    return this.balances.has(accountId);
+  }
+
   /** True iff the devnet knows the account (it has a balance record) and `publicKey` is its key. */
   hasFullAccessKey(accountId: string, publicKey: string): boolean {
     assertAccountId(accountId, 'accountId');

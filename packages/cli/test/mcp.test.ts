@@ -8,7 +8,7 @@ import type {
   ServiceRecord,
   ServiceScore,
 } from '@agentgate/shared';
-import { nativeNearOption } from '@agentgate/shared';
+import { nativeNearOption, PAYMENT_STORAGE_FEE_YOCTO } from '@agentgate/shared';
 import { buildAgentGateMcpServer, type McpServerDeps } from '../src/mcp';
 
 /** A base58 string of NEAR tx-hash length. */
@@ -16,6 +16,8 @@ const TX = (c: string): string => c.repeat(44);
 const BUYER: AnySigner = { kind: 'mock', accountId: 'buyer.mock' };
 const SELLER = 'seller.mock';
 const PRICE = '2500000000000000000000000'; // 2.5 NEAR
+const TOTAL = '2502000000000000000000000'; // price + 0.002 NEAR storage
+const NONCE = '31337';
 
 function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceRecord {
   return {
@@ -34,11 +36,13 @@ function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceReco
   };
 }
 
-/** Two services: #1 active with a 5/5 score, #2 paused. */
-function makeChain(): ChainClient {
+/** Two services: #1 active with a 5/5 score, #2 paused (plus any `extra` services). */
+function makeChain(extra: ServiceRecord[] = []): ChainClient & { paid: unknown[] } {
+  const paid: unknown[] = [];
   const services = new Map<number, ServiceRecord>([
     [1, makeService(1)],
     [2, makeService(2, { active: false, name: 'svc-2-paused' })],
+    ...extra.map((s): [number, ServiceRecord] => [s.id, s]),
   ]);
   const scores = new Map<number, ServiceScore>([
     [1, { totalCalls: 5, successCalls: 5 }],
@@ -47,6 +51,7 @@ function makeChain(): ChainClient {
   return {
     network: 'near-mock',
     registryId: 'registry.mock',
+    paid,
     async getService(id: number) {
       return services.get(id) ?? null;
     },
@@ -74,10 +79,14 @@ function makeChain(): ChainClient {
     async isFullAccessKey() {
       return false;
     },
+    async accountExists() {
+      return true;
+    },
     async registerService() {
       throw new Error('not used');
     },
-    async pay() {
+    async pay(input: unknown) {
+      paid.push(input);
       return { txHash: TX('D') };
     },
     async recordAttestation() {
@@ -86,7 +95,48 @@ function makeChain(): ChainClient {
     async setActive() {
       return { txHash: TX('C') };
     },
-  } as ChainClient;
+  } as ChainClient & { paid: unknown[] };
+}
+
+/** The gateway: a D3 invoice for service 1 without proof, the data once X-PAYMENT is present. */
+function gatewayFetch(): { impl: typeof fetch; urls: string[] } {
+  const urls: string[] = [];
+  const impl = (async (url: unknown, init?: RequestInit) => {
+    urls.push(String(url));
+    if (new Headers(init?.headers).has('X-PAYMENT')) return Response.json({ gold: 3310.25 });
+    return Response.json(
+      {
+        x402Version: 1,
+        error: 'X-PAYMENT header is required',
+        accepts: [
+          {
+            scheme: 'exact',
+            network: 'near-mock',
+            maxAmountRequired: TOTAL,
+            asset: 'NEAR',
+            payTo: 'registry.mock',
+            resource: 'http://gw.example:4021/svc/1',
+            description: 'svc-1',
+            maxTimeoutSeconds: 300,
+            extra: {
+              nonce: NONCE,
+              serviceId: 1,
+              expiresAtMs: Date.now() + 300_000,
+              settlement: 'neargate-registry-pay',
+              contractId: 'registry.mock',
+              method: 'pay',
+              priceYocto: PRICE,
+              storageFeeYocto: PAYMENT_STORAGE_FEE_YOCTO,
+              seller: SELLER,
+              caip2: 'near:mock',
+            },
+          },
+        ],
+      },
+      { status: 402 },
+    );
+  }) as typeof fetch;
+  return { impl, urls };
 }
 
 async function connectClient(deps: McpServerDeps): Promise<Client> {
@@ -102,21 +152,25 @@ function textOf(res: unknown): string {
   return content.map((c) => c.text ?? '').join('\n');
 }
 
-describe('AgentGate MCP server', () => {
-  it('exposes the discover + inspect + pay tools', async () => {
+describe('NearGate MCP server', () => {
+  it('the tool list equals the four neargate_* tools', async () => {
     const client = await connectClient({ chain: makeChain(), signerProvider: () => BUYER });
     const { tools } = await client.listTools();
-    const names = tools.map((t) => t.name);
-    expect(names).toContain('agentgate_list_services');
-    expect(names).toContain('agentgate_get_service');
-    expect(names).toContain('agentgate_get_invoice');
-    expect(names).toContain('agentgate_buy');
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'neargate_buy',
+      'neargate_get_invoice',
+      'neargate_get_service',
+      'neargate_list_services',
+    ]);
+    expect(client.getServerVersion()?.name).toBe('neargate');
+    const buy = tools.find((t) => t.name === 'neargate_buy')!;
+    expect(Object.keys((buy.inputSchema as { properties?: object }).properties ?? {})).toContain('maxNear');
     await client.close();
   });
 
-  it('agentgate_list_services returns the on-chain catalog joined with scores + tiers', async () => {
+  it('neargate_list_services returns the on-chain catalog joined with scores + tiers', async () => {
     const client = await connectClient({ chain: makeChain(), signerProvider: () => BUYER });
-    const res = await client.callTool({ name: 'agentgate_list_services', arguments: {} });
+    const res = await client.callTool({ name: 'neargate_list_services', arguments: {} });
     const parsed = JSON.parse(textOf(res)) as Array<Record<string, unknown>>;
     expect(parsed).toHaveLength(2);
     const svc1 = parsed.find((s) => s.id === 1)!;
@@ -124,33 +178,115 @@ describe('AgentGate MCP server', () => {
     await client.close();
   });
 
-  it('agentgate_get_service returns detail + trust score for one id', async () => {
+  it('neargate_get_service returns detail + trust score for one id', async () => {
     const client = await connectClient({ chain: makeChain(), signerProvider: () => BUYER });
-    const res = await client.callTool({ name: 'agentgate_get_service', arguments: { id: 1 } });
+    const res = await client.callTool({ name: 'neargate_get_service', arguments: { id: 1 } });
     const parsed = JSON.parse(textOf(res)) as Record<string, unknown>;
     expect(parsed).toMatchObject({ id: 1, name: 'svc-1', totalCalls: 5, successCalls: 5 });
     await client.close();
   });
 
-  it('agentgate_get_service on an unknown id returns a tool error, not a crash', async () => {
+  it('neargate_get_service on an unknown id returns a tool error, not a crash', async () => {
     const client = await connectClient({ chain: makeChain(), signerProvider: () => BUYER });
-    const res = await client.callTool({ name: 'agentgate_get_service', arguments: { id: 999 } });
+    const res = await client.callTool({ name: 'neargate_get_service', arguments: { id: 999 } });
     expect((res as { isError?: boolean }).isError).toBe(true);
     expect(textOf(res)).toMatch(/not found/i);
     await client.close();
   });
 
-  it('agentgate_buy refuses a paused service without spending (fail-fast)', async () => {
+  it('neargate_buy refuses a paused service without spending (fail-fast)', async () => {
     const client = await connectClient({ chain: makeChain(), signerProvider: () => BUYER });
-    const res = await client.callTool({ name: 'agentgate_buy', arguments: { id: 2 } });
+    const res = await client.callTool({ name: 'neargate_buy', arguments: { id: 2 } });
     expect((res as { isError?: boolean }).isError).toBe(true);
     expect(textOf(res)).toMatch(/paused|inactive/i);
     await client.close();
   });
 
-  it('agentgate_buy refuses an unknown service without spending', async () => {
+  it('neargate_get_invoice reports the price and the storage fee separately, without paying', async () => {
+    const chain = makeChain();
+    const { impl } = gatewayFetch();
+    const client = await connectClient({ chain, signerProvider: () => BUYER, fetchImpl: impl });
+    const res = await client.callTool({ name: 'neargate_get_invoice', arguments: { id: 1 } });
+    const parsed = JSON.parse(textOf(res)) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      id: 1,
+      price: '2.5 NEAR + 0.002 NEAR storage',
+      priceYocto: PRICE,
+      storageFeeYocto: PAYMENT_STORAGE_FEE_YOCTO,
+      maxAmountYocto: TOTAL,
+      payTo: 'registry.mock',
+      network: 'near-mock',
+      nonce: NONCE,
+    });
+    expect(chain.paid).toHaveLength(0);
+    await client.close();
+  });
+
+  it.each(['javascript:alert(1)', 'file:///etc/passwd', 'ftp://gw.example/svc/3'])(
+    'neargate_get_invoice refuses a registry endpoint %j that is not http(s), before fetching',
+    async (endpointUrl) => {
+      const { impl, urls } = gatewayFetch();
+      const client = await connectClient({
+        chain: makeChain([makeService(3, { endpointUrl })]),
+        signerProvider: () => BUYER,
+        fetchImpl: impl,
+      });
+      const res = await client.callTool({ name: 'neargate_get_invoice', arguments: { id: 3 } });
+      expect((res as { isError?: boolean }).isError).toBe(true);
+      expect(urls).toHaveLength(0);
+      await client.close();
+    },
+  );
+
+  it('neargate_buy pays price + storage and reports both', async () => {
+    const chain = makeChain();
+    const { impl } = gatewayFetch();
+    const client = await connectClient({ chain, signerProvider: async () => BUYER, fetchImpl: impl });
+    const res = await client.callTool({ name: 'neargate_buy', arguments: { id: 1, maxNear: '2.502' } });
+    expect((res as { isError?: boolean }).isError).toBeFalsy();
+    const parsed = JSON.parse(textOf(res)) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      id: 1,
+      paid: true,
+      status: 200,
+      price: '2.5 NEAR + 0.002 NEAR storage',
+      priceYocto: PRICE,
+      depositYocto: TOTAL,
+      txHash: TX('D'),
+      body: { gold: 3310.25 },
+    });
+    expect(chain.paid).toEqual([{ serviceId: 1, nonce: NONCE, depositYocto: TOTAL }]);
+    await client.close();
+  });
+
+  it('neargate_buy maxNear caps the total: a cap equal to the bare price refuses (BUDGET_EXCEEDED)', async () => {
+    const chain = makeChain();
+    const { impl, urls } = gatewayFetch();
+    const client = await connectClient({ chain, signerProvider: () => BUYER, fetchImpl: impl });
+    const res = await client.callTool({ name: 'neargate_buy', arguments: { id: 1, maxNear: '2.5' } });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(res)).toContain('BUDGET_EXCEEDED');
+    expect(chain.paid).toHaveLength(0);
+    expect(urls).toHaveLength(0);
+    await client.close();
+  });
+
+  it('neargate_buy surfaces a signer that cannot be resolved as a tool error', async () => {
+    const client = await connectClient({
+      chain: makeChain(),
+      signerProvider: async () => {
+        throw new Error('SIGNER_MISSING: no key');
+      },
+    });
+    const res = await client.callTool({ name: 'neargate_buy', arguments: { id: 1 } });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(res)).toContain('SIGNER_MISSING');
+    await client.close();
+  });
+
+  it('neargate_buy refuses an unknown service without spending', async () => {
     const client = await connectClient({ chain: makeChain(), signerProvider: () => BUYER });
-    const res = await client.callTool({ name: 'agentgate_buy', arguments: { id: 999 } });
+    const res = await client.callTool({ name: 'neargate_buy', arguments: { id: 999 } });
     expect((res as { isError?: boolean }).isError).toBe(true);
     expect(textOf(res)).toMatch(/not found/i);
     await client.close();

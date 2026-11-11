@@ -361,6 +361,14 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
     await expectContractError(chain.isFullAccessKey('Bad Id', owner.publicKey), 'ERR_INVALID_ACCOUNT_ID');
   });
 
+  it('accountExists: true once the devnet has a balance record for the account', async () => {
+    expect(await chain.accountExists('exists-later.mock')).toBe(false);
+    await faucet('exists-later.mock', '1');
+    expect(await chain.accountExists('exists-later.mock')).toBe(true);
+    await expectContractError(chain.accountExists('Bad Id'), 'ERR_INVALID_ACCOUNT_ID');
+    await expectAgentGateError(chain.accountExists(''), 'invalid_query', 400);
+  });
+
   it('rejects non-mock signers and empty arguments before touching the devnet', async () => {
     await expectAgentGateError(
       chain.pay(
@@ -518,7 +526,7 @@ describe('MockChainHttpClient.verifyPayment — every failure reason, in the reg
   });
 });
 
-describe('MockChainHttpClient.isFullAccessKey fails closed on a malformed devnet answer', () => {
+describe('MockChainHttpClient key and account checks fail closed on a malformed devnet answer', () => {
   let stub: http.Server;
   let client: MockChainHttpClient;
   let answer = '';
@@ -554,4 +562,18 @@ describe('MockChainHttpClient.isFullAccessKey fails closed on a malformed devnet
       });
     },
   );
+
+  it('accountExists passes a boolean answer through and fails closed on anything else', async () => {
+    answer = '{"accountId":"owner.mock","exists":true}';
+    expect(await client.accountExists('owner.mock')).toBe(true);
+    answer = '{"accountId":"owner.mock","exists":false}';
+    expect(await client.accountExists('owner.mock')).toBe(false);
+    for (const body of ['{"exists":"yes"}', '{"exists":1}', '{"exists":null}', '{}', 'null', '[]', 'not json', '']) {
+      answer = body;
+      await expect(client.accountExists('owner.mock'), body).rejects.toMatchObject({
+        code: 'devnet_bad_response',
+        httpStatus: 502,
+      });
+    }
+  });
 });

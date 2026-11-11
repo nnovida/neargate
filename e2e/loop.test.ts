@@ -5,34 +5,35 @@
  * no fixed ports), then walks the entire register → pay → attest economy:
  *
  *   faucet → wrap (on-chain register + gateway admin mapping)
- *   → unpaid GET = 402 with a valid PaymentRequiredResponse
- *   → underpay rejected (amount_too_low)
- *   → exact pay = 200 with the oracle JSON
+ *   → unpaid GET = 402 with the NEAR invoice (price + 0.002 NEAR storage via registry `pay`)
+ *   → an under-deposited `pay` is rejected by the registry (ERR_DEPOSIT_TOO_LOW):
+ *     no money moves and the gateway never serves
+ *   → buy (client: 402 → pay → retry with proof) = 200 with the oracle JSON;
+ *     seller +0.5 NEAR exactly, buyer −0.502 NEAR exactly
  *   → replayed proof = 402 invoice_used
- *   → attestation recorded on-chain (poll ≤5s) → score (1,1)
+ *   → attestation recorded on-chain (poll ≤5s) → score 1/1
  *   → activity feed holds all three event kinds
+ *   → the owner buying its own service is served, but never attested: score stays 1/1
  *   plus: expired-invoice (TTL 100ms) and inactive-service tests.
- *
- * TODO(Task 4/5): the devnet now mirrors the registry (base58 tx hashes, `pay` keeps the
- * storage fee). Red until the middleware verifies registry payments (Task 4), and until the
- * loop is re-asserted on balances (seller +0.5 NEAR, buyer −0.502 NEAR) with the underpay case
- * rebuilt, since the registry now rejects an under-deposited `pay` itself (Task 5).
  */
 import { rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MockChainHttpClient } from '@agentgate/chain';
-import { createDemoAccounts, wrapService } from '@neargate/cli';
+import { buyService, createDemoAccounts, wrapService } from '@neargate/cli';
 import { startServer as startDevnet } from '@agentgate/devnet';
 import { startServer as startMiddleware } from '@agentgate/middleware';
 import { startServer as startOracle } from '@agentgate/oracle';
 import {
+  PAYMENT_STORAGE_FEE_YOCTO,
+  chainErrorCode,
   decodeXPaymentResponse,
   encodeXPayment,
   isNearAccountId,
   isNearTxHash,
   loadConfig,
+  nearToYocto,
   X402_SCHEME,
   X402_VERSION,
   type AgentGateConfig,
@@ -41,9 +42,11 @@ import {
   type PaymentRequiredResponse,
 } from '@agentgate/shared';
 
-const PRICE_YOCTO = '500000000000000000000000'; // 0.5 NEAR
+const PRICE_YOCTO = nearToYocto('0.5');
 /** Price + the 0.002 NEAR storage fee: what a NEAR invoice asks for. */
-const MAX_AMOUNT_YOCTO = '502000000000000000000000';
+const MAX_AMOUNT_YOCTO = nearToYocto('0.502');
+/** A well-formed tx hash no `pay` ever produced. */
+const UNKNOWN_TX = 'Eky1UaWkroENJrfa2yjf8PR7pFbznerFT7UDpUBuodUd';
 
 interface Running {
   port: number;
@@ -85,9 +88,10 @@ describe('full mock-mode loop (e2e)', () => {
 
   // Handed from test to test (the loop is inherently sequential).
   let challenge: PaymentRequiredResponse; // from the unpaid GET
-  let freshAfterUnderpay: PaymentRequiredResponse; // fresh invoice issued with the underpay rejection
   let paidTxHash: string;
   let paidNonce: string;
+
+  const balanceOf = async (accountId: string): Promise<bigint> => BigInt(await chain.getBalance(accountId));
 
   beforeAll(async () => {
     devnet = await startDevnet({ port: 0, config: baseConfig });
@@ -152,97 +156,96 @@ describe('full mock-mode loop (e2e)', () => {
     expect(paymentTarget).toBe(seller.accountId);
   });
 
-  it('unpaid GET → 402 with a valid PaymentRequiredResponse body', async () => {
+  it('unpaid GET → 402 with the NEAR invoice: price + storage fee through the registry `pay`', async () => {
     const res = await fetch(publicUrl);
     expect(res.status).toBe(402);
 
     const body = (await res.json()) as PaymentRequiredResponse;
     expect(body.x402Version).toBe(X402_VERSION);
     expect(body.error).toBe('X-PAYMENT header is required');
-    expect(Array.isArray(body.accepts)).toBe(true);
-    expect(body.accepts.length).toBeGreaterThanOrEqual(1);
+    expect(body.accepts).toHaveLength(1);
 
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const req = body.accepts[0]!;
+    expect(req.scheme).toBe(X402_SCHEME);
     expect(req.network).toBe('near-mock');
-    expect(req.extra.serviceId).toBe(serviceId);
+    expect(req.asset).toBe('NEAR');
     expect(req.description).toBe('RWA FX & Gold Oracle');
     expect(req.maxAmountRequired).toBe(MAX_AMOUNT_YOCTO);
     expect(req.payTo).toBe(chain.registryId);
-    expect(req.extra.seller).toBe(paymentTarget);
+    expect(req.extra).toMatchObject({
+      serviceId,
+      settlement: 'neargate-registry-pay',
+      contractId: chain.registryId,
+      method: 'pay',
+      priceYocto: PRICE_YOCTO,
+      storageFeeYocto: PAYMENT_STORAGE_FEE_YOCTO,
+      seller: paymentTarget,
+      caip2: 'near:mock',
+    });
     expect(req.extra.nonce).toMatch(/^\d{1,20}$/);
     expect(req.extra.expiresAtMs).toBeGreaterThan(Date.now());
-    expect(req.scheme).toBe(X402_SCHEME);
 
     challenge = body;
   });
 
-  it('underpaid payment → 402 amount_too_low with a fresh invoice', async () => {
-    // 1 yocto short of the price, but with the correct invoice nonce.
+  it('an under-deposited pay is rejected by the registry (ERR_DEPOSIT_TOO_LOW): no money moves, nothing is served', async () => {
     const nonce = challenge.accepts[0]!.extra.nonce;
-    const { txHash } = await chain.pay(
-      { serviceId, nonce, depositYocto: '499999999999999999999999' },
-      buyer,
-    );
+    const short = (BigInt(MAX_AMOUNT_YOCTO) - 1n).toString(); // 1 yocto below maxAmountRequired
+    const buyerBefore = await balanceOf(buyer.accountId);
+    const sellerBefore = await balanceOf(seller.accountId);
 
-    const xPayment = encodeXPayment({
-      x402Version: X402_VERSION,
-      scheme: X402_SCHEME,
-      network: chain.network,
-      payload: { kind: 'tx', transaction: txHash, nonce, payer: buyer.accountId },
-    });
+    const err = await chain.pay({ serviceId, nonce, depositYocto: short }, buyer).catch((e: unknown) => e);
+    expect(chainErrorCode(err)).toBe('ERR_DEPOSIT_TOO_LOW');
+
+    expect(await balanceOf(buyer.accountId)).toBe(buyerBefore);
+    expect(await balanceOf(seller.accountId)).toBe(sellerBefore);
+    expect(await chain.getPayment(nonce)).toBeNull();
+
+    // Presenting a proof for that nonce gets a fresh invoice, never the data.
     const res = await fetch(publicUrl, {
-      headers: { 'X-PAYMENT': xPayment },
+      headers: {
+        'X-PAYMENT': encodeXPayment({
+          x402Version: X402_VERSION,
+          scheme: X402_SCHEME,
+          network: chain.network,
+          payload: { kind: 'tx', transaction: UNKNOWN_TX, nonce, payer: buyer.accountId },
+        }),
+      },
     });
     expect(res.status).toBe(402);
-
     const body = (await res.json()) as PaymentRequiredResponse;
-    expect(body.error).toBe('amount_too_low');
-    // Rejections come with a FRESH invoice so the buyer can recover.
-    expect(body.accepts[0]!.extra.nonce).not.toBe(challenge.accepts[0]!.extra.nonce);
-    expect(body.accepts[0]!.maxAmountRequired).toBe(MAX_AMOUNT_YOCTO);
-
-    freshAfterUnderpay = body;
+    expect(body.error).toBe('not_found');
+    expect(body.accepts[0]!.extra.nonce).not.toBe(nonce);
   });
 
-  it('exact payment → 200 with the oracle JSON proxied through the gateway', async () => {
-    const nonce = freshAfterUnderpay.accepts[0]!.extra.nonce;
-    const { txHash } = await chain.pay(
-      { serviceId, nonce, depositYocto: MAX_AMOUNT_YOCTO },
-      buyer,
-    );
+  it('buy: 402 → pay → proof = 200 oracle JSON; seller +0.5 NEAR, buyer −0.502 NEAR exactly', async () => {
+    const buyerBefore = await balanceOf(buyer.accountId);
+    const sellerBefore = await balanceOf(seller.accountId);
+    const registryBefore = await balanceOf(chain.registryId);
 
-    const xPayment = encodeXPayment({
-      x402Version: X402_VERSION,
-      scheme: X402_SCHEME,
-      network: chain.network,
-      payload: { kind: 'tx', transaction: txHash, nonce, payer: buyer.accountId },
-    });
-    const res = await fetch(publicUrl, {
-      headers: { 'X-PAYMENT': xPayment },
-    });
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toContain('application/json');
+    const { result } = await buyService({ chain, signer: buyer, id: serviceId });
 
+    expect(result.status).toBe(200);
+    expect(result.paid).toBe(true);
+    expect(result.priceYocto).toBe(PRICE_YOCTO);
+    expect(result.depositYocto).toBe(MAX_AMOUNT_YOCTO);
     // Static fixture values (ORACLE_STATIC) prove the bytes came from the oracle.
-    const feed = (await res.json()) as {
+    const feed = result.body as {
       pairs: { usd_idr: { value: number }; xau_usd: { value: number } };
       attribution: string;
     };
     expect(feed.pairs.usd_idr.value).toBe(16250.5);
     expect(feed.pairs.xau_usd.value).toBe(3310.25);
     expect(feed.attribution).toBe('static-fixture');
+    expect(result.settlement).toMatchObject({ success: true, transaction: result.txHash, network: chain.network });
 
-    // Settlement header must be present and carry the correct proof metadata.
-    const xPaymentResponse = res.headers.get('x-payment-response');
-    expect(xPaymentResponse, 'x-payment-response header should be present').not.toBeNull();
-    const settlement = decodeXPaymentResponse(xPaymentResponse!);
-    expect(settlement.success).toBe(true);
-    expect(settlement.transaction).toBe(txHash);
-    expect(settlement.network).toBe(chain.network);
+    expect((await balanceOf(seller.accountId)) - sellerBefore).toBe(BigInt(PRICE_YOCTO));
+    expect(buyerBefore - (await balanceOf(buyer.accountId))).toBe(BigInt(MAX_AMOUNT_YOCTO));
+    expect((await balanceOf(chain.registryId)) - registryBefore).toBe(BigInt(PAYMENT_STORAGE_FEE_YOCTO));
 
-    paidTxHash = txHash;
-    paidNonce = nonce;
+    expect(isNearTxHash(result.txHash)).toBe(true);
+    paidTxHash = result.txHash!;
+    paidNonce = result.requirements!.extra.nonce;
   });
 
   it('replaying the same proof → 402 invoice_used', async () => {
@@ -292,14 +295,36 @@ describe('full mock-mode loop (e2e)', () => {
     expect(registered, 'registration event for the wrap tx').toBeDefined();
 
     const payment = events.find((e) => e.kind === 'payment' && e.txHash === paidTxHash);
-    expect(payment, 'payment event for the exact-pay tx').toBeDefined();
-    expect(payment!.amountYocto).toBe(MAX_AMOUNT_YOCTO);
+    expect(payment, 'payment event for the paid call').toBeDefined();
+    expect(payment!.amountYocto).toBe(PRICE_YOCTO); // the price forwarded to the seller
     expect(payment!.nonce).toBe(paidNonce);
 
     const attestation = events.find(
-      (e) => e.kind === 'attestation' && e.serviceId === serviceId && e.success === true,
+      (e) => e.kind === 'attestation' && e.paymentTxHash === paidTxHash,
     );
     expect(attestation, 'attestation event for the paid call').toBeDefined();
+    expect(attestation!.success).toBe(true);
+  });
+
+  it('the owner buying its own service is served but never attested: the score stays 1/1', async () => {
+    const ownerBefore = await balanceOf(seller.accountId);
+
+    const { result } = await buyService({ chain, signer: seller, id: serviceId });
+
+    expect(result.status).toBe(200);
+    expect(result.paid).toBe(true);
+    const nonce = result.requirements!.extra.nonce;
+    const payment = await chain.getPayment(nonce);
+    expect(payment).toMatchObject({ payer: seller.accountId, selfPaid: true, attested: false });
+    // The owner is also the payment target: only the storage fee leaves its wallet.
+    expect(ownerBefore - (await balanceOf(seller.accountId))).toBe(BigInt(PAYMENT_STORAGE_FEE_YOCTO));
+
+    // Give a (wrongly) scheduled attestation more than its first retry window to land.
+    await sleep(750);
+    expect(await chain.getScore(serviceId)).toEqual({ totalCalls: 1, successCalls: 1 });
+    const attestations = await chain.listAttestations(serviceId, 50);
+    expect(attestations.some((a) => a.paymentTxHash === result.txHash)).toBe(false);
+    expect((await chain.getPayment(nonce))!.attested).toBe(false);
   });
 
   it('expired invoice (TTL 100ms) → 402 invoice_expired even with a valid payment', async () => {

@@ -12,7 +12,7 @@ import { MockLlm, runBuyerAgent } from '@agentgate/buyer-agent';
 import { startServer as startDevnet } from '@agentgate/devnet';
 import { startServer as startMiddleware } from '@agentgate/middleware';
 import { startServer as startOracle } from '@agentgate/oracle';
-import { formatNear, loadConfig, type AnySigner } from '@agentgate/shared';
+import { formatPriceWithStorage, loadConfig, nearToYocto, type AnySigner } from '@agentgate/shared';
 
 // The dev stack is the mock loop by definition.
 process.env.AGENTGATE_MODE = 'mock';
@@ -22,6 +22,7 @@ process.env.AGENTGATE_MODE = 'mock';
 // moment you open it — no manual wrap/agent steps needed.
 const SEED = process.argv.includes('--seed');
 const SEED_TASK = "Get today's USD/IDR rate and gold price, summarize for a treasury report";
+const SEED_PRICE_NEAR = '0.5';
 
 interface Closeable {
   name: string;
@@ -80,7 +81,7 @@ async function main(): Promise<void> {
 
     const wrapped = await wrapService({
       upstreamUrl: `http://localhost:${oracle.port}/feed`,
-      priceNear: '0.5',
+      priceNear: SEED_PRICE_NEAR,
       name: 'RWA FX & Gold Oracle',
       description: 'USD/IDR exchange rate and gold (XAU/USD) spot price feed with confidence scoring',
       gateway: `http://localhost:${middleware.port}`,
@@ -105,10 +106,10 @@ async function main(): Promise<void> {
 
     console.log(`
 ${line}
-AgentGate dev stack is up (mock mode) — SEEDED and ready to view.
+NearGate dev stack is up (mock mode) — SEEDED and ready to view.
 
   service #${wrapped.serviceId}   ${wrapped.publicUrl}
-  paid call    ${report.paid ? formatNear(report.spentYocto) + ' · tx ' + String(report.paymentTxHash).slice(0, 16) + '…' : 'FAILED'}
+  paid call    ${report.paid ? formatPriceWithStorage(nearToYocto(SEED_PRICE_NEAR)) + ' · tx ' + String(report.paymentTxHash).slice(0, 16) + '…' : 'FAILED'}
   attestation  ${report.attestationTxHash ? String(report.attestationTxHash).slice(0, 16) + '…' : 'pending'}
   score        ${score.successCalls}/${score.totalCalls} (success/total)
 
@@ -127,7 +128,7 @@ ${line}`);
 
   console.log(`
 ${line}
-AgentGate dev stack is up (mock mode).
+NearGate dev stack is up (mock mode).
 
 Tip: run \`npm run dev:seed\` instead to auto-populate the dashboard in one step.
 
@@ -138,8 +139,8 @@ Tip: run \`npm run dev:seed\` instead to auto-populate the dashboard in one step
 
 2. Wrap the oracle behind the 402 paywall:
 
-   npm run agentgate -- wrap http://localhost:${oracle.port}/feed \\
-     --mode mock --price 0.5 --name "RWA FX & Gold Oracle" \\
+   npm run neargate -- wrap http://localhost:${oracle.port}/feed \\
+     --mode mock --price ${SEED_PRICE_NEAR} --name "RWA FX & Gold Oracle" \\
      --description "USD/IDR exchange rate and gold (XAU/USD) spot price feed"
 
 3. Let the buyer agent discover + pay for it:

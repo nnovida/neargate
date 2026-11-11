@@ -4,7 +4,7 @@
   "description": "Wrap any HTTP API into a paid x402 service on NEAR — HTTP 402 micropayments in native NEAR with on-chain discovery and reputation.",
   "type": "module",
   "bin": {
-    "agentgate": "dist/bin.js"
+    "neargate": "dist/bin.js"
   },
   "exports": {
     ".": "./src/index.ts"
@@ -52,6 +52,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.0.0",
+    "near-api-js": "7.4.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

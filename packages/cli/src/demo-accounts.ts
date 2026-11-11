@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { Yocto } from '@agentgate/shared';
-import { AgentGateError, base58Decode, nearToYocto } from '@agentgate/shared';
+import { AgentGateError, base58Decode, isEd25519PublicKey, nearToYocto } from '@agentgate/shared';
 import type { FetchLike } from './types';
 import { normalizeBaseUrl } from './validate';
 
@@ -38,11 +38,11 @@ export interface DemoAccountsResult {
   publicKeyLines: [string, string];
 }
 
-/** `ed25519:<base58>` whose payload decodes to exactly `bytes` bytes (32 public, 64 secret). */
-function isEd25519Key(value: unknown, bytes: number): value is string {
+/** A near-cli secret key: `ed25519:` + the base58 of 64 bytes (seed || public key). */
+function isEd25519SecretKey(value: unknown): value is string {
   if (typeof value !== 'string' || !value.startsWith('ed25519:')) return false;
   try {
-    return base58Decode(value.slice('ed25519:'.length)).length === bytes;
+    return base58Decode(value.slice('ed25519:'.length)).length === 64;
   } catch {
     return false;
   }
@@ -54,7 +54,7 @@ export function generateMockAccountId(role: DemoAccount['role']): string {
 }
 
 /**
- * Programmatic `agentgate demo-accounts` (mock mode only): generates a buyer and
+ * Programmatic `neargate demo-accounts` (mock mode only): generates a buyer and
  * a seller mock account id and faucets 1000 NEAR to each via `POST <devnet>/faucet`, which also
  * returns the account's devnet key.
  */
@@ -81,7 +81,7 @@ export async function createDemoAccounts(
       if (name === 'TimeoutError' || name === 'AbortError') {
         throw new AgentGateError(
           'GATEWAY_TIMEOUT',
-          `devnet faucet at ${base}/faucet timed out after ${timeoutMs}ms — is the devnet running? (npm run dev), then re-run \`agentgate demo-accounts\``,
+          `devnet faucet at ${base}/faucet timed out after ${timeoutMs}ms — is the devnet running? (npm run dev), then re-run \`neargate demo-accounts\``,
           504,
         );
       }
@@ -121,7 +121,7 @@ export async function createDemoAccounts(
         502,
       );
     }
-    if (!isEd25519Key(publicKey, 32) || !isEd25519Key(secretKey, 64)) {
+    if (!isEd25519PublicKey(publicKey) || !isEd25519SecretKey(secretKey)) {
       throw new AgentGateError(
         'FAUCET_FAILED',
         `faucet for ${role} returned a malformed key pair (expected ed25519:<base58> strings)`,

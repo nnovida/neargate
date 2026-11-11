@@ -398,6 +398,45 @@ describe('devnet keys: one deterministic full-access ed25519 key per account', (
   });
 });
 
+describe('GET /accounts/:id: an account exists iff it has a balance record', () => {
+  it('answers {accountId, exists} — false until the faucet creates the account', async () => {
+    const accountId = 'exists-check.mock';
+    expect(await get(`/accounts/${accountId}`)).toEqual({ status: 200, body: { accountId, exists: false } });
+    await fund(accountId, '1');
+    expect(await get(`/accounts/${accountId}`)).toEqual({ status: 200, body: { accountId, exists: true } });
+    // the balance route does not create the account
+    expect((await get('/accounts/read-only.mock/balance')).body.balanceYocto).toBe('0');
+    expect((await get('/accounts/read-only.mock')).body).toEqual({ accountId: 'read-only.mock', exists: false });
+  });
+
+  it('an account that only ever received a payment exists', async () => {
+    const target = 'paid-target.mock';
+    expect((await get(`/accounts/${target}`)).body.exists).toBe(false);
+    const serviceId = await newService({ paymentTarget: target, name: 'exists via payment' });
+    expect((await pay(serviceId, freshNonce())).status).toBe(200);
+    expect((await get(`/accounts/${target}`)).body).toEqual({ accountId: target, exists: true });
+  });
+
+  it('rejects a malformed account id with ERR_INVALID_ACCOUNT_ID', async () => {
+    expectErr(await get('/accounts/Not%20Valid'), 'ERR_INVALID_ACCOUNT_ID');
+    expectErr(await get('/accounts/UPPER.mock'), 'ERR_INVALID_ACCOUNT_ID');
+  });
+
+  it('DevnetState.accountExists mirrors the route', () => {
+    const state = new DevnetState();
+    expect(state.accountExists('fresh.mock')).toBe(false);
+    state.faucet('fresh.mock', '1');
+    expect(state.accountExists('fresh.mock')).toBe(true);
+    let thrown: unknown;
+    try {
+      state.accountExists('Bad Id');
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ code: 'ERR_INVALID_ACCOUNT_ID' });
+  });
+});
+
 describe('register_service', () => {
   it('registers a service: id, 44-char base58 tx hash, computed endpointUrl, one native option', async () => {
     const res = await register({ gatewayBaseUrl: `${GATEWAY}/` }); // trailing slash stripped on read

@@ -10,6 +10,7 @@ import type {
 import { AgentGateError, base58Encode, nativeNearOption } from '@agentgate/shared';
 import {
   createDemoAccounts,
+  formatServiceTable,
   listServices,
   serviceStatus,
   setServiceActive,
@@ -80,6 +81,9 @@ function makeFakeChain(hooks: { onRegister?: () => void } = {}): FakeChain {
     },
     async isFullAccessKey() {
       return false;
+    },
+    async accountExists() {
+      return true;
     },
     async registerService(input, signer) {
       hooks.onRegister?.();
@@ -255,6 +259,8 @@ describe('wrapService', () => {
 
   const rejectionCases: Array<{ title: string; patch: Record<string, string>; code: string }> = [
     { title: 'price of 0', patch: { priceNear: '0' }, code: 'INVALID_PRICE' },
+    // the registry's floor: MIN_PRICE_YOCTO = 10^18 yocto = 0.000001 NEAR
+    { title: 'price below the registry minimum', patch: { priceNear: '0.0000009' }, code: 'INVALID_PRICE' },
     { title: 'non-numeric price', patch: { priceNear: 'abc' }, code: 'INVALID_AMOUNT' },
     { title: 'negative price', patch: { priceNear: '-1' }, code: 'INVALID_AMOUNT' },
     { title: 'price with 25 decimals', patch: { priceNear: `0.${'1'.repeat(25)}` }, code: 'INVALID_AMOUNT' },
@@ -278,13 +284,20 @@ describe('wrapService', () => {
     { title: 'name with a control char', patch: { name: 'bad\x01name' }, code: 'INVALID_INPUT' },
     { title: 'name with a NUL byte', patch: { name: 'a\x00b' }, code: 'INVALID_INPUT' },
     { title: 'name with a DEL byte', patch: { name: 'a\x7fb' }, code: 'INVALID_INPUT' },
-    { title: 'overlong name', patch: { name: 'n'.repeat(129) }, code: 'INVALID_INPUT' },
+    // the registry counts UTF-8 bytes: name ≤ 64, description ≤ 280, gateway base URL ≤ 200
+    { title: 'overlong name', patch: { name: 'n'.repeat(65) }, code: 'INVALID_INPUT' },
+    { title: 'name over 64 bytes but not 64 chars', patch: { name: 'é'.repeat(33) }, code: 'INVALID_INPUT' },
     {
       title: 'description with a control char',
       patch: { description: 'line1\nline2' },
       code: 'INVALID_INPUT',
     },
-    { title: 'overlong description', patch: { description: 'd'.repeat(513) }, code: 'INVALID_INPUT' },
+    { title: 'overlong description', patch: { description: 'd'.repeat(281) }, code: 'INVALID_INPUT' },
+    {
+      title: 'gateway base URL over 200 bytes',
+      patch: { gateway: `http://gw.example/${'p'.repeat(190)}` },
+      code: 'INVALID_URL',
+    },
   ];
 
   for (const { title, patch, code } of rejectionCases) {
@@ -487,6 +500,26 @@ describe('listServices', () => {
   });
 });
 
+describe('formatServiceTable (neargate list)', () => {
+  it('prints `id  name  price(NEAR)  calls  tier  active` and one row per service', () => {
+    const table = formatServiceTable([
+      { service: makeService(1, { name: 'Gold Spot Feed' }), score: { totalCalls: 30, successCalls: 29 }, tier: 'trusted' },
+      {
+        service: makeService(12, { name: 'FX', priceYocto: '2500000000000000000000000', active: false }),
+        score: { totalCalls: 0, successCalls: 0 },
+        tier: 'new',
+      },
+    ]);
+    const lines = table.split('\n');
+    expect(lines[0]).toMatch(/^id\s{2,}name\s{2,}price\(NEAR\)\s{2,}calls\s{2,}tier\s{2,}active$/);
+    expect(lines[0]!.split(/\s{2,}/)).toEqual(['id', 'name', 'price(NEAR)', 'calls', 'tier', 'active']);
+    expect(lines[1]!.split(/\s{2,}/)).toEqual(['1', 'Gold Spot Feed', '0.5', '29/30', 'trusted', 'yes']);
+    expect(lines[2]!.split(/\s{2,}/)).toEqual(['12', 'FX', '2.5', '0/0', 'new', 'no']);
+    // columns line up
+    expect(lines[1]!.indexOf('0.5')).toBe(lines[0]!.indexOf('price(NEAR)'));
+  });
+});
+
 describe('serviceStatus', () => {
   it('returns service + score + tier + recent attestations', async () => {
     const chain = makeFakeChain();
@@ -592,23 +625,23 @@ describe('setServiceActive', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('rewords the devnet 403 not_authorized into the owner-only message', async () => {
+  it('rewords the registry ERR_NOT_AUTHORIZED into the owner-only message', async () => {
     const chain = makeFakeChain();
     chain.setActive = async () => {
       throw new AgentGateError(
-        'not_authorized',
-        'only the service owner may change the active flag',
-        403,
+        'ERR_NOT_AUTHORIZED',
+        'ERR_NOT_AUTHORIZED: only the owner can change the active flag',
+        400,
       );
     };
     await expect(
       setServiceActive({ chain, signer: SIGNER, id: 2, active: false }),
     ).rejects.toMatchObject({
       name: 'AgentGateError',
-      code: 'not_authorized',
+      code: 'ERR_NOT_AUTHORIZED',
       httpStatus: 403,
       message: expect.stringMatching(
-        /only the service owner can pause\/resume service 2 .*live: SELLER_KEY_PATH or SELLER_PRIVATE_KEY/,
+        /^ERR_NOT_AUTHORIZED: only the service owner can pause\/resume service 2 .*--account.*--key-file/,
       ),
     });
   });

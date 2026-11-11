@@ -135,6 +135,12 @@ export interface ChainClient {
   getPayment(nonce: string): Promise<PaymentRecord | null>;
   verifyPayment(q: VerifyPaymentQuery): Promise<VerifyResult>;
   isFullAccessKey(accountId: string, publicKey: string): Promise<boolean>;
+  /**
+   * True iff the account exists on chain (live: `view_account`; mock: the devnet holds a balance
+   * record for it). `wrap` checks the payment target with it before registering: the registry
+   * forwards each price to that account, so a missing one would strand the funds.
+   */
+  accountExists(accountId: string): Promise<boolean>;
   registerService(input: RegisterServiceInput, signer: AnySigner): Promise<{ serviceId: number; txHash: string }>;
   pay(input: { serviceId: number; nonce: string; depositYocto: Yocto }, signer: AnySigner): Promise<{ txHash: string }>;
   recordAttestation(

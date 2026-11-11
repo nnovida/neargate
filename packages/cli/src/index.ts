@@ -6,8 +6,14 @@ export {
   type WrapServiceOpts,
   type WrapServiceResult,
 } from './wrap';
-export { listServices, type ServiceListing } from './list';
-export { buyService, type BuyServiceOpts, type BuyServiceResult } from './buy';
+export { listServices, formatServiceTable, type ServiceListing } from './list';
+export {
+  buyService,
+  formatBuyBody,
+  formatBuyReceipt,
+  type BuyServiceOpts,
+  type BuyServiceResult,
+} from './buy';
 export {
   setServiceActive,
   type SetServiceActiveOpts,
@@ -26,4 +32,12 @@ export {
   type DemoAccount,
   type DemoAccountsResult,
 } from './demo-accounts';
-export { signerAccountId, signMessage } from './identity';
+export {
+  cliSigner,
+  loadNearSigner,
+  signerAccountId,
+  type LoadNearSignerOpts,
+  type LoadedNearSigner,
+  type SignerFlags,
+  type SignerRole,
+} from './identity';

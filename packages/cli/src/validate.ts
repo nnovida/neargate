@@ -4,10 +4,16 @@ import { AgentGateError, isNearAccountId, stripTrailingSlashes } from '@agentgat
 /** Control characters (C0 range + DEL) rejected from on-chain text fields. */
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
 
-/** Max length of the on-chain service name. */
-export const MAX_NAME_LENGTH = 128;
-/** Max length of the on-chain service description. */
-export const MAX_DESCRIPTION_LENGTH = 512;
+/** The registry's limits, in UTF-8 bytes as the contract counts them. Service name: */
+export const MAX_NAME_BYTES = 64;
+/** Service description: */
+export const MAX_DESCRIPTION_BYTES = 280;
+/** Gateway base URL: */
+export const MAX_GATEWAY_URL_BYTES = 200;
+
+function utf8Bytes(value: string): number {
+  return Buffer.byteLength(value, 'utf8');
+}
 
 function invalid(code: string, message: string): AgentGateError {
   return new AgentGateError(code, message, 400);
@@ -24,26 +30,26 @@ export function requireNonEmpty(value: string | undefined, label: string): strin
 
 /**
  * Validates a non-empty on-chain text field (e.g. service name): rejects control
- * characters and enforces a max length, then returns the trimmed string. These
- * strings go on-chain unmodified, so keep them printable and bounded.
+ * characters and enforces the registry's UTF-8 byte limit, then returns the trimmed
+ * string. These strings go on-chain unmodified, so keep them printable and bounded.
  */
-export function requireSafeText(value: string | undefined, label: string, maxLength: number): string {
+export function requireSafeText(value: string | undefined, label: string, maxBytes: number): string {
   const trimmed = requireNonEmpty(value, label);
   if (CONTROL_CHAR_RE.test(trimmed)) {
     throw invalid('INVALID_INPUT', `${label} must not contain control characters`);
   }
-  if (trimmed.length > maxLength) {
-    throw invalid('INVALID_INPUT', `${label} must be at most ${maxLength} characters, got ${trimmed.length}`);
+  if (utf8Bytes(trimmed) > maxBytes) {
+    throw invalid('INVALID_INPUT', `${label} must be at most ${maxBytes} bytes (UTF-8), got ${utf8Bytes(trimmed)}`);
   }
   return trimmed;
 }
 
 /**
  * Validates an optional on-chain text field (e.g. service description): rejects
- * control characters and enforces a max length, returning the trimmed string
- * ('' when omitted/blank). Unlike requireSafeText, blank is allowed.
+ * control characters and enforces the registry's UTF-8 byte limit, returning the
+ * trimmed string ('' when omitted/blank). Unlike requireSafeText, blank is allowed.
  */
-export function optionalSafeText(value: string | undefined, label: string, maxLength: number): string {
+export function optionalSafeText(value: string | undefined, label: string, maxBytes: number): string {
   const trimmed = (value ?? '').trim();
   if (trimmed === '') {
     return '';
@@ -51,8 +57,8 @@ export function optionalSafeText(value: string | undefined, label: string, maxLe
   if (CONTROL_CHAR_RE.test(trimmed)) {
     throw invalid('INVALID_INPUT', `${label} must not contain control characters`);
   }
-  if (trimmed.length > maxLength) {
-    throw invalid('INVALID_INPUT', `${label} must be at most ${maxLength} characters, got ${trimmed.length}`);
+  if (utf8Bytes(trimmed) > maxBytes) {
+    throw invalid('INVALID_INPUT', `${label} must be at most ${maxBytes} bytes (UTF-8), got ${utf8Bytes(trimmed)}`);
   }
   return trimmed;
 }
@@ -85,13 +91,14 @@ function isLoopbackHost(hostname: string): boolean {
  * trimmed with any trailing slashes stripped, ready for `${base}/svc/${id}` joins.
  *
  * `opts.requireHttpsInLiveMode`: when set, in live mode a non-loopback host MUST
- * use https:// — the admin Bearer token is POSTed to this base, and cleartext
- * http would expose it on the wire.
+ * use https:// — the upstream URL and the mapping credentials are POSTed to this
+ * base, and cleartext http would expose them on the wire.
+ * `opts.maxBytes`: the normalized URL's UTF-8 byte limit (INVALID_URL above it).
  */
 export function normalizeBaseUrl(
   value: string,
   label: string,
-  opts: { mode?: AgentGateMode; requireHttpsInLiveMode?: boolean } = {},
+  opts: { mode?: AgentGateMode; requireHttpsInLiveMode?: boolean; maxBytes?: number } = {},
 ): string {
   const parsed = requireHttpUrl(value, label);
   if (parsed.search !== '' || parsed.hash !== '') {
@@ -105,10 +112,14 @@ export function normalizeBaseUrl(
   ) {
     throw invalid(
       'INSECURE_URL',
-      `${label} must use https:// in live mode for non-localhost hosts (the admin token is sent there in cleartext over http), got ${parsed.protocol.replace(/:$/, '')}://${parsed.hostname}`,
+      `${label} must use https:// in live mode for non-localhost hosts (the mapping request is sent there in cleartext over http), got ${parsed.protocol.replace(/:$/, '')}://${parsed.hostname}`,
     );
   }
-  return stripTrailingSlashes(value.trim());
+  const normalized = stripTrailingSlashes(value.trim());
+  if (opts.maxBytes !== undefined && utf8Bytes(normalized) > opts.maxBytes) {
+    throw invalid('INVALID_URL', `${label} must be at most ${opts.maxBytes} bytes, got ${utf8Bytes(normalized)}`);
+  }
+  return normalized;
 }
 
 /** Validates a NEAR account id (e.g. `seller.testnet`) and returns it trimmed. */

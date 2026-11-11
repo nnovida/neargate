@@ -4,6 +4,13 @@ import { MockChainHttpClient } from './mock';
 
 export { MockChainHttpClient } from './mock';
 export { verifyNearSignature } from './near-signature';
+export {
+  defaultCredentialsPath,
+  loadNearSigner,
+  type LoadNearSignerOpts,
+  type LoadedNearSigner,
+  type NearKeyNetwork,
+} from './near-keys';
 
 /**
  * Picks the ChainClient implementation by `config.mode`:

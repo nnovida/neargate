@@ -139,6 +139,15 @@ export function createApp(deps: DevnetDeps = {}): Express {
     }),
   );
 
+  // GET /accounts/:id → {accountId, exists}
+  app.get(
+    '/accounts/:id',
+    wrap((req, res) => {
+      const accountId = req.params['id'] ?? '';
+      res.json({ accountId, exists: state.accountExists(accountId) });
+    }),
+  );
+
   // GET /accounts/:id/balance → {accountId, balanceYocto}
   app.get(
     '/accounts/:id/balance',

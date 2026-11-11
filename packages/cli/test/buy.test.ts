@@ -8,7 +8,7 @@ import type {
   Yocto,
 } from '@agentgate/shared';
 import { nativeNearOption } from '@agentgate/shared';
-import { buyService } from '../src/buy';
+import { buyService, formatBuyBody, formatBuyReceipt } from '../src/buy';
 
 type PayInput = { serviceId: number; nonce: string; depositYocto: Yocto };
 
@@ -81,6 +81,9 @@ function makeFakeChain(service: ServiceRecord | null): FakeChain {
     async isFullAccessKey() {
       return false;
     },
+    async accountExists() {
+      return true;
+    },
     async registerService() {
       throw new Error('not used');
     },
@@ -97,8 +100,8 @@ function makeFakeChain(service: ServiceRecord | null): FakeChain {
   };
 }
 
-/** A strictly valid 402 PaymentRequiredResponse for the mock network. */
-function invoice402(over: Record<string, unknown> = {}): Response {
+/** A strictly valid 402 PaymentRequiredResponse for the mock network (`over`/`extraOver` patch the entry). */
+function invoice402(over: Record<string, unknown> = {}, extraOver: Record<string, unknown> = {}): Response {
   return Response.json(
     {
       x402Version: 1,
@@ -124,6 +127,7 @@ function invoice402(over: Record<string, unknown> = {}): Response {
             storageFeeYocto: STORAGE_FEE,
             seller: SELLER,
             caip2: 'near:mock',
+            ...extraOver,
           },
           ...over,
         },
@@ -173,7 +177,8 @@ describe('buyService', () => {
     expect(result.status).toBe(200);
     expect(result.body).toEqual({ rate: 16250 });
     expect(result.txHash).toBe(PAYMENT_TX);
-    expect(result.priceYocto).toBe(MAX_AMOUNT);
+    expect(result.priceYocto).toBe(PRICE);
+    expect(result.depositYocto).toBe(MAX_AMOUNT);
 
     // exactly one registry `pay`: the invoice's service + nonce, price + storage fee attached
     expect(chain.payments).toEqual([
@@ -189,30 +194,39 @@ describe('buyService', () => {
     expect(new Headers(calls[1]!.init?.headers).has('X-PAYMENT')).toBe(true);
   });
 
-  it('refuses to pay when the on-chain price exceeds --max, before any HTTP', async () => {
-    const chain = makeFakeChain(makeService(1)); // 0.5 NEAR
+  it('--max caps the total spend: price + storage fee above it is refused before any HTTP', async () => {
+    const chain = makeFakeChain(makeService(1)); // 0.5 NEAR + 0.002 NEAR storage
     const { impl, calls } = gatewayFetch(() => Response.json({}));
 
-    await expect(
-      buyService({ ...baseOpts(chain, impl), maxNear: '0.4' }),
-    ).rejects.toMatchObject({ name: 'AgentGateError', code: 'PRICE_EXCEEDED' });
+    // A cap equal to the bare price is not enough: the buyer attaches 0.502 NEAR.
+    const err = await buyService({ ...baseOpts(chain, impl), maxNear: '0.5' }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ name: 'AgentGateError', code: 'BUDGET_EXCEEDED' });
+    expect((err as Error).message).toContain('0.5 NEAR + 0.002 NEAR storage');
 
     expect(chain.payments).toHaveLength(0);
     expect(calls).toHaveLength(0);
   });
 
-  it('caps the invoice too: a 402 priced above --max is refused after the 402, unpaid', async () => {
+  it('--max equal to price + storage fee pays', async () => {
+    const chain = makeFakeChain(makeService(1));
+    const { impl } = gatewayFetch(() => Response.json({ ok: true }));
+    const { result } = await buyService({ ...baseOpts(chain, impl), maxNear: '0.502' });
+    expect(result.paid).toBe(true);
+    expect(chain.payments[0]!.input.depositYocto).toBe(MAX_AMOUNT);
+  });
+
+  it('caps the invoice too: a 402 asking more than --max is refused after the 402, unpaid', async () => {
     // on-chain price fits the cap, but the gateway invoice demands more
     const chain = makeFakeChain(makeService(1, { priceYocto: '400000000000000000000000' }));
     const calls: FetchCall[] = [];
     const impl = (async (url: unknown, init?: RequestInit) => {
       calls.push({ url: String(url), init });
-      return invoice402({ maxAmountRequired: '900000000000000000000000' });
+      return invoice402({ maxAmountRequired: '900000000000000000000000' }, { priceYocto: '898000000000000000000000' });
     }) as typeof fetch;
 
     await expect(
       buyService({ ...baseOpts(chain, impl), maxNear: '0.5' }),
-    ).rejects.toMatchObject({ code: 'PRICE_EXCEEDED' });
+    ).rejects.toMatchObject({ code: 'BUDGET_EXCEEDED' });
 
     expect(chain.payments).toHaveLength(0); // never paid
     expect(calls).toHaveLength(1); // only the bare 402 request
@@ -304,5 +318,38 @@ describe('buyService', () => {
     }
     expect(calls).toHaveLength(0);
     expect(chain.payments).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// neargate buy output: body → stdout, receipt → stderr
+// ---------------------------------------------------------------------------
+
+describe('formatBuyReceipt / formatBuyBody', () => {
+  it('the receipt names the service, the price + storage, the payment tx and the status', async () => {
+    const chain = makeFakeChain(makeService(1));
+    const { impl } = gatewayFetch(() => Response.json({ rate: 16250 }));
+    const bought = await buyService(baseOpts(chain, impl));
+
+    expect(formatBuyReceipt(bought)).toEqual([
+      'service:  #1 svc-1',
+      'url:      http://gw.example:4021/svc/1',
+      'paid:     0.5 NEAR + 0.002 NEAR storage',
+      `payment:  ${PAYMENT_TX}`,
+      'status:   200',
+    ]);
+    expect(formatBuyReceipt(bought, { explorerUrl: 'https://testnet.nearblocks.io' })).toContain(
+      `explorer: https://testnet.nearblocks.io/txns/${PAYMENT_TX}`,
+    );
+    // the body is printed alone, pretty JSON
+    expect(formatBuyBody(bought.result.body)).toBe(JSON.stringify({ rate: 16250 }, null, 2));
+    expect(formatBuyBody('plain text')).toBe('plain text');
+  });
+
+  it('an unpaid passthrough says so', async () => {
+    const chain = makeFakeChain(makeService(1));
+    const impl = (async () => Response.json({ free: true })) as typeof fetch;
+    const bought = await buyService(baseOpts(chain, impl));
+    expect(formatBuyReceipt(bought)).toContain('paid:     no — the endpoint answered without requiring payment');
   });
 });
