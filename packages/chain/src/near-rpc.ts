@@ -123,14 +123,19 @@ export class NearRpc {
     };
   }
 
-  /** The access key's permission (`'FullAccess'` or `{FunctionCall: …}`), or null when the account or key does not exist. */
-  async viewAccessKey(accountId: string, publicKey: string): Promise<{ permission: unknown } | null> {
+  /**
+   * The access key's nonce and permission (`'FullAccess'` or `{FunctionCall: …}`), as the RPC
+   * shows them, or null when the account or key does not exist.
+   */
+  async viewAccessKey(accountId: string, publicKey: string): Promise<{ nonce: unknown; permission: unknown } | null> {
     const what = `the access key lookup for ${accountId}`;
     try {
-      const key = await this.bounded(what, () =>
-        this.provider.viewAccessKey({ accountId, publicKey, finalityQuery: { finality: 'final' } }),
+      // The raw view (near-api-js's viewAccessKey would turn a nonce it cannot read into a TypeError).
+      const key: unknown = await this.bounded(what, () =>
+        this.provider.query({ request_type: 'view_access_key', account_id: accountId, public_key: publicKey, finality: 'final' }),
       );
-      return { permission: key.permission };
+      if (!isRecord(key)) throw badResponse(what);
+      return { nonce: key['nonce'], permission: key['permission'] };
     } catch (err) {
       if (err instanceof AccessKeyDoesNotExistError || err instanceof AccountDoesNotExistError) return null;
       throw mapNearError(err, { what, ...this.ctx });
@@ -149,6 +154,15 @@ export class NearRpc {
       if (err instanceof AccountDoesNotExistError) return null;
       throw mapNearError(err, { what, ...this.ctx });
     }
+  }
+
+  /** The height of the latest `final` block. */
+  async blockHeight(): Promise<number> {
+    const what = 'the block lookup';
+    const res: unknown = await this.read(what, () => this.provider.viewBlock({ finality: 'final' }));
+    const height = isRecord(res) && isRecord(res['header']) ? res['header']['height'] : undefined;
+    if (typeof height !== 'number' || !Number.isSafeInteger(height) || height < 0) throw badResponse(what);
+    return height;
   }
 
   /** The chain id the RPC node serves (`testnet`, `mainnet`, …). */

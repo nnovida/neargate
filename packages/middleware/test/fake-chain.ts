@@ -6,6 +6,7 @@ import {
   isSelfPaid,
   nativeNearOption,
   PAYMENT_STORAGE_FEE_YOCTO,
+  type AccessKeyInfo,
   type ActivityEvent,
   type AnySigner,
   type AttestationRecord,
@@ -181,8 +182,25 @@ export class FakeChainClient implements ChainClient {
   }
 
   // The gateway only reads payments: the escrow surface is not part of what it does.
-  escrowOf(): Promise<string> {
+  escrowOf(_accountId: string): Promise<string> {
     return Promise.resolve('0');
+  }
+
+  // The gasless rail's reads and relay: no keys and no relay here (delegate-rail.test.ts scripts them).
+  blockHeight(): Promise<number> {
+    return Promise.resolve(1_000);
+  }
+
+  accessKey(_accountId: string, _publicKey: string): Promise<AccessKeyInfo | null> {
+    return Promise.resolve(null);
+  }
+
+  signPayDelegate(): Promise<string> {
+    return Promise.reject(new Error('FakeChainClient: the gateway never signs a delegate'));
+  }
+
+  relayPay(_signedDelegate: string, _relayer: AnySigner): Promise<{ txHash: string }> {
+    return Promise.reject(new Error('FakeChainClient: no relay scripted'));
   }
 
   depositEscrow(): Promise<{ txHash: string }> {

@@ -12,6 +12,7 @@ import {
   stripTrailingSlashes,
 } from '@agentgate/shared';
 import type {
+  AccessKeyInfo,
   ActivityEvent,
   AgentGateConfig,
   AnySigner,
@@ -30,10 +31,28 @@ import type {
 import { assertNonEmpty, assertServiceId, assertYocto, checkVerifyQuery, invalid, judgePaymentRecord } from './checks';
 import { agentKeyAction } from './near-agent-key';
 import { MAX_QUERY_LIMIT, assertAccountId, checkLimit, configInvalid, httpUrl, requireNearSigner } from './near-args';
-import { badResponse } from './near-errors';
+import {
+  PAY_DELEGATE_METHOD,
+  PAY_DELEGATE_TTL_BLOCKS,
+  buildEscrowPayDelegate,
+  judgeRelayOutcome,
+  relayablePayDelegate,
+} from './near-delegate';
+import { TxTimeoutError, badResponse } from './near-errors';
+import { loadNearSigner } from './near-keys';
 import { NearRpc, type TxStatus, type ViewFinality } from './near-rpc';
 import { TxSender, type WaitUntil } from './near-sender';
-import { isPayAction, parseActivity, parseAttestations, parseEscrow, parsePayment, parseScore, parseService } from './near-views';
+import { KeySigner } from './near-signer';
+import {
+  isPayAction,
+  parseAccessKey,
+  parseActivity,
+  parseAttestations,
+  parseEscrow,
+  parsePayment,
+  parseScore,
+  parseService,
+} from './near-views';
 
 /** Gas attached to every registry change call: 30 TGas. */
 const CALL_GAS = 30_000_000_000_000n;
@@ -191,6 +210,29 @@ export class LiveNearClient implements ChainClient {
     throw badResponse('the access key lookup', 'without a permission it knows');
   }
 
+  /**
+   * The access key `publicKey` of the account (`view_access_key`, `final`): its nonce and permission,
+   * or null when the account holds no such key (or `publicKey` is no NEAR key). A permission it does
+   * not know is RPC_BAD_RESPONSE.
+   */
+  async accessKey(accountId: string, publicKey: string): Promise<AccessKeyInfo | null> {
+    assertAccountId(accountId, 'accountId');
+    assertNonEmpty(publicKey, 'publicKey');
+    let key: string;
+    try {
+      key = PublicKey.fromString(publicKey).toString();
+    } catch {
+      return null; // not a NEAR public key, so no account holds it
+    }
+    const found = await this.rpc.viewAccessKey(accountId, key);
+    return found === null ? null : parseAccessKey(found, `the access key lookup for ${accountId}`);
+  }
+
+  /** The height of the latest final block. */
+  blockHeight(): Promise<number> {
+    return this.rpc.blockHeight();
+  }
+
   /** `view_account`: UNKNOWN_ACCOUNT is false, any other RPC failure throws. */
   async accountExists(accountId: string): Promise<boolean> {
     assertAccountId(accountId, 'accountId');
@@ -336,6 +378,73 @@ export class LiveNearClient implements ChainClient {
       'EXECUTED_OPTIMISTIC',
     );
     return { txHash };
+  }
+
+  /**
+   * Signs (sends nothing) the gasless rail's NEP-366 delegate: one zero-deposit
+   * `pay_from_escrow(service_id, nonce)` to this registry with 30 TGas, as the signer's account,
+   * with the key `loadNearSigner` resolves (the agent's function-call key works). The delegate
+   * nonce is that key's nonce + 1 and it expires 100 blocks past the final height. A key the
+   * account does not hold is SIGNER_KEY_NOT_FOUND, before anything is signed.
+   */
+  async signPayDelegate(input: { serviceId: number; nonce: string }, signer: AnySigner): Promise<string> {
+    const near = requireNearSigner(signer);
+    assertServiceId(input.serviceId);
+    const loaded = await loadNearSigner({
+      accountId: near.accountId,
+      keyPath: near.keyPath,
+      secretKey: near.secretKey,
+      network: this.nearNetwork,
+    });
+    const key = await this.accessKey(near.accountId, loaded.publicKey);
+    if (key === null) {
+      throw new AgentGateError(
+        'SIGNER_KEY_NOT_FOUND',
+        `${loaded.publicKey} is not an access key of ${near.accountId} on ${this.network}`,
+        400,
+      );
+    }
+    const height = await this.blockHeight();
+    return buildEscrowPayDelegate(new KeySigner(loaded), {
+      registryId: this.registryId,
+      senderId: near.accountId,
+      serviceId: input.serviceId,
+      nonce: input.nonce, // the registry checks the shape (ERR_INVALID_NONCE)
+      delegateNonce: key.nonce + 1n,
+      maxBlockHeight: BigInt(height + PAY_DELEGATE_TTL_BLOCKS),
+    });
+  }
+
+  /**
+   * Relays a buyer's signed delegate as `relayer` (NEP-366, the gasless rail): one tx from the
+   * relayer to the delegate's sender carrying exactly the signed bytes, through the one sending
+   * path, waiting EXECUTED_OPTIMISTIC. Only a zero-deposit `pay_from_escrow` to this registry is
+   * relayed (invalid_query before anything is sent otherwise): NEAR has the relayer pay the inner
+   * call's deposit, so the relayer's exposure stays gas only. The outer status is never trusted:
+   * the registry's receipt decides (`judgeRelayOutcome`). Its failure keeps the contract's ERR_*
+   * code, naming the tx; an outcome that does not show it is TX_TIMEOUT naming the tx.
+   */
+  async relayPay(signedDelegate: string, relayer: AnySigner): Promise<{ txHash: string }> {
+    const near = requireNearSigner(relayer);
+    const delegate = relayablePayDelegate(signedDelegate, this.registryId);
+    const action = actions.signedDelegate(delegate.signed as Parameters<typeof actions.signedDelegate>[0]);
+    const { txHash, outcome } = await this.sender.send(
+      near,
+      delegate.senderId, // NEP-366: the outer tx goes to the delegate's sender
+      `${PAY_DELEGATE_METHOD} relay`,
+      action,
+      'EXECUTED_OPTIMISTIC',
+    );
+    const verdict = judgeRelayOutcome(outcome, this.registryId);
+    if (verdict.status === 'paid') return { txHash };
+    if (verdict.status === 'failed') {
+      throw new AgentGateError(verdict.error.code, `${verdict.error.message} (tx ${txHash})`, verdict.error.httpStatus);
+    }
+    throw new TxTimeoutError(
+      `the NEAR RPC answered the ${PAY_DELEGATE_METHOD} relay without its outcome (${verdict.detail})`,
+      txHash,
+      this.explorerUrl,
+    );
   }
 
   /**

@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/docs/protocol' },
   title: 'How it works',
   description:
-    'The x402 payment flow on NEAR end to end: the 402 invoice, the registry pay call, the X-PAYMENT proof, verification, the single-use nonce, attestations and trust tiers, the gateway receipts endpoint and the gateway routes.',
+    'The x402 payment flow on NEAR end to end: the 402 invoice, the registry pay call, the X-PAYMENT proof, verification, the gasless relay of a signed pay_from_escrow, the single-use nonce, attestations and trust tiers, the gateway receipts endpoint and the gateway routes.',
 };
 
 export default function Page() {
@@ -237,6 +237,18 @@ export default function Page() {
               </>
             ),
           },
+          {
+            name: 'extra.relayer / relayMethod',
+            required: false,
+            type: 'NEAR account id / "pay_from_escrow"',
+            desc: (
+              <>
+                Present only when the gateway runs with <M>RELAYER_ENABLED</M>: the gateway account
+                that relays a signed <M>pay_from_escrow</M> and pays its gas, and the one method it
+                relays. See <DocLink href="#gasless">the gasless rail</DocLink>.
+              </>
+            ),
+          },
         ]}
       />
 
@@ -251,7 +263,7 @@ export default function Page() {
         rows={[
           [<M key="1">X-PAYMENT header is required</M>, 'The first call: there was no proof.'],
           [<M key="2">invalid_payment_header</M>, 'The header is not valid base64 JSON of the expected shape, or names a different network than the gateway.'],
-          [<M key="3">relayer_disabled</M>, 'The proof is a delegate (gasless) payload. That rail is off; pay with a tx proof.'],
+          [<M key="3">relayer_disabled</M>, 'The proof is a delegate (gasless) payload and this gateway relays none (RELAYER_ENABLED is off); pay with a tx proof. The invoice stays open.'],
           [<M key="4">unknown_nonce</M>, 'The gateway issued no invoice with that nonce for this service (or forgot it after a restart without a persistent invoice store).'],
           [<M key="5">invoice_used</M>, 'That invoice was already redeemed. A nonce serves one call.'],
           [<M key="6">invoice_expired</M>, 'The invoice is older than its time to live.'],
@@ -261,9 +273,14 @@ export default function Page() {
           [<M key="10">expired</M>, 'The registry payment is older than the invoice time to live.'],
           [<M key="11">already_attested</M>, 'The payment was already attested, which only follows a served call.'],
           [<M key="12">tx_mismatch</M>, 'Live: the transaction is not a successful pay or pay_from_escrow of this nonce and service on this registry, signed by the named payer.'],
-          [<M key="13">settlement_pending</M>, 'Live: the payment is not yet visible. The same invoice stays valid: retry the identical proof after the Retry-After seconds (2).'],
+          [<M key="13">settlement_pending</M>, 'Live: the payment is not yet visible (or, on the gasless rail, the relay is in flight or timed out). The same invoice stays valid: retry the identical proof after the Retry-After seconds (2).'],
         ]}
       />
+      <P>
+        The gasless rail adds its own reasons (<M>delegate_*</M>, <M>bad_signature</M>,{' '}
+        <M>unknown_key</M>, <M>key_not_allowed</M>, <M>stale_nonce</M>, <M>escrow_insufficient</M>,{' '}
+        <M>relay_failed</M>); they are listed <DocLink href="#gasless-checks">with its checks</DocLink>.
+      </P>
 
       <H2 id="payment">Payment and proof</H2>
       <H3 id="payment-pay">The pay call</H3>
@@ -308,10 +325,10 @@ export default function Page() {
       />
       <P>
         <M>transaction</M> is the base58 hash of the <M>pay</M> (or <M>pay_from_escrow</M>)
-        transaction; <M>payer</M> is the
-        account that signed it. A <M>kind: &quot;delegate&quot;</M> payload (a NEP-366 signed delegate
-        action the gateway would relay) is reserved for a gasless rail that is not enabled; the
-        gateway answers it <M>relayer_disabled</M>.
+        transaction; <M>payer</M> is the account that signed it. A{' '}
+        <M>kind: &quot;delegate&quot;</M> payload carries a NEP-366 signed delegate instead, for the
+        gateway to relay: see <DocLink href="#gasless">the gasless rail</DocLink>. A gateway that
+        relays none answers it <M>relayer_disabled</M>.
       </P>
       <H3 id="payment-response">The X-PAYMENT-RESPONSE header</H3>
       <P>
@@ -330,7 +347,7 @@ export default function Page() {
       <DocTable
         head={['#', 'Check', 'Reason on failure']}
         rows={[
-          ['1', 'The header decodes to a tx proof for this gateway’s network.', 'invalid_payment_header, relayer_disabled'],
+          ['1', 'The header decodes to a proof for this gateway’s network: a tx proof, or a delegate when the gateway relays (its own checks are below).', 'invalid_payment_header, relayer_disabled'],
           ['2', 'An invoice with that nonce exists, for this service, unused and unexpired.', 'unknown_nonce, invoice_used, invoice_expired'],
           [
             '3',
@@ -360,6 +377,102 @@ export default function Page() {
         call that cannot be delivered is never charged), <M>415 unsupported_media_type</M> (a
         request body that is not JSON, refused before any invoice) and <M>429 rate_limited</M> (60
         requests per minute per client on <M>/svc</M>).
+      </P>
+
+      <H2 id="gasless">The gasless rail (a relayed pay_from_escrow)</H2>
+      <P>
+        With <M>RELAYER_ENABLED</M> the gateway also takes a buyer who has a prepaid escrow but
+        pays no gas: the buyer signs its <M>pay_from_escrow</M> as a NEP-366 delegate and sends it
+        in the proof, and the gateway account (<M>GATEWAY_ACCOUNT_ID</M>, named in{' '}
+        <M>extra.relayer</M>) relays it in a transaction it signs and pays for. The escrow pays
+        price + <M>0.002 NEAR</M>; the buyer’s account pays nothing. The invoice is the same, and
+        the payment record and event are those of any <M>pay_from_escrow</M>.
+      </P>
+      <CodeBlock
+        label="X-PAYMENT (decoded), gasless"
+        code={JSON.stringify(
+          {
+            x402Version: 1,
+            scheme: 'exact',
+            network: 'near-testnet',
+            payload: {
+              kind: 'delegate',
+              signedDelegate: '<base64 borsh SignedDelegate>',
+              nonce: '3673826824572287',
+              payer: '<buyer account id>',
+            },
+          },
+          null,
+          2,
+        )}
+      />
+      <P>
+        <M>signedDelegate</M> is the base64 of a borsh NEP-366 <M>SignedDelegate</M>, at most 4096
+        bytes, signed with an ed25519 key of the payer (its full-access key or an{' '}
+        <DocLink href="/docs/cli#agent-key">agent key</DocLink> for <M>pay_from_escrow</M>). Its
+        delegate action is exactly what the clients build: sender = <M>payer</M>, receiver = the
+        registry, one FunctionCall <M>pay_from_escrow</M> whose arguments are the bytes{' '}
+        <M>{'{"service_id":<id>,"nonce":"<nonce>"}'}</M> of this invoice, 30 TGas, no deposit; its
+        nonce is the signing key’s nonce + 1 and it expires 100 blocks past the height the buyer
+        read. NEAR has a relayer pay the deposit a relayed call attaches, so the gateway relays
+        nothing else.
+      </P>
+      <H3 id="gasless-checks">The gateway’s checks</H3>
+      <P>
+        A gateway without <M>RELAYER_ENABLED</M> answers a delegate proof <M>relayer_disabled</M>{' '}
+        before it reads the invoice. With it, after the invoice checks (<M>unknown_nonce</M>,{' '}
+        <M>invoice_used</M>, <M>invoice_expired</M>) the gateway runs these, in this order. Every
+        refusal comes before the relay, so a refused delegate costs the relayer nothing and burns
+        nothing: the invoice stays open, and the 402 also carries a fresh one.
+      </P>
+      <DocTable
+        head={['#', 'Check', 'Reason on failure']}
+        rows={[
+          [
+            '1',
+            'The delegate decodes (strict base64, at most 4096 bytes, canonical borsh, ed25519), its sender is the payer, its receiver the registry, and it holds one FunctionCall pay_from_escrow with this invoice’s arguments, no deposit and 30 TGas.',
+            'delegate_malformed, delegate_wrong_sender, delegate_wrong_receiver, delegate_wrong_action, delegate_wrong_args, delegate_deposit_not_zero, delegate_gas_too_high, delegate_gas_too_low',
+          ],
+          ['2', 'The signature verifies over NEAR’s delegate encoding.', 'bad_signature'],
+          ['3', 'No relay of this invoice is in flight.', 'settlement_pending (the same invoice)'],
+          [
+            '4',
+            'The registry holds no payment for the nonce yet. One it does hold is served only as the retry of this gateway’s own timed-out relay (same payer, service and price); any other is never relayed again.',
+            'invoice_used',
+          ],
+          [
+            '5',
+            'No relay of this invoice that timed out can still land: there was none, or its delegate expired without NEAR running it (the key’s nonce never reached the delegate’s).',
+            'settlement_pending, with that relay tx in transaction',
+          ],
+          [
+            '6',
+            'The delegate stays valid 20 more blocks, and its nonce is below the height × 10^6 NEAR allows. This comes after the payment checks, so the retry of a relay that landed is served even once its delegate has expired.',
+            'delegate_expired, delegate_nonce_too_large',
+          ],
+          [
+            '7',
+            'The signing key is an access key of the payer: full access, or a function-call key for the registry allowing pay_from_escrow; the delegate nonce is above the key’s.',
+            'unknown_key, key_not_allowed, stale_nonce',
+          ],
+          ['8', 'The escrow holds price + 0.002 NEAR.', 'escrow_insufficient'],
+          [
+            '9',
+            'The relay: the registry’s own receipt must have succeeded — the transaction’s status is never trusted alone — and its payment record must name the payer, this service and the price.',
+            'relay_failed with the chain code in code (e.g. ERR_ESCROW_INSUFFICIENT); settlement_pending with the relay tx, in transaction, when the outcome is unknown',
+          ],
+        ]}
+      />
+      <P>
+        A served call is burned, proxied and attested as on the tx rail; its{' '}
+        <M>X-PAYMENT-RESPONSE</M> names the relay transaction. While the answer is{' '}
+        <M>settlement_pending</M>, present the same delegate again: once the relay has landed the
+        retry is served without a second relay. Never sign a new delegate for an invoice whose relay
+        may still land. A relay whose delegate NEAR ran but whose call did not pay keeps the invoice
+        pending until it expires. In-flight and timed-out relays are kept in the gateway’s memory,
+        so a gateway restart forgets them: the retry of a relay that landed before the restart is
+        then <M>invoice_used</M>. What this means for the relayer and for front-running is on the{' '}
+        <DocLink href="/docs/security#relayer">security page</DocLink>.
       </P>
 
       <H2 id="single-use">Single-use nonce and idempotency</H2>

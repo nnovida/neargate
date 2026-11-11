@@ -115,6 +115,20 @@ export interface NearKeySigner { kind: 'near'; accountId: string; keyPath?: stri
 
 export type AnySigner = MockSigner | NearKeySigner;
 
+/**
+ * What an access key may do: `'FullAccess'`, or a function-call key limited to `receiverId` and
+ * `methodNames` (empty = any method of it), paying gas from `allowance` (null = unlimited).
+ */
+export type AccessKeyPermission =
+  | 'FullAccess'
+  | { receiverId: string; methodNames: string[]; allowance: Yocto | null };
+
+/** An access key as the chain holds it (`view_access_key`): its nonce and its permission. */
+export interface AccessKeyInfo {
+  nonce: bigint;
+  permission: AccessKeyPermission;
+}
+
 export interface ChainClient {
   /** `near-testnet` | `near-mainnet` | `near-mock`. */
   readonly network: string;
@@ -166,4 +180,26 @@ export interface ChainClient {
    * that method can sign it.
    */
   payFromEscrow(input: { serviceId: number; nonce: string }, signer: AnySigner): Promise<{ txHash: string }>;
+
+  // ---- the gasless rail (NEP-366 delegates; Task 10c) ----------------------------------
+
+  /** The chain's current block height (live: the `final` block; mock: the devnet's height). */
+  blockHeight(): Promise<number>;
+  /** The account's access key `publicKey`: its nonce and permission, or null when it holds no such key. */
+  accessKey(accountId: string, publicKey: string): Promise<AccessKeyInfo | null>;
+  /**
+   * Signs, without sending anything, a NEP-366 delegate of one zero-deposit
+   * `pay_from_escrow(service_id, nonce)` to the registry with 30 TGas, as the signer's account: the
+   * delegate nonce is the signing key's nonce + 1 and it expires 100 blocks past the current height.
+   * Returns the base64 borsh SignedDelegate a relayer sends (X-PAYMENT `{kind: 'delegate'}`).
+   */
+  signPayDelegate(input: { serviceId: number; nonce: string }, signer: AnySigner): Promise<string>;
+  /**
+   * Relays a base64 SignedDelegate as `relayer`: one tx to the delegate's sender carrying it,
+   * which runs the delegate's `pay_from_escrow` as the sender. Refuses (invalid_query, before
+   * anything is sent) any delegate but one zero-deposit `pay_from_escrow` to this registry, so the
+   * relayer only ever pays gas. Resolves once the registry ran the call successfully; its failure
+   * keeps the contract's ERR_* code, and an unknown outcome is TX_TIMEOUT naming the relay tx.
+   */
+  relayPay(signedDelegate: string, relayer: AnySigner): Promise<{ txHash: string }>;
 }

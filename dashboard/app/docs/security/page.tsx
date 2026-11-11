@@ -17,7 +17,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/docs/security' },
   title: 'Security model',
   description:
-    'What the registry enforces and what the gateway reports: payment-backed scores, the owner-signed self-map request, single-use nonces, the SSRF and redirect guards, budget caps, restricted agent keys and their blast radius, keys and a go-live checklist.',
+    'What the registry enforces and what the gateway reports: payment-backed scores, the owner-signed self-map request, single-use nonces, the SSRF and redirect guards, budget caps, restricted agent keys and their blast radius, the gasless relayer’s exposure and front-running, keys and a go-live checklist.',
 };
 
 export default function Page() {
@@ -293,6 +293,56 @@ export default function Page() {
         <DocLink href="/docs/contract#escrow">contract reference</DocLink>.
       </P>
 
+      <H2 id="relayer">The gasless relayer</H2>
+      <P>
+        With <M>RELAYER_ENABLED</M> the gateway account (<M>GATEWAY_ACCOUNT_ID</M>) relays buyers’
+        signed <M>pay_from_escrow</M> delegates and pays their gas: the{' '}
+        <DocLink href="/docs/protocol#gasless">gasless rail</DocLink>. The buyer’s escrow pays the
+        price and the fee, as for any <M>pay_from_escrow</M>.
+      </P>
+      <Callout tone="warn" title="RELAYER EXPOSURE">
+        The relayer’s exposure is gas only. NEAR has a relayer pay any deposit that a relayed call
+        attaches, so the gateway relays exactly one shape and nothing else: one zero-deposit
+        pay_from_escrow to the registry, for an invoice it issued, with 30 TGas. It never relays a
+        transfer, another method or another contract, and the escrow, not the relayer, pays the
+        service.
+      </Callout>
+      <P>
+        Every refusal comes before the relay, so a delegate the gateway refuses costs it nothing (the
+        full list is on <DocLink href="/docs/protocol#gasless-checks">How it works</DocLink>):
+      </P>
+      <DocTable
+        head={['A delegate that…', 'Refused as']}
+        rows={[
+          ['Is not a valid SignedDelegate, or has any other shape: another sender, receiver, method, arguments or gas, a deposit, a second action', 'delegate_* (e.g. delegate_wrong_action)'],
+          ['Expires within 20 blocks, or carries a nonce NEAR would call too large', 'delegate_expired, delegate_nonce_too_large'],
+          ['Is not signed by the key it names (a forged or altered delegate)', <M key="2">bad_signature</M>],
+          ['Names a key the payer does not hold, or a function-call key not allowed to call pay_from_escrow on the registry', 'unknown_key, key_not_allowed'],
+          ['Carries a nonce the key already used', <M key="4">stale_nonce</M>],
+          ['Comes from an escrow that cannot pay price + 0.002 NEAR', <M key="5">escrow_insufficient</M>],
+          ['Is for an invoice already paid, or whose relay is in flight or may still land', 'invoice_used, settlement_pending (never relayed twice)'],
+        ]}
+      />
+      <P>
+        What can still cost gas is a delegate that passes every check and then fails on chain — the
+        buyer drained its escrow or used the key’s nonce in between. NEAR spends the delegate’s
+        nonce, the gateway answers <M>relay_failed</M> with the chain’s code, and the relayer has
+        paid one relay’s gas; the <DocLink href="#limits">rate limit</DocLink> on <M>/svc</M> bounds
+        how often. Keep the gateway account funded for that gas, as for its attestations.
+      </P>
+      <H3 id="front-running">Front-running</H3>
+      <P>
+        On the tx rails (<M>pay</M>, and <M>pay_from_escrow</M> sent by the buyer) the payment is
+        public on chain before the buyer presents its proof: someone watching the registry can
+        present that transaction, nonce and payer first and receive the response, and the buyer then
+        gets <M>invoice_used</M> (<M>PAID_NOT_SERVED</M>). That is inherent to paying first and
+        proving after. On the gasless rail nothing a third party can redeem is public before the
+        request reaches the gateway: the signed delegate travels only in the buyer’s own request, and
+        the gateway burns the nonce for that request before it proxies. After a relay timeout the
+        payment is public on chain, so the retry has the same front-running residual as the tx
+        rails; so does any <M>settlement_pending</M> answer that names the relay transaction.
+      </P>
+
       <H2 id="keys">Keys, secrets and the admin token</H2>
       <DocTable
         head={['Topic', 'Behaviour']}
@@ -319,7 +369,7 @@ export default function Page() {
           ],
           [
             'Gateway account',
-            'Live mode refuses to start without GATEWAY_ACCOUNT_ID: it signs attestations, and there is no mock-signer fallback.',
+            'Live mode refuses to start without GATEWAY_ACCOUNT_ID: it signs attestations (and, with RELAYER_ENABLED, the relays), and there is no mock-signer fallback.',
           ],
         ]}
       />
@@ -353,6 +403,7 @@ export default function Page() {
           ['☐', <span key="5"><M>TRUST_PROXY</M> matches your real proxy hop count.</span>],
           ['☐', <span key="6"><M>INVOICE_STORE_PATH</M> and <M>ATTESTATION_QUEUE_PATH</M> point at persistent files, so a restart keeps open invoices and replays unconfirmed attestations.</span>],
           ['☐', <span key="7">No key, <M>.env</M> or credentials file is committed.</span>],
+          ['☐', <span key="8"><M>RELAYER_ENABLED=1</M> only if you mean to pay buyers’ gas; the gateway account then needs the balance for it.</span>],
         ]}
       />
 

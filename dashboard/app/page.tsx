@@ -42,10 +42,10 @@ const ROADMAP = [
     done: true,
   },
   {
-    tag: 'NEXT',
+    tag: 'NOW',
     title: 'Gasless payments (NEP-366)',
-    body: 'Planned: a buyer signs a NEP-366 delegate action and the gateway relays it, so the buyer never pays gas itself. The payment still settles through the registry.',
-    done: false,
+    body: 'A buyer with a prepaid escrow signs its pay_from_escrow as a NEP-366 delegate, and the gateway relays it and pays the gas: the buyer’s account sends no transaction. The gateway relays that one zero-deposit call and nothing else, so it risks only gas; the payment still settles through the registry.',
+    done: true,
   },
   {
     tag: 'LATER',

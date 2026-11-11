@@ -27,8 +27,13 @@ export interface NearPaymentExtra {
   seller: string;
   /** CAIP-2 id: `near:testnet` | `near:mainnet` | `near:mock`. */
   caip2: string;
-  /** Present only when the gateway relays signed delegate actions (gasless rail). */
+  /**
+   * Present only when the gateway relays signed NEP-366 delegates (the gasless rail): the account
+   * that signs and pays for the relay tx (the gateway's own account).
+   */
   relayer?: string;
+  /** With `relayer`: the one registry call the gateway relays, a zero-deposit `pay_from_escrow`. */
+  relayMethod?: 'pay_from_escrow';
 }
 
 /** One acceptable way to pay (an entry in `accepts[]`). */
@@ -49,6 +54,10 @@ export interface PaymentRequiredResponse {
   x402Version: number;
   error: string;
   accepts: PaymentRequirements[];
+  /** `settlement_pending` after a relay timed out (gasless rail): the relay tx, which may still land. */
+  transaction?: string;
+  /** `relay_failed` (gasless rail): the chain's code for the failed relay, e.g. `ERR_ESCROW_INSUFFICIENT`. */
+  code?: string;
 }
 
 /**
@@ -80,8 +89,15 @@ const BASE58_32_BYTES_MAX_CHARS = 44;
 const ED25519_KEY_PREFIX = 'ed25519:';
 /** Strict, padded standard base64. */
 const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-/** Upper bound on a relayed SignedDelegate (base64 chars); far above a single `pay` action. */
-const SIGNED_DELEGATE_MAX = 16_384;
+/**
+ * Upper bound on a relayed SignedDelegate, in decoded borsh bytes (ruling R58). A zero-deposit
+ * `pay_from_escrow` delegate is about 250 bytes; the bound keeps the X-PAYMENT header (base64 JSON
+ * around the base64 delegate) far inside Node's 16 KiB header limit. Anything larger is refused
+ * before it is borsh-decoded.
+ */
+export const SIGNED_DELEGATE_MAX = 4096;
+/** The base64 length of SIGNED_DELEGATE_MAX bytes: the longest `signedDelegate` the codec takes. */
+const SIGNED_DELEGATE_MAX_CHARS = Math.ceil(SIGNED_DELEGATE_MAX / 3) * 4;
 /** One dot-separated part of a NEAR account id. */
 const ACCOUNT_PART_RE = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
 
@@ -172,7 +188,7 @@ function decodePayload(payload: Record<string, unknown>): NearExactPayload {
   if (
     typeof signedDelegate !== 'string' ||
     signedDelegate === '' ||
-    signedDelegate.length > SIGNED_DELEGATE_MAX ||
+    signedDelegate.length > SIGNED_DELEGATE_MAX_CHARS ||
     !BASE64_RE.test(signedDelegate)
   ) {
     throw badPayment('payload.signedDelegate must be a base64 SignedDelegate');

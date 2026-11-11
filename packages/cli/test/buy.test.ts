@@ -7,7 +7,7 @@ import type {
   ServiceScore,
   Yocto,
 } from '@agentgate/shared';
-import { nativeNearOption } from '@agentgate/shared';
+import { encodeXPaymentResponse, nativeNearOption } from '@agentgate/shared';
 import { buyService, formatBuyBody, formatBuyReceipt } from '../src/buy';
 
 type PayInput = { serviceId: number; nonce: string; depositYocto: Yocto };
@@ -26,6 +26,10 @@ const NONCE = '778899';
 const PRICE = '500000000000000000000000'; // 0.5 NEAR
 const STORAGE_FEE = '2000000000000000000000'; // 0.002 NEAR
 const MAX_AMOUNT = '502000000000000000000000'; // price + storage fee
+const SIGNED_DELEGATE = Buffer.from('a signed NEP-366 delegate').toString('base64');
+/** The relay tx the gateway names: a real 32-byte base58 hash (the client keeps no other kind). */
+const RELAY_TX = 'Eky1UaWkroENJrfa2yjf8PR7pFbznerFT7UDpUBuodUd';
+const RELAYER = 'gateway.mock';
 
 interface FakeChain extends ChainClient {
   payments: Array<{ input: PayInput; signer: AnySigner }>;
@@ -35,6 +39,8 @@ interface FakeChain extends ChainClient {
   escrow: Yocto;
   /** Accounts `escrowOf` was asked about, in order. */
   escrowReads: string[];
+  /** `signPayDelegate` calls, in order (the gasless rail). */
+  delegates: Array<{ input: { serviceId: number; nonce: string }; signer: AnySigner }>;
 }
 
 function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceRecord {
@@ -64,6 +70,20 @@ function makeFakeChain(service: ServiceRecord | null): FakeChain {
     escrowPayments,
     escrow: '1000000000000000000000000',
     escrowReads: [],
+    delegates: [],
+    async blockHeight() {
+      return 1_000;
+    },
+    async accessKey() {
+      return { nonce: 41n, permission: 'FullAccess' as const };
+    },
+    async signPayDelegate(input, signer) {
+      this.delegates.push({ input, signer });
+      return SIGNED_DELEGATE;
+    },
+    async relayPay() {
+      throw new Error('the buyer never relays');
+    },
     async escrowOf(accountId) {
       this.escrowReads.push(accountId);
       return this.escrow;
@@ -428,6 +448,74 @@ describe('buyService --from-escrow', () => {
       `payment:  ${PAYMENT_TX}`,
       'status:   200',
     ]);
+  });
+});
+
+describe('buyService --gasless', () => {
+  /** The gateway offering the relay: 402 naming the relayer, then the body with the relay tx as settlement. */
+  function relayingGateway(extraOver: Record<string, unknown> = { relayer: RELAYER, relayMethod: 'pay_from_escrow' }): {
+    impl: typeof fetch;
+    calls: FetchCall[];
+  } {
+    const calls: FetchCall[] = [];
+    const impl = (async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      if (!new Headers(init?.headers).has('X-PAYMENT')) return invoice402({}, extraOver);
+      return Response.json(
+        { rate: 16250 },
+        {
+          headers: {
+            'x-payment-response': encodeXPaymentResponse({ success: true, transaction: RELAY_TX, network: 'near-mock', payer: 'buyer.mock' }),
+          },
+        },
+      );
+    }) as typeof fetch;
+    return { impl, calls };
+  }
+
+  it('implies --from-escrow: signs a pay_from_escrow delegate the gateway relays; nothing is sent from the account', async () => {
+    const chain = makeFakeChain(makeService(1));
+    const { impl, calls } = relayingGateway();
+
+    const bought = await buyService({ ...baseOpts(chain, impl), gasless: true });
+
+    expect(bought.result).toMatchObject({
+      paid: true,
+      status: 200,
+      gasless: true,
+      relayer: RELAYER,
+      payFrom: 'escrow',
+      txHash: RELAY_TX,
+      depositYocto: MAX_AMOUNT,
+    });
+    expect(chain.delegates).toEqual([{ input: { serviceId: 1, nonce: NONCE }, signer: BUYER }]);
+    expect(chain.escrowReads).toEqual(['buyer.mock']); // the escrow pre-check ran first
+    expect(chain.payments).toEqual([]);
+    expect(chain.escrowPayments).toEqual([]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('the receipt says the escrow paid and the gateway relayed it, paying the gas', async () => {
+    const chain = makeFakeChain(makeService(1));
+    const bought = await buyService({ ...baseOpts(chain, relayingGateway().impl), gasless: true });
+    expect(formatBuyReceipt(bought)).toEqual([
+      'service:  #1 svc-1',
+      'url:      http://gw.example:4021/svc/1',
+      'paid:     0.5 NEAR + 0.002 NEAR storage',
+      'from:     escrow (nothing attached; the escrow was debited)',
+      `relayed:  gasless — ${RELAYER} relayed the signed pay_from_escrow and paid the gas`,
+      `payment:  ${RELAY_TX}`,
+      `settled:  ok  (payer buyer.mock)`,
+      'status:   200',
+    ]);
+  });
+
+  it('a gateway that offers no relay is RELAYER_UNAVAILABLE: nothing is signed or sent', async () => {
+    const chain = makeFakeChain(makeService(1));
+    const { impl, calls } = relayingGateway({});
+    await expect(buyService({ ...baseOpts(chain, impl), gasless: true })).rejects.toMatchObject({ code: 'RELAYER_UNAVAILABLE' });
+    expect(chain.delegates).toEqual([]);
+    expect(calls).toHaveLength(1);
   });
 });
 

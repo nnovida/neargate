@@ -6,6 +6,29 @@ export { MockChainHttpClient } from './mock';
 export { LiveNearClient } from './near-live';
 export { TxTimeoutError, mapContractPanic } from './near-errors';
 export { verifyNearSignature } from './near-signature';
+export { KeySigner } from './near-signer';
+export { deriveDevnetKey, type DevnetKey } from './devnet-key';
+export {
+  PAY_DELEGATE_GAS,
+  PAY_DELEGATE_METHOD,
+  PAY_DELEGATE_TTL_BLOCKS,
+  RELAY_MIN_TTL_BLOCKS,
+  buildEscrowPayDelegate,
+  decodeSignedDelegate,
+  inspectPayDelegate,
+  isRelayablePay,
+  judgeRelayOutcome,
+  payDelegateArgs,
+  payDelegateTiming,
+  relayablePayDelegate,
+  verifyDelegateSignature,
+  type DecodedDelegate,
+  type DelegateCall,
+  type PayDelegateExpectation,
+  type PayDelegateRefusal,
+  type PayDelegateVerdict,
+  type RelayVerdict,
+} from './near-delegate';
 export {
   agentKeyAction,
   agentKeyPath,

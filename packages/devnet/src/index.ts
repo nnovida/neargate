@@ -5,8 +5,8 @@ import type { DevnetDeps } from './app';
 
 export { createApp } from './app';
 export type { DevnetDeps } from './app';
-export { ACTIVITY_CAP, MAX_ATTESTATIONS, MAX_PAYMENTS, MAX_SERVICES, deriveDevnetKey } from './state';
-export type { DevnetKey } from './state';
+export { ACTIVITY_CAP, MAX_ATTESTATIONS, MAX_PAYMENTS, MAX_SERVICES } from './state';
+export { deriveDevnetKey, type DevnetKey } from '@agentgate/chain/devnet-key';
 
 export interface DevnetStartOpts extends DevnetDeps {
   /** Port to listen on (0 = ephemeral, for in-process e2e). Defaults to config.devnetPort (4030). */

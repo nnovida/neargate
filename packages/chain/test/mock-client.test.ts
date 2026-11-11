@@ -16,7 +16,15 @@ import {
   nearToYocto,
 } from '@agentgate/shared';
 import type { ChainClient, MockSigner, RegisterServiceInput } from '@agentgate/shared';
-import { LiveNearClient, MockChainHttpClient, createChainClient } from '../src/index';
+import {
+  LiveNearClient,
+  MockChainHttpClient,
+  createChainClient,
+  decodeSignedDelegate,
+  deriveDevnetKey,
+  payDelegateArgs,
+  verifyDelegateSignature,
+} from '../src/index';
 
 const OWNER: MockSigner = { kind: 'mock', accountId: 'owner.mock' };
 const ATTESTOR: MockSigner = { kind: 'mock', accountId: 'attestor.mock' };
@@ -706,5 +714,114 @@ describe('MockChainHttpClient key and account checks fail closed on a malformed 
         httpStatus: 502,
       });
     }
+  });
+});
+
+describe('MockChainHttpClient — gasless rail (blockHeight, accessKey, signPayDelegate, relayPay)', () => {
+  const RELAYER: MockSigner = { kind: 'mock', accountId: 'relayer.mock' };
+  let serviceId: number;
+  let accountCounter = 0;
+
+  /** A funded account with `escrowNear` in its escrow, as a mock signer. */
+  async function escrowBuyer(escrowNear: string): Promise<MockSigner> {
+    accountCounter += 1;
+    const signer: MockSigner = { kind: 'mock', accountId: `gasless-client-${accountCounter}.mock` };
+    await faucet(signer.accountId, nearToYocto('100'));
+    await chain.depositEscrow(nearToYocto(escrowNear), signer);
+    return signer;
+  }
+
+  beforeAll(async () => {
+    serviceId = (await chain.registerService(registerInput(), OWNER)).serviceId;
+  });
+
+  it('blockHeight is the devnet height, which every block raises', async () => {
+    const before = await chain.blockHeight();
+    expect(Number.isSafeInteger(before)).toBe(true);
+    await faucet('height-bump.mock', '1');
+    expect(await chain.blockHeight()).toBe(before + 1);
+  });
+
+  it("accessKey is the account's devnet key (FullAccess, nonce 0 until a delegate uses it); null for any other key or account", async () => {
+    const buyer = await escrowBuyer('1');
+    const { publicKey } = deriveDevnetKey(buyer.accountId);
+    expect(await chain.accessKey(buyer.accountId, publicKey)).toEqual({ nonce: 0n, permission: 'FullAccess' });
+    expect(await chain.accessKey(buyer.accountId, deriveDevnetKey('someone-else.mock').publicKey)).toBeNull();
+    expect(await chain.accessKey('never-funded.mock', deriveDevnetKey('never-funded.mock').publicKey)).toBeNull();
+  });
+
+  it("signPayDelegate signs with the account's devnet key: key nonce + 1, height + 100, zero-deposit pay_from_escrow; nothing is paid", async () => {
+    const buyer = await escrowBuyer('1');
+    const nonce = freshNonce();
+    const height = await chain.blockHeight();
+    const decoded = decodeSignedDelegate(await chain.signPayDelegate({ serviceId, nonce }, buyer));
+    expect(decoded).toMatchObject({
+      senderId: buyer.accountId,
+      receiverId: MOCK_REGISTRY_ID,
+      nonce: 1n,
+      maxBlockHeight: BigInt(height + 100),
+      publicKey: deriveDevnetKey(buyer.accountId).publicKey,
+    });
+    expect(decoded?.actions[0]).toMatchObject({ kind: 'functionCall', methodName: 'pay_from_escrow', deposit: 0n });
+    const call = decoded?.actions[0];
+    if (call?.kind !== 'functionCall') throw new Error('expected a FunctionCall');
+    expect(Buffer.from(call.args).toString('utf8')).toBe(payDelegateArgs(serviceId, nonce));
+    expect(verifyDelegateSignature(decoded!)).toBe(true);
+    expect(await chain.getPayment(nonce)).toBeNull();
+  });
+
+  it("relayPay runs pay_from_escrow as the delegate's sender: the escrow pays price + fee, the account and the relayer pay nothing", async () => {
+    const buyer = await escrowBuyer('1');
+    await faucet(RELAYER.accountId, nearToYocto('1'));
+    const nonce = freshNonce();
+    const signed = await chain.signPayDelegate({ serviceId, nonce }, buyer);
+    const escrowBefore = BigInt(await chain.escrowOf(buyer.accountId));
+    const accountBefore = await chain.getBalance(buyer.accountId);
+    const relayerBefore = await chain.getBalance(RELAYER.accountId);
+    const targetBefore = BigInt(await chain.getBalance(SELLER_TARGET));
+
+    const { txHash } = await chain.relayPay(signed, RELAYER);
+
+    expect(isNearTxHash(txHash)).toBe(true);
+    expect(await chain.getPayment(nonce)).toMatchObject({ serviceId, payer: buyer.accountId, amountYocto: PRICE });
+    expect(BigInt(await chain.escrowOf(buyer.accountId))).toBe(escrowBefore - BigInt(DEPOSIT));
+    expect(await chain.getBalance(buyer.accountId)).toBe(accountBefore);
+    expect(await chain.getBalance(RELAYER.accountId)).toBe(relayerBefore);
+    expect(BigInt(await chain.getBalance(SELLER_TARGET)) - targetBefore).toBe(BigInt(PRICE));
+    // The key's nonce moved to the delegate's: the next delegate signs with nonce 2.
+    expect(await chain.accessKey(buyer.accountId, deriveDevnetKey(buyer.accountId).publicKey)).toMatchObject({ nonce: 1n });
+    expect(decodeSignedDelegate(await chain.signPayDelegate({ serviceId, nonce: freshNonce() }, buyer))?.nonce).toBe(2n);
+  });
+
+  it('relaying the same delegate again is TX_FAILED (DelegateActionInvalidNonce): no second payment', async () => {
+    const buyer = await escrowBuyer('2');
+    const nonce = freshNonce();
+    const signed = await chain.signPayDelegate({ serviceId, nonce }, buyer);
+    await chain.relayPay(signed, RELAYER);
+    const escrowAfterFirst = await chain.escrowOf(buyer.accountId);
+    await expectAgentGateError(chain.relayPay(signed, RELAYER), 'TX_FAILED', 400);
+    await expect(chain.relayPay(signed, RELAYER)).rejects.toThrow(/DelegateActionInvalidNonce/);
+    expect(await chain.escrowOf(buyer.accountId)).toBe(escrowAfterFirst);
+  });
+
+  it('relayPay surfaces the inner failure with its contract code; the delegate nonce is spent all the same', async () => {
+    const buyer = await escrowBuyer('0.1'); // less than price + fee
+    const signed = await chain.signPayDelegate({ serviceId, nonce: freshNonce() }, buyer);
+    await expectContractError(chain.relayPay(signed, RELAYER), 'ERR_ESCROW_INSUFFICIENT');
+    expect(await chain.accessKey(buyer.accountId, deriveDevnetKey(buyer.accountId).publicKey)).toMatchObject({ nonce: 1n });
+  });
+
+  it('relayPay refuses anything but a zero-deposit pay_from_escrow delegate to the registry before touching the devnet', async () => {
+    for (const b64 of ['', 'not base64!', Buffer.from('borsh SignedDelegate bytes').toString('base64')]) {
+      await expectAgentGateError(chain.relayPay(b64, RELAYER), 'invalid_query', 400);
+    }
+  });
+
+  it('rejects non-mock signers and a malformed service id before touching the devnet', async () => {
+    const near = { kind: 'near', accountId: 'buyer.testnet', keyPath: '/tmp/nope.json' } as const;
+    await expectAgentGateError(chain.signPayDelegate({ serviceId, nonce: '1' }, near), 'invalid_signer', 400);
+    await expectAgentGateError(chain.relayPay('AAAA', near), 'invalid_signer', 400);
+    await expectAgentGateError(chain.signPayDelegate({ serviceId: 0, nonce: '1' }, BUYER), 'invalid_query', 400);
+    await expectAgentGateError(chain.accessKey('', 'ed25519:x'), 'invalid_query', 400);
   });
 });

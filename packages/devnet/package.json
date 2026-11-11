@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
+    "@agentgate/chain": "*",
     "@agentgate/shared": "*",
     "express": "^4.21.0"
   }

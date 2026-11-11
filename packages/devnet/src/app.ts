@@ -167,6 +167,23 @@ export function createApp(deps: DevnetDeps = {}): Express {
     }),
   );
 
+  // GET /accounts/:id/access-key/:publicKey → {accountId, publicKey, nonce, permission} or 404
+  // (the account's devnet key, full access, with the nonce relayed delegates moved)
+  app.get(
+    '/accounts/:id/access-key/:publicKey',
+    wrap((req, res) => {
+      res.json(state.accessKey(req.params['id'] ?? '', req.params['publicKey'] ?? ''));
+    }),
+  );
+
+  // GET /block → {height}
+  app.get(
+    '/block',
+    wrap((_req, res) => {
+      res.json({ height: state.currentBlockHeight() });
+    }),
+  );
+
   // ---- registry writes ------------------------------------------------------
 
   // POST /registry/register {signer, input: RegisterServiceInput, depositYocto} → {serviceId, txHash}
@@ -247,6 +264,17 @@ export function createApp(deps: DevnetDeps = {}): Express {
           reqYocto(body, 'depositYocto'),
         ),
       );
+    }),
+  );
+
+  // POST /registry/relay {relayer, signedDelegate} → {txHash}
+  // (NEP-366: runs the sender's signed zero-deposit pay_from_escrow after NEAR's delegate checks;
+  // a refused delegate is 400 TX_FAILED naming the DelegateAction error)
+  app.post(
+    '/registry/relay',
+    wrap((req, res) => {
+      const body = asObject(req.body, 'request body');
+      res.json(state.relay(reqAccountId(body, 'relayer'), reqString(body, 'signedDelegate')));
     }),
   );
 

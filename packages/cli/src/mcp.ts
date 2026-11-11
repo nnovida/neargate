@@ -26,7 +26,8 @@ import { listServices } from './list';
  * Read tools (`list`, `get_service`, `get_invoice`, and `escrow_balance` with an explicit
  * account) need no key. Only `neargate_buy` spends NEAR, and it resolves the buyer signer
  * lazily so the read tools work with zero configuration. With `fromEscrow` it spends the
- * prepaid escrow through `pay_from_escrow`, which is what a restricted agent key can sign.
+ * prepaid escrow through `pay_from_escrow`, which is what a restricted agent key can sign; with
+ * `gasless` the gateway relays that call as a signed NEP-366 delegate and pays its gas.
  */
 export interface McpServerDeps {
   chain: ChainClient;
@@ -189,7 +190,7 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
     {
       title: 'Buy one call to a service (pays in NEAR)',
       description:
-        'Autonomously pay a service’s 402 invoice in NEAR and return the response body. By default it makes a registry `pay` call (the invoice nonce rides the call; price + 0.002 NEAR storage fee attached) from the configured buyer key. With fromEscrow it calls `pay_from_escrow` instead: nothing is attached and the same total is debited from the buyer\'s prepaid escrow (see neargate_escrow_balance), so a key restricted to that method can pay. Spending is capped by maxNear on the total. Fails fast — no spend — on unknown/paused services, when price + storage exceeds the cap (BUDGET_EXCEEDED), or when fromEscrow and the escrow holds less than the total (ERR_ESCROW_INSUFFICIENT).',
+        'Autonomously pay a service’s 402 invoice in NEAR and return the response body. By default it makes a registry `pay` call (the invoice nonce rides the call; price + 0.002 NEAR storage fee attached) from the configured buyer key. With fromEscrow it calls `pay_from_escrow` instead: nothing is attached and the same total is debited from the buyer\'s prepaid escrow (see neargate_escrow_balance), so a key restricted to that method can pay. With gasless (implies fromEscrow) the buyer only signs that call as a NEP-366 delegate and the gateway relays it, paying the gas: the escrow pays the total and the account pays nothing; the gateway\'s 402 must offer a relayer (else RELAYER_UNAVAILABLE, nothing signed). Spending is capped by maxNear on the total. Fails fast — no spend — on unknown/paused services, when price + storage exceeds the cap (BUDGET_EXCEEDED), or when fromEscrow/gasless and the escrow holds less than the total (ERR_ESCROW_INSUFFICIENT).',
       inputSchema: {
         id: z.number().int().positive().describe('service id to buy'),
         maxNear: z
@@ -200,11 +201,15 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
           .boolean()
           .optional()
           .describe('pay out of the prepaid escrow (pay_from_escrow) instead of attaching a deposit (default false)'),
+        gasless: z
+          .boolean()
+          .optional()
+          .describe('implies fromEscrow: sign pay_from_escrow as a delegate the gateway relays and pays the gas for (default false)'),
         method: z.string().optional().describe('HTTP method for the paid request (default GET)'),
         body: z.string().optional().describe('JSON request body to send with the paid request'),
       },
     },
-    ({ id, maxNear, fromEscrow, method, body }) =>
+    ({ id, maxNear, fromEscrow, gasless, method, body }) =>
       toolResult(async () => {
         const signer = await deps.signerProvider();
         const { service, url, result } = await buyService({
@@ -213,6 +218,7 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
           id,
           ...(maxNear !== undefined ? { maxNear } : {}),
           ...(fromEscrow === true ? { fromEscrow: true } : {}),
+          ...(gasless === true ? { gasless: true } : {}),
           ...(method !== undefined ? { method } : {}),
           ...(body !== undefined ? { body } : {}),
           ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
@@ -230,6 +236,7 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
           priceYocto: result.priceYocto,
           depositYocto: result.depositYocto,
           payFrom: result.payFrom,
+          ...(result.gasless === true ? { gasless: true, relayer: result.relayer } : {}),
           txHash: result.txHash,
           settlement: result.settlement,
           body: result.body,

@@ -1,4 +1,5 @@
-import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import { deriveDevnetKey, type DevnetKey } from '@agentgate/chain/devnet-key';
 import {
   AgentGateError,
   ESCROW_STORAGE_FEE_YOCTO,
@@ -16,6 +17,7 @@ import {
   parseYocto,
   stripTrailingSlashes,
 } from '@agentgate/shared';
+import { checkRelayedDelegate, relayedPayArgs } from './relay';
 import { rustTrim } from './trim';
 import type {
   ActivityEvent,
@@ -58,37 +60,9 @@ const DESC_MAX = 280;
 const URL_MAX = 200;
 const TX_HASH_MAX = 64;
 
-/** The devnet's one full-access key for an account, as near-cli strings. */
-export interface DevnetKey {
-  /** `ed25519:<base58 of the 32-byte public key>` */
-  publicKey: string;
-  /** `ed25519:<base58 of seed || public key>` (64 bytes, the near-cli format) */
-  secretKey: string;
-}
-
-/** PKCS#8 DER header for an ed25519 private key; the 32-byte seed follows it. */
-const PKCS8_ED25519_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
-
-/**
- * The key pair every devnet account owns: an ed25519 key whose 32-byte seed is
- * `sha256('neargate-devnet-key/v1:' + accountId)`. Computed on demand, never stored, so the
- * repo holds no key material.
- */
-export function deriveDevnetKey(accountId: string): DevnetKey {
-  const seed = createHash('sha256').update(`neargate-devnet-key/v1:${accountId}`).digest();
-  const privateKey = createPrivateKey({
-    key: Buffer.concat([PKCS8_ED25519_PREFIX, seed]),
-    format: 'der',
-    type: 'pkcs8',
-  });
-  const x = createPublicKey(privateKey).export({ format: 'jwk' }).x;
-  if (x === undefined) throw new Error('node:crypto exported an ed25519 public key without its x coordinate');
-  const publicBytes = Buffer.from(x, 'base64url');
-  return {
-    publicKey: `ed25519:${base58Encode(publicBytes)}`,
-    secretKey: `ed25519:${base58Encode(Buffer.concat([seed, publicBytes]))}`,
-  };
-}
+// Every devnet account owns one full-access key, `deriveDevnetKey(accountId)` (shared with the mock
+// client, which signs gasless delegates with it).
+export { deriveDevnetKey, type DevnetKey };
 
 interface InternalService {
   id: number;
@@ -152,6 +126,8 @@ export class DevnetState {
   private readonly escrow = new Map<string, bigint>();
   /** Newest first, capped at ACTIVITY_CAP. */
   private readonly activity: ActivityEvent[] = [];
+  /** The nonce of each account's one key (its devnet key): 0 until a relayed delegate moves it. */
+  private readonly keyNonces = new Map<string, bigint>();
   private txCounter = 0;
   private blockHeight = 0;
   private nextServiceId = 1;
@@ -234,7 +210,49 @@ export class DevnetState {
     return this.balances.has(accountId) && deriveDevnetKey(accountId).publicKey === publicKey;
   }
 
+  /** The devnet height: one block per successful write and per faucet credit. */
+  currentBlockHeight(): number {
+    return this.blockHeight;
+  }
+
+  /**
+   * The access key `publicKey` of the account, as NEAR's `view_access_key` answers it: the
+   * account's devnet key, full access, with its nonce. 404 for any other key or an account the
+   * devnet does not know.
+   */
+  accessKey(
+    accountId: string,
+    publicKey: string,
+  ): { accountId: string; publicKey: string; nonce: string; permission: 'FullAccess' } {
+    if (!this.hasFullAccessKey(accountId, publicKey)) {
+      throw new AgentGateError('UNKNOWN_ACCESS_KEY', `${publicKey} is not an access key of ${accountId}`, 404);
+    }
+    return { accountId, publicKey, nonce: (this.keyNonces.get(accountId) ?? 0n).toString(), permission: 'FullAccess' };
+  }
+
   // ---- registry writes (lib.rs change methods) -----------------------------------
+
+  /**
+   * NEP-366 relay (the gasless rail): `relayer` submits the delegate's sender's signed
+   * `pay_from_escrow`. NEAR's checks run first (`checkRelayedDelegate`: signature, expiry, key,
+   * nonce), and a refusal changes nothing. Then, as on NEAR, the key's nonce moves to the
+   * delegate's before the call runs, so a failing call (ERR_ESCROW_INSUFFICIENT, ERR_NONCE_USED, …)
+   * spends the delegate all the same. The call runs as the sender, attaching nothing: the escrow
+   * pays price + fee, the relayer pays nothing (the devnet has no gas).
+   */
+  relay(relayer: string, signedDelegate: string): { txHash: string } {
+    assertAccountId(relayer, 'relayer');
+    const delegate = checkRelayedDelegate(signedDelegate, MOCK_REGISTRY_ID, {
+      height: this.blockHeight,
+      keyNonce: (accountId, publicKey) =>
+        isNearAccountId(accountId) && this.hasFullAccessKey(accountId, publicKey)
+          ? (this.keyNonces.get(accountId) ?? 0n)
+          : null,
+    });
+    this.keyNonces.set(delegate.senderId, delegate.nonce);
+    const { serviceId, nonce } = relayedPayArgs(delegate);
+    return this.payFromEscrow(delegate.senderId, serviceId, nonce, '0');
+  }
 
   /** lib.rs `register_service`. The registry keeps REGISTRATION_DEPOSIT_YOCTO and refunds the rest. */
   registerService(

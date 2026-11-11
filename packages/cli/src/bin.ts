@@ -201,6 +201,7 @@ interface BuyCmdOpts extends CliConfigFlags, SignerFlags {
   body?: string;
   gateway?: string;
   fromEscrow?: boolean;
+  gasless?: boolean;
 }
 
 withConfigFlags(
@@ -218,6 +219,10 @@ withConfigFlags(
       .option(
         '--from-escrow',
         'pay out of the prepaid escrow (`pay_from_escrow`, nothing attached) instead of attaching a deposit; the escrow must hold price + 0.002 NEAR',
+      )
+      .option(
+        '--gasless',
+        'implies --from-escrow: sign `pay_from_escrow` as a NEP-366 delegate that the gateway relays and pays the gas for (its 402 must offer a relayer)',
       ),
     'buyer',
   ),
@@ -235,6 +240,7 @@ withConfigFlags(
     ...(opts.body !== undefined ? { body: opts.body } : {}),
     ...(opts.gateway !== undefined ? { gateway: opts.gateway } : {}),
     ...(opts.fromEscrow === true ? { fromEscrow: true } : {}),
+    ...(opts.gasless === true ? { gasless: true } : {}),
   });
 
   // The receipt → stderr so the response body on stdout stays pipeable.

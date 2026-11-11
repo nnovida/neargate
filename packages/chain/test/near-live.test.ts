@@ -3,7 +3,17 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { KeyPair, PublicKey, baseEncode, decodeSignedTransaction, encodeTransaction } from 'near-api-js';
+import {
+  KeyPair,
+  KeyPairSigner,
+  PublicKey,
+  actions,
+  baseEncode,
+  buildDelegateAction,
+  decodeSignedTransaction,
+  encodeSignedDelegate,
+  encodeTransaction,
+} from 'near-api-js';
 import type { Transaction } from 'near-api-js';
 import { ContractExecutionError, HostGuestPanicError, RpcError } from 'near-api-js/rpc-errors';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,7 +26,18 @@ import {
   nearToYocto,
 } from '@agentgate/shared';
 import type { AgentGateConfig, NearKeySigner, VerifyPaymentQuery } from '@agentgate/shared';
-import { LiveNearClient, TxTimeoutError, createChainClient, loadNearSigner, mapContractPanic, provisionAgentKey } from '../src/index';
+import {
+  LiveNearClient,
+  TxTimeoutError,
+  buildEscrowPayDelegate,
+  createChainClient,
+  decodeSignedDelegate,
+  loadNearSigner,
+  mapContractPanic,
+  payDelegateArgs,
+  provisionAgentKey,
+  verifyDelegateSignature,
+} from '../src/index';
 import { CALL_TIMEOUT_MS } from '../src/near-live';
 import { RPC_READ_TIMEOUT_MS } from '../src/near-rpc';
 
@@ -1526,5 +1547,201 @@ describe('mapContractPanic', () => {
       expect(err.code).toBe('CONTRACT_ERROR');
       expect(chainErrorCode(err)).toBeNull();
     }
+  });
+});
+
+describe('LiveNearClient gasless rail: blockHeight, accessKey, signPayDelegate, relayPay (Task 10c, R58)', () => {
+  const HEIGHT = 221_004_517; // block-final.json
+  const AGENT_KEY_NONCE = 186_000_000_000_012n; // view-access-key-agent.json
+
+  /** The buyer's agent key signs the delegate for invoice NONCE of service 1, as the client does. */
+  async function agentDelegate(): Promise<{ b64: string; publicKey: string }> {
+    rpc.query('view_access_key', fixture('view-access-key-agent.json'));
+    const agent = nearSigner(BUYER);
+    const b64 = await client.signPayDelegate({ serviceId: 1, nonce: NONCE }, agent.signer);
+    rpc.query('view_access_key', fixture('view-access-key-full.json')); // the gateway's own key, for the relay
+    return { b64, publicKey: agent.publicKey };
+  }
+
+  it("blockHeight is the final block's height", async () => {
+    expect(await client.blockHeight()).toBe(HEIGHT);
+    expect(rpc.callsTo('block').at(-1)?.params).toMatchObject({ finality: 'final' });
+  });
+
+  it('blockHeight is RPC_BAD_RESPONSE when the block carries no usable height', async () => {
+    for (const height of [-1, '221004517', undefined]) {
+      const odd = fixture('block-final.json');
+      odd.result.header.height = height;
+      rpc.method('block', odd);
+      await expect(client.blockHeight()).rejects.toMatchObject({ code: 'RPC_BAD_RESPONSE', httpStatus: 502 });
+    }
+  });
+
+  it('accessKey: the nonce and permission of a full-access or a function-call key, null when there is none', async () => {
+    const key = nearSigner(BUYER).publicKey;
+    expect(await client.accessKey(BUYER, key)).toEqual({ nonce: 186_000_000_000_085n, permission: 'FullAccess' });
+    expect(rpc.callsTo('query').at(-1)?.params).toMatchObject({
+      request_type: 'view_access_key',
+      account_id: BUYER,
+      public_key: key,
+      finality: 'final',
+    });
+    rpc.query('view_access_key', fixture('view-access-key-agent.json'));
+    expect(await client.accessKey(BUYER, key)).toEqual({
+      nonce: AGENT_KEY_NONCE,
+      permission: { receiverId: REGISTRY, methodNames: ['pay_from_escrow'], allowance: '100000000000000000000000' },
+    });
+    const unlimited = fixture('view-access-key-agent.json');
+    unlimited.result.permission.FunctionCall.allowance = null;
+    unlimited.result.permission.FunctionCall.method_names = [];
+    rpc.query('view_access_key', unlimited);
+    expect(await client.accessKey(BUYER, key)).toEqual({
+      nonce: AGENT_KEY_NONCE,
+      permission: { receiverId: REGISTRY, methodNames: [], allowance: null },
+    });
+    rpc.query('view_access_key', fixture('view-access-key-unknown.json'));
+    expect(await client.accessKey(BUYER, key)).toBeNull();
+    rpc.query('view_access_key', fixture('error-unknown-account.json'));
+    expect(await client.accessKey('ghost.testnet', key)).toBeNull();
+    const calls = rpc.calls.length;
+    expect(await client.accessKey(BUYER, 'ed25519:not-a-key')).toBeNull(); // no account holds it: no RPC
+    expect(rpc.calls).toHaveLength(calls);
+  });
+
+  it('accessKey fails closed: a permission or nonce it cannot read is RPC_BAD_RESPONSE, never a quiet answer', async () => {
+    const key = nearSigner(BUYER).publicKey;
+    const odd: Json[] = [];
+    for (const permission of ['SomethingElse', 42, { FunctionCall: { receiver_id: REGISTRY } }, { GasKey: {} }]) {
+      const envelope = fixture('view-access-key-agent.json');
+      envelope.result.permission = permission;
+      odd.push(envelope);
+    }
+    const noNonce = fixture('view-access-key-full.json');
+    delete noNonce.result.nonce;
+    odd.push(noNonce);
+    for (const envelope of odd) {
+      rpc.query('view_access_key', envelope);
+      await expect(client.accessKey(BUYER, key)).rejects.toMatchObject({ code: 'RPC_BAD_RESPONSE', httpStatus: 502 });
+    }
+  });
+
+  it('signPayDelegate signs zero-deposit pay_from_escrow(service_id, nonce) with the key: key nonce + 1, height + 100, 30 TGas; nothing is sent', async () => {
+    const { b64, publicKey } = await agentDelegate();
+    const decoded = decodeSignedDelegate(b64);
+    expect(decoded).toMatchObject({
+      senderId: BUYER,
+      receiverId: REGISTRY,
+      nonce: AGENT_KEY_NONCE + 1n,
+      maxBlockHeight: BigInt(HEIGHT + 100),
+      publicKey,
+    });
+    expect(decoded?.actions).toHaveLength(1);
+    expect(decoded?.actions[0]).toMatchObject({ kind: 'functionCall', methodName: 'pay_from_escrow', gas: GAS_30_TGAS, deposit: 0n });
+    const call = decoded?.actions[0];
+    if (call?.kind !== 'functionCall') throw new Error('expected a FunctionCall');
+    expect(Buffer.from(call.args).toString('utf8')).toBe(payDelegateArgs(1, NONCE));
+    expect(verifyDelegateSignature(decoded!)).toBe(true);
+    // The key's nonce was read for the signing key itself, and nothing went out.
+    expect(
+      rpc.callsTo('query').some((c) => c.params.request_type === 'view_access_key' && c.params.public_key === publicKey),
+    ).toBe(true);
+    expect(rpc.callsTo('send_tx')).toEqual([]);
+  });
+
+  it('signPayDelegate: a key the account does not hold is SIGNER_KEY_NOT_FOUND, before anything is signed', async () => {
+    rpc.query('view_access_key', fixture('view-access-key-unknown.json'));
+    const stranger = nearSigner(BUYER);
+    const err = await rejection(client.signPayDelegate({ serviceId: 1, nonce: NONCE }, stranger.signer));
+    expect(err).toMatchObject({ code: 'SIGNER_KEY_NOT_FOUND', httpStatus: 400 });
+    expect(err.message).toBe(`${stranger.publicKey} is not an access key of ${BUYER} on near-testnet`);
+    await expect(client.signPayDelegate({ serviceId: 0, nonce: NONCE }, stranger.signer)).rejects.toMatchObject({
+      code: 'invalid_query',
+    });
+    await expect(
+      client.signPayDelegate({ serviceId: 1, nonce: NONCE }, { kind: 'mock', accountId: BUYER }),
+    ).rejects.toMatchObject({ code: 'invalid_signer' });
+  });
+
+  it("relayPay sends one tx from the relayer to the delegate's sender carrying exactly the signed delegate; waits EXECUTED_OPTIMISTIC", async () => {
+    const { b64 } = await agentDelegate();
+    rpc.sendTx('tx-relay-ok.json');
+    const gateway = nearSigner(GATEWAY);
+    const result = await client.relayPay(b64, gateway.signer);
+    expect(rpc.sent).toHaveLength(1);
+    const sent = rpc.sent[0]!;
+    expect(result).toEqual({ txHash: sent.hash });
+    expect(sent.signatureValid).toBe(true);
+    expect(sent.waitUntil).toBe('EXECUTED_OPTIMISTIC');
+    expect(sent.tx.signerId).toBe(GATEWAY); // the relayer pays the gas
+    expect(sent.tx.publicKey.toString()).toBe(gateway.publicKey);
+    expect(sent.tx.receiverId).toBe(BUYER); // NEP-366: the outer tx goes to the delegate's sender
+    expect(sent.tx.actions).toHaveLength(1);
+    const relayed = sent.tx.actions[0]?.signedDelegate;
+    if (relayed === undefined) throw new Error('expected a SignedDelegate action');
+    expect(Buffer.from(encodeSignedDelegate(relayed)).toString('base64')).toBe(b64); // byte for byte what the buyer signed
+  });
+
+  it('relayPay: the inner pay_from_escrow failing under a successful outer tx keeps its ERR_* code and names the relay tx', async () => {
+    const { b64 } = await agentDelegate();
+    rpc.sendTx('tx-relay-inner-failed.json');
+    const err = await rejection(client.relayPay(b64, nearSigner(GATEWAY).signer));
+    const hash = rpc.sent[0]!.hash;
+    expect(err).toMatchObject({ code: 'ERR_ESCROW_INSUFFICIENT', httpStatus: 400 });
+    expect(err.message).toBe(
+      'ERR_ESCROW_INSUFFICIENT: the escrow holds 1000000000000000000000 yocto, the payment needs ' +
+        `502000000000000000000000 (price + storage fee) (tx ${hash})`,
+    );
+  });
+
+  it('relayPay: NEAR refusing the delegate itself (a used nonce) is TX_FAILED naming the relay tx', async () => {
+    const { b64 } = await agentDelegate();
+    const refused = fixture('tx-relay-ok.json');
+    refused.result.receipts_outcome[0].outcome.status = {
+      Failure: { ActionError: { index: 0, kind: { DelegateActionInvalidNonce: { ak_nonce: 13, delegate_nonce: 13 } } } },
+    };
+    rpc.sendTx(refused);
+    const err = await rejection(client.relayPay(b64, nearSigner(GATEWAY).signer));
+    expect(err).toMatchObject({ code: 'TX_FAILED', httpStatus: 502 });
+    expect(err.message).toMatch(/DelegateActionInvalidNonce/);
+    expect(err.message).toContain(`(tx ${rpc.sent[0]!.hash})`);
+  });
+
+  it("relayPay: an outcome without the registry's receipt, or a timeout, is TX_TIMEOUT naming the relay tx (it may still land)", async () => {
+    const { b64 } = await agentDelegate();
+    const partial = fixture('tx-relay-ok.json');
+    partial.result.receipts_outcome.splice(1, 1); // the registry's pay_from_escrow receipt
+    rpc.sendTx(partial);
+    const unseen = await rejection(client.relayPay(b64, nearSigner(GATEWAY).signer));
+    expect(unseen).toBeInstanceOf(TxTimeoutError);
+    expect(unseen).toMatchObject({ code: 'TX_TIMEOUT', httpStatus: 504, txHash: rpc.sent[0]!.hash });
+
+    rpc.sendTx('error-timeout.json');
+    const timedOut = await rejection(client.relayPay(b64, nearSigner(GATEWAY).signer));
+    expect(timedOut).toBeInstanceOf(TxTimeoutError);
+    expect(timedOut).toMatchObject({ code: 'TX_TIMEOUT', txHash: rpc.sent.at(-1)!.hash });
+  });
+
+  it('relayPay refuses, before any RPC, anything but a zero-deposit pay_from_escrow delegate to this registry', async () => {
+    const agent = KeyPair.fromRandom('ed25519');
+    const signer = new KeyPairSigner(agent);
+    const parts = { senderId: BUYER, serviceId: 1, nonce: NONCE, delegateNonce: AGENT_KEY_NONCE + 1n, maxBlockHeight: BigInt(HEIGHT + 100) };
+    const otherRegistry = await buildEscrowPayDelegate(signer, { ...parts, registryId: 'other-registry.testnet' });
+    const withDeposit = await signer.signDelegateAction(
+      buildDelegateAction({
+        senderId: BUYER,
+        receiverId: REGISTRY,
+        actions: [actions.functionCall('pay_from_escrow', Buffer.from(payDelegateArgs(1, NONCE)), GAS_30_TGAS, 1n)],
+        nonce: AGENT_KEY_NONCE + 1n,
+        maxBlockHeight: BigInt(HEIGHT + 100),
+        publicKey: agent.getPublicKey(),
+      }),
+    );
+    const deposit = Buffer.from(encodeSignedDelegate(withDeposit.signedDelegate)).toString('base64');
+    for (const b64 of ['', 'not base64!', Buffer.from('borsh SignedDelegate bytes').toString('base64'), otherRegistry, deposit]) {
+      await expect(client.relayPay(b64, nearSigner(GATEWAY).signer)).rejects.toMatchObject({ code: 'invalid_query', httpStatus: 400 });
+    }
+    const good = await buildEscrowPayDelegate(signer, { ...parts, registryId: REGISTRY });
+    await expect(client.relayPay(good, { kind: 'mock', accountId: GATEWAY })).rejects.toMatchObject({ code: 'invalid_signer' });
+    expect(rpc.fetch).not.toHaveBeenCalled();
   });
 });

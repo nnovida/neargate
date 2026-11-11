@@ -39,8 +39,11 @@ function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceReco
 }
 
 /** Two services: #1 active with a 5/5 score, #2 paused (plus any `extra` services). */
-function makeChain(extra: ServiceRecord[] = []): ChainClient & { paid: unknown[]; escrowPaid: unknown[]; escrows: Map<string, string> } {
+function makeChain(
+  extra: ServiceRecord[] = [],
+): ChainClient & { paid: unknown[]; escrowPaid: unknown[]; delegates: unknown[]; escrows: Map<string, string> } {
   const paid: unknown[] = [];
+  const delegates: unknown[] = [];
   const escrowPaid: unknown[] = [];
   const escrows = new Map<string, string>([['buyer.mock', '498000000000000000000000']]);
   const services = new Map<number, ServiceRecord>([
@@ -57,7 +60,21 @@ function makeChain(extra: ServiceRecord[] = []): ChainClient & { paid: unknown[]
     registryId: 'registry.mock',
     paid,
     escrowPaid,
+    delegates,
     escrows,
+    async blockHeight() {
+      return 1_000;
+    },
+    async accessKey() {
+      return { nonce: 41n, permission: 'FullAccess' as const };
+    },
+    async signPayDelegate(input: unknown) {
+      delegates.push(input);
+      return Buffer.from('a signed NEP-366 delegate').toString('base64');
+    },
+    async relayPay() {
+      throw new Error('the MCP server never relays');
+    },
     async escrowOf(accountId: string) {
       return escrows.get(accountId) ?? '0';
     },
@@ -114,11 +131,11 @@ function makeChain(extra: ServiceRecord[] = []): ChainClient & { paid: unknown[]
     async setActive() {
       return { txHash: TX('C') };
     },
-  } as ChainClient & { paid: unknown[]; escrowPaid: unknown[]; escrows: Map<string, string> };
+  } as ChainClient & { paid: unknown[]; escrowPaid: unknown[]; delegates: unknown[]; escrows: Map<string, string> };
 }
 
 /** The gateway: a D3 invoice for service 1 without proof, the data once X-PAYMENT is present. */
-function gatewayFetch(): { impl: typeof fetch; urls: string[] } {
+function gatewayFetch(extraOver: Record<string, unknown> = {}): { impl: typeof fetch; urls: string[] } {
   const urls: string[] = [];
   const impl = (async (url: unknown, init?: RequestInit) => {
     urls.push(String(url));
@@ -148,6 +165,7 @@ function gatewayFetch(): { impl: typeof fetch; urls: string[] } {
               storageFeeYocto: PAYMENT_STORAGE_FEE_YOCTO,
               seller: SELLER,
               caip2: 'near:mock',
+              ...extraOver,
             },
           },
         ],
@@ -185,7 +203,7 @@ describe('NearGate MCP server', () => {
     expect(client.getServerVersion()?.name).toBe('neargate');
     const buy = tools.find((t) => t.name === 'neargate_buy')!;
     expect(Object.keys((buy.inputSchema as { properties?: object }).properties ?? {})).toEqual(
-      expect.arrayContaining(['maxNear', 'fromEscrow']),
+      expect.arrayContaining(['maxNear', 'fromEscrow', 'gasless']),
     );
     const balance = tools.find((t) => t.name === 'neargate_escrow_balance')!;
     expect(Object.keys((balance.inputSchema as { properties?: object }).properties ?? {})).toEqual(['account']);
@@ -302,6 +320,40 @@ describe('NearGate MCP server', () => {
     });
     expect(chain.escrowPaid).toEqual([{ serviceId: 1, nonce: NONCE }]);
     expect(chain.paid).toEqual([]);
+    await client.close();
+  });
+
+  it('neargate_buy gasless signs a pay_from_escrow delegate the gateway relays: neither pay nor payFromEscrow is sent', async () => {
+    const chain = makeChain();
+    chain.escrows.set('buyer.mock', '5000000000000000000000000'); // 5 NEAR
+    const { impl } = gatewayFetch({ relayer: 'gateway.mock', relayMethod: 'pay_from_escrow' });
+    const client = await connectClient({ chain, signerProvider: async () => BUYER, fetchImpl: impl });
+    const res = await client.callTool({ name: 'neargate_buy', arguments: { id: 1, gasless: true } });
+    expect((res as { isError?: boolean }).isError).toBeFalsy();
+    expect(JSON.parse(textOf(res))).toMatchObject({
+      id: 1,
+      paid: true,
+      payFrom: 'escrow',
+      gasless: true,
+      relayer: 'gateway.mock',
+      depositYocto: TOTAL,
+      body: { gold: 3310.25 },
+    });
+    expect(chain.delegates).toEqual([{ serviceId: 1, nonce: NONCE }]);
+    expect(chain.paid).toEqual([]);
+    expect(chain.escrowPaid).toEqual([]);
+    await client.close();
+  });
+
+  it('neargate_buy gasless against a gateway that relays nothing is a tool error (RELAYER_UNAVAILABLE); nothing is signed', async () => {
+    const chain = makeChain();
+    chain.escrows.set('buyer.mock', '5000000000000000000000000');
+    const { impl } = gatewayFetch();
+    const client = await connectClient({ chain, signerProvider: () => BUYER, fetchImpl: impl });
+    const res = await client.callTool({ name: 'neargate_buy', arguments: { id: 1, gasless: true } });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(res)).toMatch(/^RELAYER_UNAVAILABLE/);
+    expect(chain.delegates).toEqual([]);
     await client.close();
   });
 

@@ -1,5 +1,6 @@
 import { NEAR_NATIVE_ASSET, formatNear, isRecord, stripTrailingSlashes } from '@agentgate/shared';
 import type {
+  AccessKeyInfo,
   ActivityEvent,
   AttestationRecord,
   PaymentOption,
@@ -86,6 +87,30 @@ export function parsePayment(value: unknown, method: string): PaymentRecord {
     selfPaid: f.bool('self_paid'),
     attested: f.bool('attested'),
   };
+}
+
+/**
+ * A `view_access_key` answer as an AccessKeyInfo: a nonce (u64, as a JSON number) and a permission,
+ * `'FullAccess'` or `{FunctionCall: {receiver_id, method_names, allowance}}`. Anything else is
+ * RPC_BAD_RESPONSE: the gateway decides on this answer, so it never reads an unknown shape as a key.
+ */
+export function parseAccessKey(view: { nonce: unknown; permission: unknown }, what: string): AccessKeyInfo {
+  const { nonce, permission } = view;
+  if (typeof nonce !== 'number' || !Number.isSafeInteger(nonce) || nonce < 0) throw badResponse(what, 'without a nonce');
+  if (permission === 'FullAccess') return { nonce: BigInt(nonce), permission: 'FullAccess' };
+  const call = isRecord(permission) ? permission['FunctionCall'] : undefined;
+  const methods = isRecord(call) ? call['method_names'] : undefined;
+  const allowance = isRecord(call) ? call['allowance'] : undefined;
+  if (
+    !isRecord(call) ||
+    typeof call['receiver_id'] !== 'string' ||
+    !Array.isArray(methods) ||
+    !methods.every((m): m is string => typeof m === 'string') ||
+    (allowance !== null && (typeof allowance !== 'string' || !YOCTO_RE.test(allowance)))
+  ) {
+    throw badResponse(what, 'without a permission it knows');
+  }
+  return { nonce: BigInt(nonce), permission: { receiverId: call['receiver_id'], methodNames: [...methods], allowance } };
 }
 
 /** `escrow_of`: a U128 as a decimal string without sign or leading zeros. */

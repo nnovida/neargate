@@ -70,6 +70,10 @@ function makeChain(overrides: Partial<ChainClient> = {}): ChainClient {
     depositEscrow: vi.fn(async () => ({ txHash: 'tx' })),
     withdrawEscrow: vi.fn(async () => ({ txHash: 'tx' })),
     payFromEscrow: vi.fn(async () => ({ txHash: TX_HASH })),
+    blockHeight: vi.fn(async () => 1_000),
+    accessKey: vi.fn(async () => null),
+    signPayDelegate: vi.fn(async () => 'delegate'),
+    relayPay: vi.fn(async () => ({ txHash: 'tx' })),
     ...overrides,
   };
 }

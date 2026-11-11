@@ -5,7 +5,9 @@ import {
   REGISTRATION_DEPOSIT_YOCTO,
   stripTrailingSlashes,
 } from '@agentgate/shared';
+import { KeyPair, KeyPairSigner } from 'near-api-js';
 import type {
+  AccessKeyInfo,
   ActivityEvent,
   AnySigner,
   AttestationRecord,
@@ -20,6 +22,8 @@ import type {
   Yocto,
 } from '@agentgate/shared';
 import { YOCTO_RE, assertNonEmpty, assertServiceId, assertYocto, checkVerifyQuery, judgePaymentRecord } from './checks';
+import { deriveDevnetKey } from './devnet-key';
+import { PAY_DELEGATE_TTL_BLOCKS, buildEscrowPayDelegate, relayablePayDelegate } from './near-delegate';
 
 /** Devnet is local/in-process, but never let a hung socket block a request forever. */
 const DEVNET_REQUEST_TIMEOUT_MS = 30_000;
@@ -193,6 +197,86 @@ export class MockChainHttpClient implements ChainClient {
       throw new AgentGateError('devnet_bad_response', 'devnet account check did not answer { exists: boolean }', 502);
     }
     return result.exists;
+  }
+
+  /** The devnet's height: every successful write (and every faucet credit) takes one block. */
+  async blockHeight(): Promise<number> {
+    const result = await this.get<{ height?: unknown } | undefined>('/block');
+    const height = result?.height;
+    if (typeof height !== 'number' || !Number.isSafeInteger(height) || height < 0) {
+      throw new AgentGateError('devnet_bad_response', 'devnet block lookup did not answer { height: integer }', 502);
+    }
+    return height;
+  }
+
+  /**
+   * The devnet's one key of an account (its derived devnet key, full access): its nonce, which a
+   * relayed delegate moves, or null for any other key or an account the devnet does not know.
+   */
+  async accessKey(accountId: string, publicKey: string): Promise<AccessKeyInfo | null> {
+    assertNonEmpty(accountId, 'accountId');
+    assertNonEmpty(publicKey, 'publicKey');
+    const result = await this.request<{ nonce?: unknown; permission?: unknown }>(
+      'GET',
+      `/accounts/${encodeURIComponent(accountId)}/access-key/${encodeURIComponent(publicKey)}`,
+      undefined,
+      true,
+    );
+    if (result === null) return null;
+    // The answer gates a relay: anything but a u64 nonce on a full-access key is a broken devnet.
+    if (typeof result.nonce !== 'string' || !YOCTO_RE.test(result.nonce) || result.permission !== 'FullAccess') {
+      throw new AgentGateError(
+        'devnet_bad_response',
+        "devnet access key lookup did not answer { nonce: decimal string, permission: 'FullAccess' }",
+        502,
+      );
+    }
+    return { nonce: BigInt(result.nonce), permission: 'FullAccess' };
+  }
+
+  /**
+   * Signs (sends nothing) the gasless rail's NEP-366 delegate with the signer's devnet key, as the
+   * live client does with a real key: one zero-deposit `pay_from_escrow(service_id, nonce)` to the
+   * registry, the key's nonce + 1, valid 100 blocks past the devnet height. A devnet key is public
+   * by construction (`deriveDevnetKey`): it protects nothing outside mock mode.
+   */
+  async signPayDelegate(input: { serviceId: number; nonce: string }, signer: AnySigner): Promise<string> {
+    const mockSigner = requireMockSigner(signer);
+    assertServiceId(input.serviceId);
+    const devnetKey = deriveDevnetKey(mockSigner.accountId);
+    const key = await this.accessKey(mockSigner.accountId, devnetKey.publicKey);
+    if (key === null) {
+      throw new AgentGateError(
+        'SIGNER_KEY_NOT_FOUND',
+        `${devnetKey.publicKey} is not an access key of ${mockSigner.accountId} on ${this.network} (fund the account first)`,
+        400,
+      );
+    }
+    const height = await this.blockHeight();
+    return buildEscrowPayDelegate(new KeyPairSigner(KeyPair.fromString(devnetKey.secretKey as `ed25519:${string}`)), {
+      registryId: this.registryId,
+      senderId: mockSigner.accountId,
+      serviceId: input.serviceId,
+      nonce: input.nonce, // the registry checks the shape (ERR_INVALID_NONCE)
+      delegateNonce: key.nonce + 1n,
+      maxBlockHeight: BigInt(height + PAY_DELEGATE_TTL_BLOCKS),
+    });
+  }
+
+  /**
+   * Relays a signed delegate as `relayer` through the devnet's NEP-366 route: the devnet checks it
+   * the way NEAR does (signature, key, nonce, expiry), then runs `pay_from_escrow` as the
+   * delegate's sender; the relayer attaches nothing. Only a zero-deposit `pay_from_escrow` to the
+   * registry is relayed (invalid_query before the devnet sees anything else). NEAR refusing the
+   * delegate is TX_FAILED naming the DelegateAction error; the inner call failing keeps its ERR_* code.
+   */
+  async relayPay(signedDelegate: string, relayer: AnySigner): Promise<{ txHash: string }> {
+    const mockSigner = requireMockSigner(relayer);
+    relayablePayDelegate(signedDelegate, this.registryId);
+    return await this.post<{ txHash: string }>('/registry/relay', {
+      relayer: mockSigner.accountId,
+      signedDelegate,
+    });
   }
 
   /** The account's escrow in yocto; `"0"` for an account that never deposited. */

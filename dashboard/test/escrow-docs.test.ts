@@ -144,11 +144,11 @@ describe('protocol docs page and home roadmap', () => {
     expect(page).toContain('successful pay or pay_from_escrow of this nonce');
   });
 
-  it('the roadmap ships escrow and restricted agent keys, and plans the gasless relay', () => {
+  // The gasless item ships since Task 10c: gasless-docs.test.ts pins it.
+  it('the roadmap ships escrow and restricted agent keys', () => {
     const page = text(Home);
     expect(page).toContain('Prepaid escrow · restricted agent keys');
     expect(page).toContain('NOW · shipped Prepaid escrow · restricted agent keys');
-    expect(page).toContain('Planned: a buyer signs a NEP-366 delegate action');
     expect(page).toContain(GAS_CAVEAT);
   });
 });

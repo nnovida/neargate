@@ -4,13 +4,16 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./delegate": "./src/near-delegate.ts",
+    "./devnet-key": "./src/devnet-key.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
     "@agentgate/shared": "*",
+    "borsh": "2.0.0",
     "near-api-js": "7.4.0"
   },
   "devDependencies": {

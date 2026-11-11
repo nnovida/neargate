@@ -18,6 +18,7 @@ import {
   createLogger,
   decodeXPayment,
   encodeXPaymentResponse,
+  isNearAccountId,
   isNearTxHash,
   isValidNonce,
   PAYMENT_STORAGE_FEE_YOCTO,
@@ -30,11 +31,13 @@ import {
   type AnySigner,
   type ChainClient,
   type Logger,
+  type NearExactPayload,
   type PaymentRequiredResponse,
   type PaymentRequirements,
   type ServiceRecord,
 } from '@agentgate/shared';
-import { MemoryInvoiceStore, type InvoiceStore } from './invoice-store';
+import { createDelegateRail, type DelegateRail } from './delegate-rail';
+import { MemoryInvoiceStore, type InvoiceStore, type StoredInvoice } from './invoice-store';
 import { FileInvoiceStore } from './invoice-store-file';
 import { MemoryAttestationQueue, type AttestationQueue } from './attestation-queue';
 import { FileAttestationQueue } from './attestation-queue-file';
@@ -127,6 +130,13 @@ function timedOutTxHash(err: unknown): string | undefined {
   return isNearTxHash(txHash) ? txHash : undefined;
 }
 
+/** What a settled payment hands the serve path: the tx to name and attest, the payer, the registry's self-payment flag. */
+interface Settled {
+  txHash: string;
+  payer: string;
+  selfPaid: boolean;
+}
+
 /** Constant-time string comparison (hash first so lengths never short-circuit). */
 function safeEqual(a: string, b: string): boolean {
   const ha = createHash('sha256').update(a).digest();
@@ -156,6 +166,14 @@ export function createApp(deps: MiddlewareDeps): Express {
     throw new AgentGateError(
       'CONFIG_INVALID',
       'live mode requires GATEWAY_ACCOUNT_ID (the attestor account) — refusing the mock-signer fallback',
+      500,
+    );
+  }
+  // Fail closed: the gasless rail relays as the gateway account, which pays the relays' gas.
+  if (config.relayerEnabled && !isNearAccountId(config.gatewayAccountId)) {
+    throw new AgentGateError(
+      'CONFIG_INVALID',
+      "RELAYER_ENABLED needs GATEWAY_ACCOUNT_ID, a NEAR account id: the relayer that signs the relays and pays their gas",
       500,
     );
   }
@@ -221,24 +239,39 @@ export function createApp(deps: MiddlewareDeps): Express {
 
   // ---------------------------------------------------------------- helpers
 
+  /** The gateway NEAR account as a live signer (its key from GATEWAY_PRIVATE_KEY or GATEWAY_KEY_PATH). */
+  function gatewayNearSigner(): AnySigner {
+    return {
+      kind: 'near',
+      accountId: config.gatewayAccountId,
+      ...(config.gatewayPrivateKey !== '' ? { secretKey: config.gatewayPrivateKey } : {}),
+      ...(config.gatewayKeyPath !== '' ? { keyPath: config.gatewayKeyPath } : {}),
+    };
+  }
+
   /** Gateway/attestor signer: the gateway NEAR account in live mode, mock identity otherwise. */
   function gateSignerFor(service: ServiceRecord): AnySigner {
-    if (config.mode === 'live') {
-      return {
-        kind: 'near',
-        accountId: config.gatewayAccountId,
-        ...(config.gatewayPrivateKey !== '' ? { secretKey: config.gatewayPrivateKey } : {}),
-        ...(config.gatewayKeyPath !== '' ? { keyPath: config.gatewayKeyPath } : {}),
-      };
-    }
+    if (config.mode === 'live') return gatewayNearSigner();
     // Mock mode: the devnet authorizes by account id; act as the service's
     // registered attestor (mock signers carry no key material).
     return { kind: 'mock', accountId: service.attestor };
   }
 
+  // The gasless rail (RELAYER_ENABLED): the gateway account relays the buyer's signed
+  // `pay_from_escrow` delegate and pays its gas, in mock mode as the same account id.
+  const delegateRail: DelegateRail | undefined = config.relayerEnabled
+    ? createDelegateRail({
+        chain,
+        relayer: config.mode === 'live' ? gatewayNearSigner() : { kind: 'mock', accountId: config.gatewayAccountId },
+        maxAgeMs: config.invoiceTtlMs,
+        logger,
+      })
+    : undefined;
+
   /**
    * The x402 requirement for one invoice: pay `price + storage fee` through the
-   * registry's `pay(service_id, nonce)`. `relayer` lands in Task 10.
+   * registry's `pay(service_id, nonce)`. With the relayer on, `extra.relayer` names the gateway
+   * account, which relays a signed zero-deposit `pay_from_escrow` delegate (`extra.relayMethod`).
    */
   function buildRequirements(
     service: ServiceRecord, nonce: string, expiresAt: number, resource: string,
@@ -263,26 +296,100 @@ export function createApp(deps: MiddlewareDeps): Express {
         storageFeeYocto: PAYMENT_STORAGE_FEE_YOCTO,
         seller: service.paymentTarget,
         caip2: caip2For(chain.network),
+        ...(delegateRail !== undefined
+          ? { relayer: config.gatewayAccountId, relayMethod: 'pay_from_escrow' as const }
+          : {}),
       },
     };
   }
 
+  /** `detail`: the relay tx of a pending relay (`transaction`), the chain's code of a failed one (`code`). */
+  type Detail = Pick<PaymentRequiredResponse, 'transaction' | 'code'>;
+
   function send402(
-    res: Response, error: string, requirements: PaymentRequirements, retryAfterSeconds?: number,
+    res: Response, error: string, requirements: PaymentRequirements, retryAfterSeconds?: number, detail: Detail = {},
   ): void {
     if (retryAfterSeconds !== undefined) res.set('Retry-After', String(retryAfterSeconds));
-    const body: PaymentRequiredResponse = { x402Version: X402_VERSION, error, accepts: [requirements] };
+    const body: PaymentRequiredResponse = { x402Version: X402_VERSION, error, accepts: [requirements], ...detail };
     res.status(402).json(body);
   }
 
   /** Issues + persists a fresh invoice, then responds 402. */
   async function respond402Fresh(
-    res: Response, service: ServiceRecord, resource: string, error: string,
+    res: Response, service: ServiceRecord, resource: string, error: string, detail: Detail = {},
   ): Promise<void> {
     const nonce = randomNonce();
     const expiresAt = Date.now() + config.invoiceTtlMs;
     await invoices.put({ nonce, serviceId: service.id, priceYocto: service.priceYocto, expiresAt, used: false });
-    send402(res, error, buildRequirements(service, nonce, expiresAt, resource));
+    send402(res, error, buildRequirements(service, nonce, expiresAt, resource), undefined, detail);
+  }
+
+  /**
+   * The tx rail: the registry's payment for the invoice, proven by the presented tx
+   * (`verifyPayment`). Answers the 402 itself and returns null when the payment does not pass.
+   */
+  async function settleTx(
+    res: Response,
+    service: ServiceRecord,
+    resource: string,
+    invoice: StoredInvoice,
+    payload: Extract<NearExactPayload, { kind: 'tx' }>,
+  ): Promise<Settled | null> {
+    const verdict = await chain.verifyPayment({
+      nonce: payload.nonce,
+      serviceId: service.id,
+      minAmountYocto: service.priceYocto,
+      maxAgeMs: config.invoiceTtlMs,
+      txHash: payload.transaction,
+      payer: payload.payer,
+    });
+    if (verdict.ok) return { txHash: payload.transaction, payer: verdict.payer, selfPaid: verdict.selfPaid };
+    if (verdict.reason === 'pending') {
+      // Still settling: keep the SAME invoice alive so the buyer can
+      // retry the identical proof after Retry-After seconds.
+      send402(res, 'settlement_pending', buildRequirements(service, payload.nonce, invoice.expiresAt, resource), 2);
+      return null;
+    }
+    await respond402Fresh(res, service, resource, verdict.reason);
+    return null;
+  }
+
+  /**
+   * The gasless rail: the gateway relays the presented delegate (`DelegateRail.settle`).
+   * Answers the 402 itself and returns null unless the registry holds the sender's payment.
+   */
+  async function settleDelegate(
+    res: Response,
+    service: ServiceRecord,
+    resource: string,
+    invoice: StoredInvoice,
+    payload: Extract<NearExactPayload, { kind: 'delegate' }>,
+  ): Promise<Settled | null> {
+    if (delegateRail === undefined) {
+      await respond402Fresh(res, service, resource, 'relayer_disabled');
+      return null;
+    }
+    const outcome = await delegateRail.settle({
+      service,
+      nonce: payload.nonce,
+      signedDelegate: payload.signedDelegate,
+      payer: payload.payer,
+    });
+    if (outcome.kind === 'paid') return { txHash: outcome.txHash, payer: outcome.payer, selfPaid: outcome.selfPaid };
+    if (outcome.kind === 'pending') {
+      // In flight, or timed out and may still land: the SAME invoice, retried with the same delegate.
+      send402(
+        res,
+        'settlement_pending',
+        buildRequirements(service, payload.nonce, invoice.expiresAt, resource),
+        2,
+        outcome.transaction !== undefined ? { transaction: outcome.transaction } : {},
+      );
+      return null;
+    }
+    logger.info('delegate_refused', { serviceId: service.id, error: outcome.error, code: outcome.code });
+    await respond402Fresh(res, service, resource, outcome.error, outcome.code !== undefined ? { code: outcome.code } : {});
+    return null;
   }
 
   /**
@@ -583,12 +690,11 @@ export function createApp(deps: MiddlewareDeps): Express {
         await respond402Fresh(res, service, resource, 'invalid_payment_header');
         return;
       }
-      if (payment.payload.kind !== 'tx') {
-        // The gasless delegate rail stays off until the relayer lands (Task 10).
+      if (payment.payload.kind === 'delegate' && delegateRail === undefined) {
+        // The gasless delegate rail is off unless RELAYER_ENABLED (the invoice stays open).
         await respond402Fresh(res, service, resource, 'relayer_disabled');
         return;
       }
-      const txHashHeader = payment.payload.transaction;
       const nonceHeader = payment.payload.nonce;
 
       // 3. Validate the invoice behind the presented nonce.
@@ -597,25 +703,14 @@ export function createApp(deps: MiddlewareDeps): Express {
       if (invoice.used) { await respond402Fresh(res, service, resource, 'invoice_used'); return; }
       if (Date.now() > invoice.expiresAt) { await respond402Fresh(res, service, resource, 'invoice_expired'); return; }
 
-      // 3b. Verify the payment the registry holds for this nonce.
-      const verdict = await chain.verifyPayment({
-        nonce: nonceHeader,
-        serviceId: id,
-        minAmountYocto: service.priceYocto,
-        maxAgeMs: config.invoiceTtlMs,
-        txHash: txHashHeader,
-        payer: payment.payload.payer,
-      });
-      if (!verdict.ok) {
-        if (verdict.reason === 'pending') {
-          // Still settling: keep the SAME invoice alive so the buyer can
-          // retry the identical proof after Retry-After seconds.
-          send402(res, 'settlement_pending', buildRequirements(service, nonceHeader, invoice.expiresAt, resource), 2);
-          return;
-        }
-        await respond402Fresh(res, service, resource, verdict.reason);
-        return;
-      }
+      // 3b. The payment the registry holds for this nonce: proven by the buyer's tx (the tx
+      //     rail), or made by relaying the buyer's signed delegate (the gasless rail).
+      const settled =
+        payment.payload.kind === 'tx'
+          ? await settleTx(res, service, resource, invoice, payment.payload)
+          : await settleDelegate(res, service, resource, invoice, payment.payload);
+      if (settled === null) return;
+      const txHashHeader = settled.txHash;
 
       // 3c. Burn the nonce BEFORE proxying — single-use even if the upstream
       // fails, and exactly one concurrent request can win the race.
@@ -641,14 +736,14 @@ export function createApp(deps: MiddlewareDeps): Express {
       // is the seller's backend being unreachable, not a service outcome, so it
       // is not scored either way. And never let a self-paid call earn trust
       // (F1): the registry flags a payment whose payer is the owner or the payout
-      // account (`verdict.selfPaid`) and rejects attesting it, so we do not try.
-      const attest = outcome.kind === 'response' && !verdict.selfPaid;
+      // account (`settled.selfPaid`) and rejects attesting it, so we do not try.
+      const attest = outcome.kind === 'response' && !settled.selfPaid;
 
       // The receipt exists before the buyer is answered, so it can ask for it at once.
       receipts.open(
         { nonce: nonceHeader, serviceId: id, paymentTxHash: txHashHeader },
         {
-          status: attest ? 'pending' : verdict.selfPaid ? 'skipped_self_paid' : 'skipped_upstream_failed',
+          status: attest ? 'pending' : settled.selfPaid ? 'skipped_self_paid' : 'skipped_upstream_failed',
         },
       );
 
@@ -660,7 +755,7 @@ export function createApp(deps: MiddlewareDeps): Express {
           success: true,
           transaction: txHashHeader,
           network: chain.network,
-          payer: verdict.payer,
+          payer: settled.payer,
         }),
       );
       if (outcome.kind === 'response') {
@@ -677,7 +772,7 @@ export function createApp(deps: MiddlewareDeps): Express {
       } else {
         logger.info('attestation_skipped', {
           serviceId: id,
-          reason: verdict.selfPaid ? 'self_payment' : outcome.kind === 'failure' ? outcome.error : 'skipped',
+          reason: settled.selfPaid ? 'self_payment' : outcome.kind === 'failure' ? outcome.error : 'skipped',
         });
       }
     }),

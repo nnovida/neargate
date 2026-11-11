@@ -46,7 +46,8 @@ export class TxSender {
 
   /**
    * Signs and sends one single-action tx from `signer` to `receiverId`. `method` names the call in
-   * errors. Returns the tx hash and the call's JSON result.
+   * errors. Returns the tx hash, the call's JSON result and the tx's whole outcome (a relay reads
+   * its receipts: `judgeRelayOutcome`).
    *
    * `Account.signAndSendTransaction` builds the tx, has the CallSigner sign it (which records
    * its hash before anything is sent), re-signs with a fresh nonce on InvalidNonce, and throws
@@ -60,7 +61,7 @@ export class TxSender {
     method: string,
     action: Action,
     waitUntil: WaitUntil,
-  ): Promise<{ txHash: string; result: unknown }> {
+  ): Promise<{ txHash: string; result: unknown; outcome: unknown }> {
     const { ctx } = this;
     const loaded = await loadNearSigner({
       accountId: signer.accountId,
@@ -108,7 +109,7 @@ export class TxSender {
         ? badResponse(what, 'without a transaction hash')
         : new TxTimeoutError(`the NEAR RPC answered ${what} without the tx's outcome`, callSigner.txHash, ctx.explorerUrl);
     }
-    return { txHash, result: getTransactionLastResult(outcome) };
+    return { txHash, result: getTransactionLastResult(outcome), outcome };
   }
 
   /** The chain-id check runs once before the first signature (again after a failed check). */

@@ -33,6 +33,12 @@ export interface BuyServiceOpts {
    * refuses with ERR_ESCROW_INSUFFICIENT before anything is sent.
    */
   fromEscrow?: boolean;
+  /**
+   * The gasless rail (implies `fromEscrow`): sign `pay_from_escrow` as a NEP-366 delegate that the
+   * gateway relays, paying the gas; the escrow pays price + storage fee and nothing is sent from
+   * the account. A gateway whose 402 offers no relay is RELAYER_UNAVAILABLE before anything is signed.
+   */
+  gasless?: boolean;
   /** Forwarded to createAgentGateClient. */
   settleDelayMs?: number;
   fetchImpl?: typeof fetch;
@@ -58,9 +64,10 @@ export interface BuyServiceResult {
  * retry-with-proof exchange via the client's fetchPaid. Payment is a registry
  * `pay` call carrying the invoice nonce, with the price plus the storage fee
  * attached (or, with `fromEscrow`, `pay_from_escrow` out of the prepaid escrow,
- * attaching nothing); the client refuses an invoice for any other service id, never follows
- * a redirect (REDIRECT_REFUSED), and throws PAID_NOT_SERVED (with the tx hash and
- * nonce to re-present) when a paid call is not served.
+ * attaching nothing, or with `gasless`, a signed `pay_from_escrow` delegate the gateway relays);
+ * the client refuses an invoice for any other service id, never follows a redirect
+ * (REDIRECT_REFUSED), and throws PAID_NOT_SERVED (with the tx hash and nonce to re-present), or
+ * GASLESS_NOT_SERVED (with the signed delegate), when a paid call is not served.
  */
 export async function buyService(opts: BuyServiceOpts): Promise<BuyServiceResult> {
   const { chain, signer, id } = opts;
@@ -120,7 +127,8 @@ export async function buyService(opts: BuyServiceOpts): Promise<BuyServiceResult
     signer,
     expectedServiceId: id,
     ...(maxYocto !== undefined ? { maxYocto } : {}),
-    ...(opts.fromEscrow === true ? { payFrom: 'escrow' as const } : {}),
+    ...(opts.fromEscrow === true || opts.gasless === true ? { payFrom: 'escrow' as const } : {}),
+    ...(opts.gasless === true ? { gasless: true } : {}),
     ...(opts.settleDelayMs !== undefined ? { settleDelayMs: opts.settleDelayMs } : {}),
     ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
     ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
@@ -155,6 +163,9 @@ export function formatBuyReceipt(bought: BuyServiceResult, opts: { explorerUrl?:
     const storageFee = result.requirements?.extra.storageFeeYocto ?? PAYMENT_STORAGE_FEE_YOCTO;
     lines.push(`paid:     ${formatPriceWithStorage(result.priceYocto ?? service.priceYocto, storageFee)}`);
     if (result.payFrom === 'escrow') lines.push('from:     escrow (nothing attached; the escrow was debited)');
+    if (result.gasless === true) {
+      lines.push(`relayed:  gasless — ${result.relayer ?? 'the gateway'} relayed the signed pay_from_escrow and paid the gas`);
+    }
     lines.push(`payment:  ${result.txHash ?? '?'}`);
     if (opts.explorerUrl !== undefined && result.txHash !== undefined) {
       lines.push(`explorer: ${stripTrailingSlashes(opts.explorerUrl)}/txns/${result.txHash}`);
@@ -163,7 +174,8 @@ export function formatBuyReceipt(bought: BuyServiceResult, opts: { explorerUrl?:
       const payer = result.settlement.payer !== undefined ? `  (payer ${result.settlement.payer})` : '';
       lines.push(`settled:  ${result.settlement.success ? 'ok' : 'FAILED'}${payer}`);
     }
-    // A paid call the gateway does not serve never gets here: fetchPaid throws PAID_NOT_SERVED.
+    // A paid call the gateway does not serve never gets here: fetchPaid throws PAID_NOT_SERVED
+    // (or GASLESS_NOT_SERVED).
   }
   lines.push(`status:   ${result.status}`);
   return lines;

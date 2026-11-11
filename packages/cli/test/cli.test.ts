@@ -97,6 +97,18 @@ function makeFakeChain(hooks: { onRegister?: () => void } = {}): FakeChain {
     async payFromEscrow() {
       throw new Error('not used');
     },
+    async blockHeight() {
+      return 1_000;
+    },
+    async accessKey() {
+      return null;
+    },
+    async signPayDelegate() {
+      throw new Error('not used');
+    },
+    async relayPay() {
+      throw new Error('not used');
+    },
     async registerService(input, signer) {
       hooks.onRegister?.();
       registered.push({ input, signer });

@@ -1,3 +1,5 @@
+import type { PayDelegateRefusal } from '@agentgate/chain/delegate';
+
 /**
  * Machine-readable reason codes attached to 402 responses.
  *
@@ -7,8 +9,12 @@
  *    These are the strings a client actually receives:
  *    'X-PAYMENT header is required' (literal string, not in this union),
  *    'invoice_expired', 'invoice_used', 'unknown_nonce', 'invalid_payment_header',
- *    'relayer_disabled', 'settlement_pending' (sent on wire for a pending payment), and the
- *    verifyPayment pass-throughs below.
+ *    'relayer_disabled', 'settlement_pending' (sent on wire for a pending payment), the
+ *    verifyPayment pass-throughs below, and the gasless rail's own refusals (RELAYER_ENABLED):
+ *    'delegate_<reason>' (the delegate's structure: malformed, wrong_sender, wrong_receiver,
+ *    wrong_action, wrong_args, deposit_not_zero, gas_too_high, gas_too_low, expired,
+ *    nonce_too_large), 'bad_signature', 'unknown_key', 'key_not_allowed', 'stale_nonce',
+ *    'escrow_insufficient' and 'relay_failed' (with the chain's `code` in the body).
  *
  * 2. **Internal `verifyPayment` reason codes** — returned by `ChainClient.verifyPayment`
  *    and mapped inside the handler before being sent on the wire.  The notable mismatch:
@@ -17,6 +23,8 @@
  * Wire codes: 'invoice_expired' | 'invoice_used' | 'unknown_nonce' | 'invalid_payment_header'
  *             | 'relayer_disabled' | 'not_found' | 'wrong_service' | 'amount_too_low' | 'expired'
  *             | 'already_attested' | 'tx_mismatch' | 'settlement_pending'
+ *             | `delegate_${PayDelegateRefusal}` | 'bad_signature' | 'unknown_key' | 'key_not_allowed'
+ *             | 'stale_nonce' | 'escrow_insufficient' | 'relay_failed'
  * Internal-only codes (never sent raw): 'pending'
  */
 export type PaywallErrorCode =
@@ -31,6 +39,13 @@ export type PaywallErrorCode =
   | 'expired'
   | 'already_attested'
   | 'tx_mismatch'
+  | `delegate_${PayDelegateRefusal}`
+  | 'bad_signature'
+  | 'unknown_key'
+  | 'key_not_allowed'
+  | 'stale_nonce'
+  | 'escrow_insufficient'
+  | 'relay_failed'
   | 'pending';
 
 /** x402 proof header (request) + settlement header (response). Lowercase on the wire. */

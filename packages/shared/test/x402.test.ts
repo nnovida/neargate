@@ -2,8 +2,9 @@ import { describe, it, expect, expectTypeOf } from 'vitest';
 import {
   X402_VERSION, X402_SCHEME, X402_ASSET_NEAR,
   encodeXPayment, decodeXPayment, encodeXPaymentResponse, decodeXPaymentResponse,
-  isNearAccountId, isNearTxHash, isEd25519PublicKey, isBase64, caip2For,
-  type NearPaymentExtra, type PaymentPayload, type PaymentRequirements, type SettlementResponse,
+  isNearAccountId, isNearTxHash, isEd25519PublicKey, isBase64, caip2For, SIGNED_DELEGATE_MAX,
+  type NearPaymentExtra, type PaymentPayload, type PaymentRequiredResponse, type PaymentRequirements,
+  type SettlementResponse,
 } from '../src/x402';
 import { AgentGateError, base58Encode, type Yocto } from '../src/index';
 
@@ -66,6 +67,16 @@ describe('x402 constants', () => {
       seller: string;
       caip2: string;
       relayer?: string;
+      relayMethod?: 'pay_from_escrow';
+    }>();
+    // The gasless rail's 402 answers name the relay tx (settlement_pending after a timeout) or the
+    // chain's code (relay_failed); every other 402 carries neither.
+    expectTypeOf<PaymentRequiredResponse>().toEqualTypeOf<{
+      x402Version: number;
+      error: string;
+      accepts: PaymentRequirements[];
+      transaction?: string;
+      code?: string;
     }>();
     expectTypeOf<PaymentRequirements['maxAmountRequired']>().toEqualTypeOf<Yocto>();
     const req = {
@@ -172,6 +183,21 @@ describe('x402 codec', () => {
   it('rejects an unknown or missing kind', () => {
     expect(() => decodeXPayment(withPayload({ kind: 'transfer', transaction: TX_44, nonce: '42', payer: 'buyer.testnet' }))).toThrow(/kind/);
     expect(() => decodeXPayment(withPayload({ transaction: TX_44, nonce: '42', payer: 'buyer.testnet' }))).toThrow(/kind/);
+  });
+
+  it('bounds signedDelegate at the base64 of SIGNED_DELEGATE_MAX (4096) bytes, far inside the 16 KiB header limit (R58 §3)', () => {
+    expect(SIGNED_DELEGATE_MAX).toBe(4096);
+    const atMax = 'A'.repeat(Math.ceil(SIGNED_DELEGATE_MAX / 3) * 4); // 5464 base64 chars
+    expect(atMax).toHaveLength(5464);
+    const header = encodeXPayment({
+      ...delegatePayment,
+      payload: { kind: 'delegate', signedDelegate: atMax, nonce: '7', payer: 'buyer.testnet' },
+    });
+    expect(decodeXPayment(header).payload).toMatchObject({ kind: 'delegate', signedDelegate: atMax });
+    expect(header.length).toBeLessThan(8 * 1024); // the whole X-PAYMENT header, base64 JSON around it
+    const err = decodeError(withPayload({ kind: 'delegate', signedDelegate: `${atMax}AAAA`, nonce: '42', payer: 'buyer.testnet' }));
+    expect(err.code).toBe('INVALID_PAYMENT');
+    expect(err.message).toMatch(/signedDelegate/);
   });
 
   it('rejects a delegate payload whose signedDelegate is not base64', () => {

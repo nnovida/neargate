@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# AgentGate devnet — in-memory MOCK Casper chain. Demo/self-contained stacks
+# NearGate devnet — the in-memory MOCK NEAR chain. Demo/self-contained stacks
 # only (docker-compose.hosting.yml); a live deployment never runs this image.
 # Build from the REPO ROOT (workspace-aware):
 #   docker build -f packages/devnet/Dockerfile -t agentgate-devnet .
@@ -27,13 +27,14 @@ COPY packages/shared/package.json packages/shared/
 #    directly via tsx, and tsx is a ROOT devDependency (see /package.json) —
 #    omitting dev deps would strip the runtime itself. `--include-workspace-root`
 #    pulls in those root deps; `-w` limits workspace deps to what the devnet
-#    actually imports (@agentgate/shared + express only).
+#    actually imports (@agentgate/shared, @agentgate/chain + express).
 RUN npm ci -w @agentgate/devnet --include-workspace-root \
   && npm cache clean --force
 
-# 3. Sources — exactly the packages the devnet imports
-#    (packages/devnet/package.json: @agentgate/shared only).
+# 3. Sources — exactly the packages the devnet imports (packages/devnet/package.json:
+#    @agentgate/shared, and @agentgate/chain for the NEP-366 delegate checks of the relay).
 COPY packages/shared packages/shared
+COPY packages/chain packages/chain
 COPY packages/devnet packages/devnet
 
 # 4. Non-root (state is in-memory — nothing to chown).

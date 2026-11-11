@@ -16,5 +16,8 @@
     "express-rate-limit": "^7.0.0",
     "helmet": "^8.0.0",
     "undici": "^6.27.0"
+  },
+  "devDependencies": {
+    "near-api-js": "7.4.0"
   }
 }

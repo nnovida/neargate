@@ -365,7 +365,7 @@ export default function Page() {
         response body goes to <strong className="text-white">stdout</strong> (pipeable); the receipt
         goes to <strong className="text-white">stderr</strong>.
       </P>
-      <CommandBlock wrap text="npm run neargate -- buy <id> --account <buyer> --max <near> [--from-escrow]" />
+      <CommandBlock wrap text="npm run neargate -- buy <id> --account <buyer> --max <near> [--from-escrow | --gasless]" />
       <PropList
         items={[
           { name: '<id>', type: 'positive integer', required: true, desc: 'The service id (see list).' },
@@ -395,6 +395,24 @@ export default function Page() {
               </>
             ),
           },
+          {
+            name: '--gasless',
+            type: 'flag',
+            required: false,
+            desc: (
+              <>
+                Pays gasless; it implies --from-escrow, and the account pays no gas either:{' '}
+                <M>buy</M> signs the{' '}
+                <M>pay_from_escrow</M> as a NEP-366 delegate and sends it as the proof, and the
+                gateway relays it and pays the gas (the{' '}
+                <DocLink href="/docs/protocol#gasless">gasless rail</DocLink>). The escrow pays
+                price + <M>0.002 NEAR</M>; nothing is sent from the account. The gateway’s 402 must
+                offer a relayer, else <M>RELAYER_UNAVAILABLE</M> before anything is signed; the
+                escrow checks of <M>--from-escrow</M> run next. An{' '}
+                <DocLink href="#agent-key">agent key</DocLink> can sign it.
+              </>
+            ),
+          },
           { name: '--method <method>', type: 'string', required: false, default: 'GET', desc: 'HTTP method of the paid request.' },
           { name: '--body <json>', type: 'string', required: false, desc: 'JSON request body to send with the paid request.' },
           {
@@ -413,7 +431,8 @@ export default function Page() {
           'service:  #1 RWA FX & Gold Oracle',
           'url:      http://localhost:4021/svc/1',
           'paid:     0.5 NEAR + 0.002 NEAR storage',
-          'from:     escrow (nothing attached; the escrow was debited)      (with --from-escrow only)',
+          'from:     escrow (nothing attached; the escrow was debited)      (with --from-escrow or --gasless)',
+          'relayed:  gasless — <relayer> relayed the signed pay_from_escrow and paid the gas      (with --gasless only)',
           'payment:  <tx hash>',
           'explorer: <NEAR_EXPLORER_URL>/txns/<tx hash>      (live mode only)',
           'settled:  ok  (payer buyer-1abba006.mock)',
@@ -423,8 +442,9 @@ export default function Page() {
       <P>
         <strong className="text-white">Never pay twice for one call.</strong> If the payment went
         through but the gateway did not serve the call, <M>buy</M> fails with{' '}
-        <M>PAID_NOT_SERVED</M> naming the transaction and nonce; see{' '}
-        <DocLink href="#error-codes">Error codes</DocLink> before retrying.
+        <M>PAID_NOT_SERVED</M> naming the transaction and nonce (with --gasless,{' '}
+        <M>GASLESS_NOT_SERVED</M> naming the nonce and, when the gateway gave it, the relay
+        transaction); see <DocLink href="#error-codes">Error codes</DocLink> before retrying.
       </P>
 
       {/* ───────────────────────────── status ───────────────────────────── */}
@@ -628,9 +648,9 @@ export default function Page() {
           [
             <span key="t4">
               <M>neargate_buy</M>
-              <Sub>{'{ id, maxNear?, fromEscrow?, method?, body? }'}</Sub>
+              <Sub>{'{ id, maxNear?, fromEscrow?, gasless?, method?, body? }'}</Sub>
             </span>,
-            'Pays the invoice with a registry pay call and returns the response body. maxNear caps the total. With fromEscrow it calls pay_from_escrow instead, debiting the prepaid escrow (ERR_ESCROW_INSUFFICIENT, before sending, if it holds less).',
+            'Pays the invoice with a registry pay call and returns the response body. maxNear caps the total. With fromEscrow it calls pay_from_escrow instead, debiting the prepaid escrow (ERR_ESCROW_INSUFFICIENT, before sending, if it holds less). gasless implies fromEscrow and signs that call as a delegate the gateway relays, paying the gas (RELAYER_UNAVAILABLE when the gateway offers no relayer); the result then says gasless and names the relayer.',
             <strong key="y" className="text-white">
               yes
             </strong>,
@@ -650,7 +670,8 @@ export default function Page() {
         <M>neargate_escrow_balance</M> when it is given no account), so the three catalog tools work
         with no key configured. Point an agent at a restricted{' '}
         <DocLink href="#agent-key">agent key</DocLink> (<M>--key-file</M>) and it can call{' '}
-        <M>neargate_buy</M> with <M>fromEscrow: true</M> and nothing more. A failing tool returns an error result that leads with the stable
+        <M>neargate_buy</M> with <M>fromEscrow: true</M> (or <M>gasless: true</M>) and nothing
+        more. A failing tool returns an error result that leads with the stable
         code (<M>BUDGET_EXCEEDED</M>, <M>SERVICE_INACTIVE</M>, <M>PAID_NOT_SERVED</M>…), so an agent
         can branch on it; the codes are the ones in <DocLink href="#error-codes">Error codes</DocLink>.
       </P>
@@ -774,7 +795,7 @@ export default function Page() {
       <P>
         Raised by <M>buy</M>, <M>neargate_buy</M> and <M>fetchPaid</M> in <M>@agentgate/client</M>.
         Every refusal below happens <em>before</em> a payment is sent, except{' '}
-        <M>PAID_NOT_SERVED</M>.
+        <M>PAID_NOT_SERVED</M> and <M>GASLESS_NOT_SERVED</M>.
       </P>
       <DocTable
         head={['Code', 'Meaning, and what to do']}
@@ -866,6 +887,32 @@ export default function Page() {
               <Sub>
                 Do not pay a fresh invoice for it. Re-present the same proof (an X-PAYMENT for that
                 transaction and nonce) once the gateway is reachable or the payment has settled.
+              </Sub>
+            </span>,
+          ],
+          [
+            <M key="11">RELAYER_UNAVAILABLE</M>,
+            <span key="11m">
+              --gasless only: the gateway’s 402 offers no relayer of <M>pay_from_escrow</M> (no{' '}
+              <M>extra.relayer</M>; the gateway runs without RELAYER_ENABLED). Nothing was read or
+              signed.
+              <Sub>Buy with --from-escrow, which pays the gas from your account.</Sub>
+            </span>,
+          ],
+          [
+            <M key="12">GASLESS_NOT_SERVED</M>,
+            <span key="12m">
+              --gasless only: the gateway did not serve the call. The account sent nothing; the
+              escrow paid only if the gateway’s relay landed. The error names the nonce, the
+              service and a reason: <M>refused</M> (the gateway’s 402 error, and after{' '}
+              <M>relay_failed</M> the chain code, e.g. <M>ERR_ESCROW_INSUFFICIENT</M>: nothing was
+              paid), <M>settlement_pending</M> (the relay, with its transaction when the gateway
+              named it, was still settling: it may have paid), <M>redirect</M> or{' '}
+              <M>transport</M> (the gateway may have relayed it).
+              <Sub>
+                After settlement_pending, redirect or transport, present the same signed delegate
+                again (the error carries it); never sign a new one for that invoice while its relay
+                may still land. After refused, fix the cause and buy again.
               </Sub>
             </span>,
           ],

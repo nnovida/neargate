@@ -48,7 +48,7 @@ export const DOC_GROUPS: DocGroup[] = [
       {
         href: '/docs/cli',
         label: 'CLI & MCP',
-        keywords: ['neargate', 'wrap', 'map', 'buy', 'list', 'status', 'pause', 'resume', 'demo-accounts', 'escrow', 'agent-key', '--from-escrow', '--allowance', 'neargate_escrow_balance', 'fromEscrow', 'ERR_ESCROW_INSUFFICIENT', 'mcp', 'claude desktop', '--account', '--key-file', '--max', '--price', '--registry', '--rpc', '--mode', 'neargate_buy', 'neargate_list_services', 'error codes', 'BUDGET_EXCEEDED', 'PAID_NOT_SERVED', 'TX_TIMEOUT', 'RPC_TIMEOUT', 'SIGNER_KEY_NOT_FOUND', 'REGISTRY_MISMATCH', 'SERVICE_MISMATCH', 'troubleshooting'],
+        keywords: ['neargate', 'wrap', 'map', 'buy', 'list', 'status', 'pause', 'resume', 'demo-accounts', 'escrow', 'agent-key', '--from-escrow', '--gasless', 'gasless', '--allowance', 'neargate_escrow_balance', 'fromEscrow', 'ERR_ESCROW_INSUFFICIENT', 'RELAYER_UNAVAILABLE', 'GASLESS_NOT_SERVED', 'mcp', 'claude desktop', '--account', '--key-file', '--max', '--price', '--registry', '--rpc', '--mode', 'neargate_buy', 'neargate_list_services', 'error codes', 'BUDGET_EXCEEDED', 'PAID_NOT_SERVED', 'TX_TIMEOUT', 'RPC_TIMEOUT', 'SIGNER_KEY_NOT_FOUND', 'REGISTRY_MISMATCH', 'SERVICE_MISMATCH', 'troubleshooting'],
       },
     ],
   },
@@ -58,12 +58,12 @@ export const DOC_GROUPS: DocGroup[] = [
       {
         href: '/docs/protocol',
         label: 'How it works',
-        keywords: ['nonce', 'X-PAYMENT', 'X-PAYMENT-RESPONSE', 'invoice', '402', 'PaymentRequiredResponse', 'accepts', 'maxAmountRequired', 'storage fee', 'pay', 'attestation', 'receipts', 'receipt', 'x402Version', 'near-testnet', 'near-mock', 'protocol', 'flow', 'verification', 'settlement_pending'],
+        keywords: ['nonce', 'X-PAYMENT', 'X-PAYMENT-RESPONSE', 'invoice', '402', 'PaymentRequiredResponse', 'accepts', 'maxAmountRequired', 'storage fee', 'pay', 'attestation', 'receipts', 'receipt', 'x402Version', 'near-testnet', 'near-mock', 'protocol', 'flow', 'verification', 'settlement_pending', 'gasless', 'delegate', 'NEP-366', 'meta transaction', 'relayer', 'RELAYER_ENABLED', 'signedDelegate', 'relay_failed', 'relayer_disabled', 'bad_signature', 'stale_nonce'],
       },
       {
         href: '/docs/security',
         label: 'Security model',
-        keywords: ['trust model', 'ssrf', 'replay', 'self-payment', 'wash trading', 'self-map', 'owner signature', 'full access key', 'admin token', 'rate limit', 'keys', 'TRUST_PROXY', 'redirect', 'budget cap', 'attestor', 'guards', 'agent key', 'function-call key', 'spending limit', 'blast radius', 'escrow'],
+        keywords: ['trust model', 'ssrf', 'replay', 'self-payment', 'wash trading', 'self-map', 'owner signature', 'full access key', 'admin token', 'rate limit', 'keys', 'TRUST_PROXY', 'redirect', 'budget cap', 'attestor', 'guards', 'agent key', 'function-call key', 'spending limit', 'blast radius', 'escrow', 'relayer', 'gasless', 'front-running', 'RELAYER_ENABLED'],
       },
     ],
   },
