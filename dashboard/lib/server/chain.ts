@@ -32,7 +32,9 @@ let cached: ChainHandle | null = null;
  */
 export function getChain(): ChainHandle {
   if (cached) return cached;
-  const config = loadConfig();
+  // The dashboard only reads the chain: it never serves /admin, so it must not need the gateway's
+  // admin token to start (a public dashboard process should not hold that secret at all).
+  const config = loadConfig(process.env, { requireStrongAdminToken: false });
   const chain = createChainClient(config);
   cached = { config, chain };
   return cached;

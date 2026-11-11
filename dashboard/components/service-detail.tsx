@@ -14,7 +14,7 @@ import { ScoreViz } from '@/components/score-viz';
 import { SafeLink } from '@/components/safe-link';
 import { TxHash } from '@/components/tx-hash';
 import { CommandBlock, CopyButton } from '@/components/copy';
-import { ChainDownBanner, EmptyState, ErrorState, Skeleton } from '@/components/states';
+import { ChainDownBanner, EmptyState, ErrorState, Skeleton, StaleNotice } from '@/components/states';
 import { LiveDot } from '@/components/live-dot';
 
 /** One labelled row of the metadata panel; `children` is the value (text, a link, an account). */
@@ -137,7 +137,13 @@ export function ServiceDetail({ id }: { id: number }) {
 
   return (
     <>
-      {error ? <ChainDownBanner /> : null}
+      {data.stale ? (
+        <StaleNotice className="mb-6">
+          Showing cached data for this service — the live refresh failed. Retrying automatically.
+        </StaleNotice>
+      ) : error ? (
+        <ChainDownBanner />
+      ) : null}
 
       {/* header */}
       <div className="flex flex-wrap items-end justify-between gap-4">

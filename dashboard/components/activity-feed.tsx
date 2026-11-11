@@ -9,7 +9,7 @@ import { fetcher, isChainDown, isRateLimited } from '@/lib/fetcher';
 import { formatDateTime, formatInt, svcLabel, timeAgo } from '@/lib/format';
 import type { ActivityResponse } from '@/lib/api-types';
 import { TxHash } from '@/components/tx-hash';
-import { ChainDownBanner, EmptyState, ErrorState, Skeleton } from '@/components/states';
+import { ChainDownBanner, EmptyState, ErrorState, Skeleton, StaleNotice } from '@/components/states';
 import { LiveDot } from '@/components/live-dot';
 
 type Kind = ActivityEvent['kind'];
@@ -285,10 +285,10 @@ export function ActivityFeed() {
   return (
     <div className="space-y-6">
       {data.stale ? (
-        <p className="border border-warn/30 bg-warn/5 px-4 py-2 text-xs text-warn">
+        <StaleNotice>
           Showing cached activity — the live history refresh hit the chain RPC rate limit.
           Retrying automatically.
-        </p>
+        </StaleNotice>
       ) : error ? (
         <ChainDownBanner />
       ) : null}

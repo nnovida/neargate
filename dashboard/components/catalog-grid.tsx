@@ -9,7 +9,7 @@ import { formatInt, svcLabel } from '@/lib/format';
 import type { CatalogEntry, ServicesResponse } from '@/lib/api-types';
 import { TrustBadge } from '@/components/trust-badge';
 import { CommandBlock } from '@/components/copy';
-import { ChainDownBanner, EmptyState, ErrorState, Skeleton } from '@/components/states';
+import { ChainDownBanner, EmptyState, ErrorState, Skeleton, StaleNotice } from '@/components/states';
 import { LiveDot } from '@/components/live-dot';
 
 const WRAP_CMD =
@@ -269,7 +269,13 @@ export function CatalogGrid() {
 
   return (
     <>
-      {error ? <ChainDownBanner /> : null}
+      {data.stale ? (
+        <StaleNotice className="mb-6">
+          Showing the cached catalog — the live refresh failed. Retrying automatically.
+        </StaleNotice>
+      ) : error ? (
+        <ChainDownBanner />
+      ) : null}
       <div className="mb-5 flex items-center justify-between gap-4">
         <p className="font-mono text-xs text-mut">
           <span className="text-white">{formatInt(data.services.length)}</span> service

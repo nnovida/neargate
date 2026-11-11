@@ -9,8 +9,9 @@ import { SWRConfig } from 'swr';
 import { describe, expect, it } from 'vitest';
 import { base58Encode, type ActivityEvent, type ServiceRecord } from '@agentgate/shared';
 import { ActivityFeed } from '@/components/activity-feed';
+import { CatalogGrid } from '@/components/catalog-grid';
 import { ServiceDetail } from '@/components/service-detail';
-import type { ActivityResponse, ServiceDetailResponse } from '@/lib/api-types';
+import type { ActivityResponse, ServiceDetailResponse, ServicesResponse } from '@/lib/api-types';
 
 const EXPLORER = 'https://testnet.nearblocks.io';
 const PAY_TX = base58Encode(new Uint8Array(32).fill(3));
@@ -122,6 +123,56 @@ describe('ServiceDetail', () => {
       const out = detail('near-testnet', hostile);
       expect(out).not.toMatch(/href="(javascript|data):/i);
       expect(out).toContain('&lt;gateway endpoint&gt;'); // the snippet carries a placeholder, not the value
+    }
+  });
+});
+
+describe('the cached-data notice (stale: true, set when a route served its cache after a failed refresh)', () => {
+  const activityBody = (stale: boolean): ActivityResponse => ({
+    network: 'near-testnet',
+    explorerUrl: EXPLORER,
+    events: events(PAY_TX),
+    ...(stale ? { stale } : {}),
+  });
+  const catalogBody = (stale: boolean): ServicesResponse => ({
+    network: 'near-testnet',
+    services: [{ service: service('https://gateway.example.org/svc/1'), score: { totalCalls: 1, successCalls: 1 }, trustTier: 'new' }],
+    ...(stale ? { stale } : {}),
+  });
+  const detailBody = (stale: boolean): ServiceDetailResponse => ({
+    network: 'near-testnet',
+    explorerUrl: EXPLORER,
+    mode: 'live',
+    service: service('https://gateway.example.org/svc/1'),
+    score: { totalCalls: 1, successCalls: 1 },
+    trustTier: 'new',
+    attestations: [],
+    revenueYocto: '500000000000000000000000',
+    balanceYocto: null,
+    ...(stale ? { stale } : {}),
+  });
+
+  it('shows on the activity feed, the catalog and a service page, and only when stale', () => {
+    const surfaces: Array<{ name: string; html: (stale: boolean) => string; text: string }> = [
+      {
+        name: 'activity',
+        html: (stale) => render({ '/api/activity?limit=100': activityBody(stale) }, ActivityFeed, {}),
+        text: 'Showing cached activity',
+      },
+      {
+        name: 'catalog',
+        html: (stale) => render({ '/api/services': catalogBody(stale) }, CatalogGrid, {}),
+        text: 'Showing the cached catalog',
+      },
+      {
+        name: 'service',
+        html: (stale) => render({ '/api/services/1': detailBody(stale) }, ServiceDetail, { id: 1 }),
+        text: 'Showing cached data for this service',
+      },
+    ];
+    for (const { name, html, text } of surfaces) {
+      expect(html(true), name).toContain(text);
+      expect(html(false), name).not.toContain('Retrying automatically');
     }
   });
 });

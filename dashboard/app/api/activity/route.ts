@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getChain, parseLimit, toApiFailure } from '@/lib/server/chain';
+import { TtlCache } from '@/lib/server/ttl-cache';
 import type { ActivityResponse } from '@/lib/api-types';
 
 export const runtime = 'nodejs';
@@ -14,30 +15,26 @@ export const fetchCache = 'force-no-store';
  * 429) so the feed degrades to "cached" instead of blank.
  */
 const CACHE_TTL_MS = 30_000;
-type Entry = { at: number; body: ActivityResponse };
-const cache = new Map<number, Entry>();
+const cache = new TtlCache<ActivityResponse>(CACHE_TTL_MS);
+
+async function loadActivity(limit: number): Promise<ActivityResponse> {
+  const { chain, config } = getChain();
+  const events = await chain.listRecentActivity(limit);
+  return { network: chain.network, explorerUrl: config.nearExplorerUrl, events };
+}
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const limit = parseLimit(req.nextUrl.searchParams.get('limit'), 50, 200);
-  const now = Date.now();
-  const hit = cache.get(limit);
-  if (hit && now - hit.at < CACHE_TTL_MS) {
-    return NextResponse.json(hit.body, { headers: { 'x-cache': 'hit' } });
-  }
+  const key = String(limit);
   try {
-    const { chain, config } = getChain();
-    const events = await chain.listRecentActivity(limit);
-    const body: ActivityResponse = { network: chain.network, explorerUrl: config.nearExplorerUrl, events };
-    cache.set(limit, { at: now, body });
-    return NextResponse.json(body, { headers: { 'x-cache': 'miss' } });
+    const { body, via } = await cache.load(key, () => loadActivity(limit));
+    return NextResponse.json(body, { headers: { 'x-cache': via } });
   } catch (err) {
     // Serve the last good data through a transient upstream failure so the feed
     // shows "cached" rather than emptying out (RPC 429s, brief outages).
-    if (hit) {
-      return NextResponse.json(
-        { ...hit.body, stale: true },
-        { headers: { 'x-cache': 'stale' } },
-      );
+    const latest = cache.peekLatest(key);
+    if (latest !== null) {
+      return NextResponse.json({ ...latest, stale: true }, { headers: { 'x-cache': 'stale' } });
     }
     const { status, body } = toApiFailure(err, '/api/activity');
     return NextResponse.json(body, { status });

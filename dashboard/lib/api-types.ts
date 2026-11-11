@@ -20,6 +20,8 @@ export interface CatalogEntry {
 export interface ServicesResponse {
   network: string;
   services: CatalogEntry[];
+  /** True when served from the server cache because a live refresh failed (e.g. an RPC rate limit). */
+  stale?: boolean;
 }
 
 export interface ServiceDetailResponse {
@@ -35,6 +37,8 @@ export interface ServiceDetailResponse {
   revenueYocto: Yocto;
   /** getBalance(paymentTarget) — mock mode only, null in live or on failure. */
   balanceYocto: Yocto | null;
+  /** True when served from the server cache because a live refresh failed (e.g. an RPC rate limit). */
+  stale?: boolean;
 }
 
 export interface ActivityResponse {
@@ -54,6 +58,8 @@ export interface StatsResponse {
   successCalls: number;
   /** Σ price × successCalls across all services (bigint-safe yocto string). */
   revenueYocto: Yocto;
+  /** True when served from the server cache because a live refresh failed (e.g. an RPC rate limit). */
+  stale?: boolean;
 }
 
 export interface ApiErrorBody {

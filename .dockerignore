@@ -9,10 +9,11 @@ node_modules
 # Rust build artifacts (~7 GB) + contract sources — never needed in images.
 contracts
 
-# Next.js app: images don't run the dashboard, but `npm ci` validates the
-# lockfile against EVERY workspace manifest, so keep dashboard/package.json.
-dashboard/*
-!dashboard/package.json
+# Next.js app: the dashboard image (dashboard/Dockerfile) builds it, the other images only need
+# dashboard/package.json (`npm ci` validates the lockfile against EVERY workspace manifest).
+# dashboard/test imports workspaces the dashboard image does not carry, and `next build`
+# type-checks everything under dashboard/.
+dashboard/test
 **/.next
 
 # Runtime/local state.

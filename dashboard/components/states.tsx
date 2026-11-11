@@ -26,6 +26,18 @@ export function ChainDownBanner() {
   );
 }
 
+/**
+ * Amber notice shown when an /api/* route served its last cached body (`stale: true`) because the
+ * live refresh failed.
+ */
+export function StaleNotice({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return (
+    <p className={`border border-warn/30 bg-warn/5 px-4 py-2 text-xs text-warn${className ? ` ${className}` : ''}`}>
+      {children}
+    </p>
+  );
+}
+
 /** Generic non-chain error surface. */
 export function ErrorState({ title, detail }: { title: string; detail?: string }) {
   return (
