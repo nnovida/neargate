@@ -46,12 +46,14 @@ export interface BuyServiceResult {
  * fee above the cap, malformed body), then run the full 402 → pay →
  * retry-with-proof exchange via the client's fetchPaid. Payment is a registry
  * `pay` call carrying the invoice nonce, with the price plus the storage fee
- * attached; the client refuses an invoice for any other service id.
+ * attached; the client refuses an invoice for any other service id, never follows
+ * a redirect (REDIRECT_REFUSED), and throws PAID_NOT_SERVED (with the tx hash and
+ * nonce to re-present) when a paid call is not served.
  */
 export async function buyService(opts: BuyServiceOpts): Promise<BuyServiceResult> {
   const { chain, signer, id } = opts;
 
-  if (!Number.isInteger(id) || id < 1) {
+  if (!Number.isSafeInteger(id) || id < 1) {
     throw new AgentGateError(
       'INVALID_SERVICE_ID',
       `service id must be a positive integer, got ${String(id)}`,
@@ -146,9 +148,7 @@ export function formatBuyReceipt(bought: BuyServiceResult, opts: { explorerUrl?:
       const payer = result.settlement.payer !== undefined ? `  (payer ${result.settlement.payer})` : '';
       lines.push(`settled:  ${result.settlement.success ? 'ok' : 'FAILED'}${payer}`);
     }
-    if (result.status === 402) {
-      lines.push('warning:  payment sent but the gateway still answered 402 — see the body for the error code');
-    }
+    // A paid call the gateway does not serve never gets here: fetchPaid throws PAID_NOT_SERVED.
   }
   lines.push(`status:   ${result.status}`);
   return lines;

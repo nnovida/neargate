@@ -12,7 +12,7 @@ import { MockLlm, runBuyerAgent } from '@agentgate/buyer-agent';
 import { startServer as startDevnet } from '@agentgate/devnet';
 import { startServer as startMiddleware } from '@agentgate/middleware';
 import { startServer as startOracle } from '@agentgate/oracle';
-import { formatPriceWithStorage, loadConfig, nearToYocto, type AnySigner } from '@agentgate/shared';
+import { formatNear, loadConfig, type AnySigner } from '@agentgate/shared';
 
 // The dev stack is the mock loop by definition.
 process.env.AGENTGATE_MODE = 'mock';
@@ -109,7 +109,7 @@ ${line}
 NearGate dev stack is up (mock mode) — SEEDED and ready to view.
 
   service #${wrapped.serviceId}   ${wrapped.publicUrl}
-  paid call    ${report.paid ? formatPriceWithStorage(nearToYocto(SEED_PRICE_NEAR)) + ' · tx ' + String(report.paymentTxHash).slice(0, 16) + '…' : 'FAILED'}
+  paid call    ${report.paid ? `${formatNear(report.spentYocto)} spent (price + storage) · tx ${String(report.paymentTxHash).slice(0, 16)}…` : `not paid — ${report.summary}`}
   attestation  ${report.attestationTxHash ? String(report.attestationTxHash).slice(0, 16) + '…' : 'pending'}
   score        ${score.successCalls}/${score.totalCalls} (success/total)
 

@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type {
@@ -289,6 +291,61 @@ describe('NearGate MCP server', () => {
     const res = await client.callTool({ name: 'neargate_buy', arguments: { id: 999 } });
     expect((res as { isError?: boolean }).isError).toBe(true);
     expect(textOf(res)).toMatch(/not found/i);
+    await client.close();
+  });
+});
+
+/** Start an HTTP server on an ephemeral loopback port. */
+async function listen(handler: (req: IncomingMessage, res: ServerResponse) => void): Promise<{ server: Server; base: string }> {
+  const server = createServer(handler);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  return { server, base: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+}
+
+describe('NearGate MCP server · a gateway redirect is never followed (R35)', () => {
+  let target: Server;
+  let gateway: Server;
+  let targetHits: number;
+  let redirectingService: ServiceRecord;
+
+  beforeEach(async () => {
+    targetHits = 0;
+    const t = await listen((_req, res) => {
+      targetHits += 1;
+      res.end('{"instanceRole":"secret"}');
+    });
+    target = t.server;
+    // A public-looking gateway that answers every request with a redirect to a private URL.
+    const g = await listen((_req, res) => {
+      res.writeHead(302, { location: `${t.base}/latest/meta-data/` });
+      res.end();
+    });
+    gateway = g.server;
+    redirectingService = makeService(3, { endpointUrl: `${g.base}/svc/3` });
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => gateway.close(() => resolve()));
+    await new Promise<void>((resolve) => target.close(() => resolve()));
+  });
+
+  it('neargate_get_invoice refuses the redirect (REDIRECT_REFUSED) and never contacts the target', async () => {
+    const client = await connectClient({ chain: makeChain([redirectingService]), signerProvider: () => BUYER });
+    const res = await client.callTool({ name: 'neargate_get_invoice', arguments: { id: 3 } });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(res)).toMatch(/^REDIRECT_REFUSED: .*302/);
+    expect(targetHits).toBe(0);
+    await client.close();
+  });
+
+  it('neargate_buy refuses the redirect before paying anything', async () => {
+    const chain = makeChain([redirectingService]);
+    const client = await connectClient({ chain, signerProvider: () => BUYER });
+    const res = await client.callTool({ name: 'neargate_buy', arguments: { id: 3 } });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(res)).toContain('REDIRECT_REFUSED');
+    expect(chain.paid).toHaveLength(0);
+    expect(targetHits).toBe(0);
     await client.close();
   });
 });

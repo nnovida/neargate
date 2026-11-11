@@ -36,6 +36,16 @@ function isSet(value: string | undefined): value is string {
   return value !== undefined && value.trim() !== '';
 }
 
+/** Notes this process already printed: one process can resolve many signers (the MCP server, one per buy). */
+const printedNotes = new Set<string>();
+
+/** Prints `note: <text>` to stderr once per process. */
+function noteOnce(text: string): void {
+  if (printedNotes.has(text)) return;
+  printedNotes.add(text);
+  process.stderr.write(`note: ${text}\n`);
+}
+
 /**
  * Account id of a signer. `wrap` uses it as the default payment target and
  * attestor. Mock and NEAR key signers both carry their account id.
@@ -48,10 +58,14 @@ export function signerAccountId(signer: AnySigner): string {
  * The signer a command uses for `role`.
  *
  * - mock: `{kind: 'mock'}` for `--account`, else MOCK_SELLER_ACCOUNT / MOCK_BUYER_ACCOUNT.
+ *   Mock signers carry no key: a given `--key-file` is ignored, with a note.
  * - live: the account is `--account`, else SELLER_ACCOUNT_ID / BUYER_ACCOUNT_ID; its key is
  *   resolved now (fail fast, before any chain call) by `loadNearSigner`, in its order: the
  *   role's *_PRIVATE_KEY, then `--key-file` (else the role's *_KEY_PATH), then
  *   `~/.near-credentials/<NEAR_NETWORK>/<account>.json`. Returns the resolved key source.
+ *   A `--key-file` that the *_PRIVATE_KEY overrides gets a note.
+ *
+ * Notes go to stderr, once per process.
  */
 export async function cliSigner(
   config: AgentGateConfig,
@@ -70,6 +84,9 @@ export async function cliSigner(
         400,
       );
     }
+    if (isSet(flags.keyFile)) {
+      noteOnce('mock mode ignores --key-file (mock signers carry no key)');
+    }
     return { kind: 'mock', accountId };
   }
 
@@ -85,9 +102,9 @@ export async function cliSigner(
   const secretKey = role === 'seller' ? config.sellerPrivateKey : config.buyerPrivateKey;
   const keyPath = isSet(flags.keyFile) ? flags.keyFile : role === 'seller' ? config.sellerKeyPath : config.buyerKeyPath;
   if (isSet(secretKey) && isSet(flags.keyFile)) {
-    process.stderr.write(
-      `note: ${vars.secretKey} is set and takes precedence over --key-file ` +
-        '(key order: secret key, key file, ~/.near-credentials)\n',
+    noteOnce(
+      `${vars.secretKey} is set and takes precedence over --key-file ` +
+        '(key order: secret key, key file, ~/.near-credentials)',
     );
   }
   const { signer } = await loadNearSigner({

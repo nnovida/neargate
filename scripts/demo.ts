@@ -28,8 +28,8 @@ import { startServer as startDevnet } from '@agentgate/devnet';
 import { startServer as startMiddleware } from '@agentgate/middleware';
 import { startServer as startOracle } from '@agentgate/oracle';
 import {
+  formatError,
   formatPriceWithStorage,
-  isAgentGateError,
   loadConfig,
   trustTier,
   type ActivityEvent,
@@ -180,14 +180,7 @@ main()
     setTimeout(() => process.exit(0), 2000).unref();
   })
   .catch(async (err: unknown) => {
-    const message = isAgentGateError(err)
-      ? err.message.startsWith(err.code)
-        ? err.message
-        : `${err.code}: ${err.message}`
-      : err instanceof Error
-        ? err.message
-        : String(err);
-    console.error(`demo failed: ${message}`);
+    console.error(`demo failed: ${formatError(err)}`);
     await cleanup();
     process.exit(1);
   });

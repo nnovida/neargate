@@ -239,6 +239,23 @@ describe('wrapService', () => {
     expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('never follows a redirect on the admin POST (the bearer token stays on the gateway)', async () => {
+    const chain = makeFakeChain();
+    const { impl, calls } = makeFakeFetch(
+      () => new Response(null, { status: 308, headers: { location: 'http://169.254.169.254/latest/meta-data' } }),
+    );
+
+    const result = await wrapService(baseWrapOpts(chain, impl));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.init?.redirect).toBe('manual');
+    expect(result.adminOk).toBe(false);
+    expect(result.adminWarning).toContain('HTTP 308');
+    expect(result.adminWarning).toContain('redirect');
+    expect(result.adminWarning).not.toContain('169.254.169.254');
+    expect(chain.registered).toHaveLength(1);
+  });
+
   it('treats a network error on the admin POST the same way', async () => {
     const chain = makeFakeChain();
     const impl = async (): Promise<Response> => {
@@ -517,6 +534,10 @@ describe('formatServiceTable (neargate list)', () => {
     expect(lines[2]!.split(/\s{2,}/)).toEqual(['12', 'FX', '2.5', '0/0', 'new', 'no']);
     // columns line up
     expect(lines[1]!.indexOf('0.5')).toBe(lines[0]!.indexOf('price(NEAR)'));
+  });
+
+  it('an empty catalog is the header line alone (scripts parse it)', () => {
+    expect(formatServiceTable([])).toBe('id  name  price(NEAR)  calls  tier  active');
   });
 });
 

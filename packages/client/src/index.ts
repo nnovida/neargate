@@ -1,18 +1,21 @@
 import type { AnySigner, ChainClient, Logger, Yocto } from '@agentgate/shared';
 import {
   AgentGateError,
+  PAYMENT_STORAGE_FEE_YOCTO,
   addYocto,
   compareYocto,
+  formatError,
   formatNear,
   formatPriceWithStorage,
   isMockNetwork,
   isNearAccountId,
+  isRecord,
   isValidNonce,
   parseYocto,
 } from '@agentgate/shared';
 import {
   encodeXPayment, decodeXPaymentResponse,
-  X402_VERSION, X402_SCHEME,
+  X402_ASSET_NEAR, X402_VERSION, X402_SCHEME,
   type PaymentRequirements, type SettlementResponse,
 } from '@agentgate/shared';
 import { resolvedHostIsPublic, validateHttpUrl } from '@agentgate/shared/net-guard';
@@ -65,8 +68,96 @@ export interface AgentGateClient {
    * Retry-After and retries the same proof, up to 3×. Non-402 first responses pass
    * through. Exposes `requirements` (parsed entry) and `settlement` (decoded
    * X-PAYMENT-RESPONSE) on success.
+   *
+   * A redirect is never followed (`redirect: 'manual'`, whatever `init` says): a 3xx on the
+   * invoice request throws REDIRECT_REFUSED before anything is paid. Once the payment went
+   * through, a call the gateway does not serve (a 402 refusal of the proof, settlement still
+   * pending after the retries, a 3xx, a network error or timeout) throws PaidNotServedError
+   * (PAID_NOT_SERVED) carrying the proof to re-present.
    */
   fetchPaid(url: string, init?: RequestInit): Promise<PayAndFetchResult>;
+}
+
+/** Why a paid call was not served; see PaidNotServedError. */
+export type PaidNotServedReason = 'refused' | 'settlement_pending' | 'redirect' | 'transport';
+
+/**
+ * PAID_NOT_SERVED: the registry `pay` went through, so the deposit is spent, but the gateway did
+ * not serve the call. Do not pay a fresh invoice for it: re-present this proof (an X-PAYMENT
+ * `{kind: 'tx', transaction: txHash, nonce, payer}` for the same URL) once the gateway is
+ * reachable or the payment has settled. The error carries what that takes:
+ *
+ * - `txHash`: the `pay` transaction (the proof's `transaction`)
+ * - `nonce`: the invoice nonce it paid
+ * - `serviceId`: the registry service it paid
+ * - `depositYocto`: what it attached, price + storage fee (already spent)
+ * - `reason`: `refused` (the gateway answered the proof with a 402 refusal, e.g. not_found),
+ *   `settlement_pending` (still settling after the last retry), `redirect` (a 3xx, never
+ *   followed) or `transport` (a network error or timeout)
+ * - `status`: the gateway's HTTP status, when it answered (undefined for `transport`)
+ */
+export class PaidNotServedError extends AgentGateError {
+  readonly txHash: string;
+  readonly nonce: string;
+  readonly serviceId: number;
+  readonly depositYocto: Yocto;
+  readonly reason: PaidNotServedReason;
+  readonly status: number | undefined;
+
+  constructor(
+    proof: { txHash: string; nonce: string; serviceId: number; depositYocto: Yocto },
+    reason: PaidNotServedReason,
+    status: number | undefined,
+    detail: string,
+  ) {
+    super(
+      'PAID_NOT_SERVED',
+      `paid ${formatNear(proof.depositYocto)} for service ${proof.serviceId} (tx ${proof.txHash}, nonce ${proof.nonce}) ` +
+        `but the call was not served: ${detail} — re-present this proof instead of paying a new invoice`,
+      502,
+    );
+    this.name = 'PaidNotServedError';
+    this.txHash = proof.txHash;
+    this.nonce = proof.nonce;
+    this.serviceId = proof.serviceId;
+    this.depositYocto = proof.depositYocto;
+    this.reason = reason;
+    this.status = status;
+  }
+}
+
+/** REDIRECT_REFUSED: a gateway answered with a redirect, which NearGate never follows. */
+export class RedirectRefusedError extends AgentGateError {
+  /** The 3xx status (0 for a browser's opaque redirect). */
+  readonly status: number;
+  /** The Location the gateway named, JSON-quoted and cut to 200 characters ('' when none). */
+  readonly location: string;
+
+  constructor(url: string, status: number, location: string | null) {
+    const target = location === null ? '' : quoteUrl(location);
+    super(
+      'REDIRECT_REFUSED',
+      `refusing to follow the HTTP ${status} redirect from ${quoteUrl(url)}${target === '' ? '' : ` to ${target}`}: ` +
+        'a redirect would send the request past the URL guard, so NearGate never follows one',
+      502,
+    );
+    this.name = 'RedirectRefusedError';
+    this.status = status;
+    this.location = target;
+  }
+}
+
+/**
+ * Throws RedirectRefusedError when `res` (fetched with `redirect: 'manual'`) is a redirect: any
+ * 3xx, or a browser's opaque redirect. Every client→gateway fetch checks its answer with this,
+ * so a gateway URL that passed the URL guard cannot bounce the request (or, on the paid retry,
+ * the X-PAYMENT proof) to a private or otherwise unchecked address.
+ */
+export async function refuseRedirect(url: string, res: Response): Promise<void> {
+  const opaque = res.type === 'opaqueredirect';
+  if (!opaque && (res.status < 300 || res.status > 399)) return;
+  await res.body?.cancel().catch(() => undefined);
+  throw new RedirectRefusedError(url, opaque ? 0 : res.status, res.headers.get('location'));
 }
 
 /** Extra proof attempts while the gateway answers `settlement_pending`. */
@@ -86,8 +177,9 @@ function badInvoice(why: string): AgentGateError {
   return new AgentGateError('BAD_INVOICE', `invalid 402 invoice: ${why}`, 502);
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
+/** A seller-controlled URL as error text: JSON-quoted (no control characters) and cut to 200 characters. */
+function quoteUrl(raw: string): string {
+  return JSON.stringify(String(raw).slice(0, 200));
 }
 
 function isYocto(v: unknown): v is Yocto {
@@ -111,14 +203,14 @@ export async function assertFetchableUrl(raw: string, opts: { rejectPrivateHosts
   if (!parsed.ok) {
     throw new AgentGateError(
       parsed.error === 'forbidden_host' ? 'FORBIDDEN_HOST' : 'BAD_URL',
-      `refusing to fetch ${JSON.stringify(String(raw).slice(0, 200))}: ${parsed.error}`,
+      `refusing to fetch ${quoteUrl(raw)}: ${parsed.error}`,
       400,
     );
   }
   if (opts.rejectPrivateHosts && !(await resolvedHostIsPublic(parsed.url.hostname))) {
     throw new AgentGateError(
       'FORBIDDEN_HOST',
-      `refusing to fetch ${raw}: host resolves to a private/unreachable address`,
+      `refusing to fetch ${quoteUrl(raw)}: host resolves to a private/unreachable address`,
       400,
     );
   }
@@ -127,13 +219,15 @@ export async function assertFetchableUrl(raw: string, opts: { rejectPrivateHosts
 
 /**
  * Strict runtime validation of a PaymentRequiredResponse body. Finds the first
- * accepts[] entry matching scheme==="exact" and network===chainNetwork, then
- * validates maxAmountRequired (yocto), payTo (NEAR account id),
- * extra.serviceId (positive safe integer), extra.nonce (u64 decimal),
- * extra.expiresAtMs (future unix ms) and the registry rail: settlement
- * "neargate-registry-pay", method "pay", contractId === payTo, and
+ * accepts[] entry with scheme "exact", network === chainNetwork and asset "NEAR"
+ * (entries in other assets are skipped), then validates maxAmountRequired (yocto),
+ * payTo (NEAR account id), extra.serviceId (positive safe integer), extra.nonce
+ * (u64 decimal), extra.expiresAtMs (future unix ms) and the registry rail:
+ * settlement "neargate-registry-pay", method "pay", contractId === payTo,
+ * storageFeeYocto === the registry's PAYMENT_STORAGE_FEE_YOCTO, and
  * priceYocto + storageFeeYocto === maxAmountRequired.
- * Throws AgentGateError('BAD_INVOICE') on any violation.
+ * Throws NETWORK_MISMATCH when nothing is offered on chainNetwork and
+ * AgentGateError('BAD_INVOICE') on any other violation.
  */
 export function parsePaymentRequired(
   raw: unknown, chainNetwork: string, now: number = Date.now(),
@@ -146,8 +240,13 @@ export function parsePaymentRequired(
     (a): a is PaymentRequirements => isRecord(a) && a['scheme'] === X402_SCHEME,
   );
   if (schemeMatches.length === 0) throw badInvoice(`no accepts entry for scheme "${X402_SCHEME}"`);
-  const req = schemeMatches.find((a) => a['network'] === chainNetwork);
-  if (!req) throw new AgentGateError('NETWORK_MISMATCH', `invoice offers no payment on network "${chainNetwork}" — refusing to pay`, 502);
+  const onNetwork = schemeMatches.filter((a) => a['network'] === chainNetwork);
+  if (onNetwork.length === 0) {
+    throw new AgentGateError('NETWORK_MISMATCH', `invoice offers no payment on network "${chainNetwork}" — refusing to pay`, 502);
+  }
+  // This client pays one rail: native NEAR through the registry `pay`.
+  const req = onNetwork.find((a) => a['asset'] === X402_ASSET_NEAR);
+  if (!req) throw badInvoice(`no accepts entry pays in ${X402_ASSET_NEAR} on network "${chainNetwork}"`);
   if (typeof req.maxAmountRequired !== 'string') throw badInvoice('maxAmountRequired must be a string');
   try {
     parseYocto(req.maxAmountRequired);
@@ -177,6 +276,14 @@ export function parsePaymentRequired(
   if (req.extra.contractId !== req.payTo) throw badInvoice('extra.contractId must equal payTo');
   if (!isYocto(req.extra.priceYocto)) throw badInvoice('extra.priceYocto must be a yocto decimal string');
   if (!isYocto(req.extra.storageFeeYocto)) throw badInvoice('extra.storageFeeYocto must be a yocto decimal string');
+  // The registry keeps exactly this fee from every `pay`: an invoice that splits the same
+  // total differently misstates what the seller receives.
+  if (req.extra.storageFeeYocto !== PAYMENT_STORAGE_FEE_YOCTO) {
+    throw badInvoice(
+      `extra.storageFeeYocto must be the registry storage fee ${PAYMENT_STORAGE_FEE_YOCTO} (${formatNear(PAYMENT_STORAGE_FEE_YOCTO)}), ` +
+        `got ${JSON.stringify(req.extra.storageFeeYocto.slice(0, 40))}`,
+    );
+  }
   if (compareYocto(addYocto(req.extra.priceYocto, req.extra.storageFeeYocto), req.maxAmountRequired) !== 0) {
     throw badInvoice('maxAmountRequired must equal extra.priceYocto + extra.storageFeeYocto');
   }
@@ -267,22 +374,31 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
   const requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
   const rejectPrivateHosts = opts.rejectPrivateHosts ?? !isMockNetwork(chain.network);
 
-  /** Adds a per-request timeout unless the caller supplied their own signal. */
-  function withTimeout(init?: RequestInit): RequestInit {
-    if (init?.signal) return init;
-    return { ...init, signal: AbortSignal.timeout(requestTimeoutMs) };
+  /**
+   * The init of every client→gateway fetch: a per-request timeout unless the caller supplied
+   * their own signal, and `redirect: 'manual'` whatever the caller asked for, so fetch never
+   * follows a 3xx past the URL guard (`refuseRedirect` then turns it into an error).
+   */
+  function gatewayInit(init?: RequestInit): RequestInit {
+    return {
+      ...init,
+      ...(init?.signal ? {} : { signal: AbortSignal.timeout(requestTimeoutMs) }),
+      redirect: 'manual',
+    };
   }
 
-  /** fetch + readBody, mapping abort/timeout to a typed error. */
+  /** fetch + readBody: refuses a redirect (REDIRECT_REFUSED), maps abort/timeout to UPSTREAM_TIMEOUT. */
   async function doFetch(url: string, init?: RequestInit): Promise<FetchedBody> {
     try {
-      return await readBody(await fetchImpl(url, init));
+      const res = await fetchImpl(url, gatewayInit(init));
+      await refuseRedirect(url, res);
+      return await readBody(res);
     } catch (err) {
       const name = err instanceof Error ? err.name : '';
       if (name === 'TimeoutError' || name === 'AbortError') {
         throw new AgentGateError(
           'UPSTREAM_TIMEOUT',
-          `request to ${url} timed out after ${requestTimeoutMs}ms`,
+          `request to ${quoteUrl(url)} timed out after ${requestTimeoutMs}ms`,
           504,
         );
       }
@@ -300,7 +416,7 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
     // including DNS names that resolve to them (rebinding) — before connecting.
     await assertFetchableUrl(url, { rejectPrivateHosts });
 
-    const first = await doFetch(url, withTimeout(init));
+    const first = await doFetch(url, init);
 
     // Non-402 first responses pass straight through, unpaid.
     if (first.status !== 402) {
@@ -374,16 +490,59 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
       priceYocto: req.extra.priceYocto,
       depositYocto: req.maxAmountRequired,
     };
+    // From here on the deposit is spent: a call that is not served throws PAID_NOT_SERVED with
+    // the proof, so the caller re-presents it instead of paying a fresh invoice.
+    const proof = {
+      txHash,
+      nonce: req.extra.nonce,
+      serviceId: req.extra.serviceId,
+      depositYocto: req.maxAmountRequired,
+    };
     let pendingRetries = 0;
     for (;;) {
-      const res = await doFetch(url, withTimeout(proofInit));
+      let res: FetchedBody;
+      try {
+        res = await doFetch(url, proofInit);
+      } catch (err) {
+        if (err instanceof RedirectRefusedError) {
+          logger?.warn('fetchPaid: paid request redirected, not followed', { url, status: err.status, txHash });
+          throw new PaidNotServedError(
+            proof,
+            'redirect',
+            err.status,
+            `the gateway answered HTTP ${err.status}, a redirect${err.location === '' ? '' : ` to ${err.location}`} (never followed)`,
+          );
+        }
+        logger?.warn('fetchPaid: paid request failed', { url, txHash, error: formatError(err) });
+        throw new PaidNotServedError(proof, 'transport', undefined, `the paid request failed: ${formatError(err)}`);
+      }
       if (res.status !== 402) {
         logger?.info('fetchPaid: paid request completed', { url, status: res.status });
         return { status: res.status, body: res.body, settlement: res.settlement, ...paidFields };
       }
-      if (!isSettlementPending(res.body) || pendingRetries >= MAX_PENDING_RETRIES) {
-        logger?.warn('fetchPaid: proof rejected', { url, status: res.status, pendingRetries });
-        return { status: res.status, body: res.body, ...paidFields };
+      if (!isSettlementPending(res.body)) {
+        const verdict = isRecord(res.body) && typeof res.body['error'] === 'string' ? res.body['error'] : 'no reason given';
+        logger?.warn('fetchPaid: gateway refused the proof', { url, status: res.status, txHash });
+        throw new PaidNotServedError(
+          proof,
+          'refused',
+          res.status,
+          `the gateway refused the proof (HTTP ${res.status} ${JSON.stringify(verdict.slice(0, 80))})`,
+        );
+      }
+      if (pendingRetries >= MAX_PENDING_RETRIES) {
+        logger?.warn('fetchPaid: settlement still pending after the last retry, giving up', {
+          url,
+          status: res.status,
+          pendingRetries,
+          txHash,
+        });
+        throw new PaidNotServedError(
+          proof,
+          'settlement_pending',
+          res.status,
+          `the payment was still settling after ${MAX_PENDING_RETRIES} retries (HTTP ${res.status} ${SETTLEMENT_PENDING})`,
+        );
       }
       pendingRetries += 1;
       const wait = res.retryAfterMs ?? DEFAULT_PENDING_RETRY_MS;

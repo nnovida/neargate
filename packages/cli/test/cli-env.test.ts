@@ -44,11 +44,23 @@ describe('resolveCliEnv', () => {
     expect(out.NEAR_RPC_URL).toBeUndefined();
   });
 
-  it('leaves the signer flags (--account, --key-file) to the role-aware signer, never to env', () => {
-    const out = resolveCliEnv({ account: 'someone.testnet', keyFile: '/k.json' } as never, {});
-    expect(out.SELLER_KEY_PATH).toBeUndefined();
-    expect(out.BUYER_KEY_PATH).toBeUndefined();
-    expect(out.SELLER_ACCOUNT_ID).toBeUndefined();
-    expect(out.BUYER_ACCOUNT_ID).toBeUndefined();
+  it('passes every other env var through untouched and never mutates the caller env', () => {
+    const env = {
+      SELLER_ACCOUNT_ID: 'seller.testnet',
+      BUYER_KEY_PATH: '/keys/buyer.json',
+      NEAR_NETWORK: 'mainnet',
+      AGENTGATE_MODE: 'live',
+    };
+    const before = { ...env };
+
+    const out = resolveCliEnv({ mode: 'mock', registry: 'flag-registry.testnet' }, env);
+
+    expect(out).not.toBe(env);
+    expect(env).toEqual(before);
+    expect(out).toEqual({
+      ...before,
+      AGENTGATE_MODE: 'mock',
+      REGISTRY_CONTRACT_ID: 'flag-registry.testnet',
+    });
   });
 });

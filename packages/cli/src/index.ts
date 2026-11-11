@@ -1,11 +1,11 @@
 export type { FetchLike } from './types';
 export {
   wrapService,
-  adminRetryCurl,
   DEFAULT_DASHBOARD_BASE_URL,
   type WrapServiceOpts,
   type WrapServiceResult,
 } from './wrap';
+export { mapService, adminRetryCurl, type MapServiceOpts, type MapServiceResult } from './map';
 export { listServices, formatServiceTable, type ServiceListing } from './list';
 export {
   buyService,

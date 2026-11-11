@@ -1,5 +1,6 @@
 import { base58Decode } from './base58';
 import { AgentGateError } from './errors';
+import { isRecord } from './guards';
 import { MOCK_NETWORK } from './network';
 import { isValidNonce } from './nonce';
 import type { Yocto } from './types';
@@ -143,10 +144,6 @@ export function caip2For(network: string): Caip2 {
         500,
       );
   }
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function badPayment(why: string): AgentGateError {

@@ -9,7 +9,6 @@ export {
   loadNearSigner,
   type LoadNearSignerOpts,
   type LoadedNearSigner,
-  type NearKeyNetwork,
 } from './near-keys';
 
 /**

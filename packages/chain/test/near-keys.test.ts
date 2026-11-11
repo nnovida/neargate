@@ -109,6 +109,17 @@ describe('loadNearSigner: D4 key resolution order', () => {
     expect(onMainnet.signer).toEqual({ kind: 'near', accountId: ACCOUNT, keyPath: mainnetPath });
   });
 
+  it('expands a leading ~/ in keyPath to the home directory (a quoted --key-file "~/…" reaches us unexpanded)', async () => {
+    const key = newKey();
+    await mkdir(join(home, 'keys'), { recursive: true });
+    const file = await writeKeyFile(join(home, 'keys', 'seller.json'), key);
+
+    const loaded = await loadNearSigner({ accountId: ACCOUNT, keyPath: '~/keys/seller.json', network: 'testnet' });
+
+    expect(loaded.publicKey).toBe(key.publicKey);
+    expect(loaded.signer).toEqual({ kind: 'near', accountId: ACCOUNT, keyPath: file });
+  });
+
   it('treats blank secretKey / keyPath (unset env vars) as absent', async () => {
     const fallback = newKey();
     await defaultKeyFile('testnet', fallback);

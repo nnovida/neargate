@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { ChainClient } from '@agentgate/shared';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ChainClient, Logger } from '@agentgate/shared';
 import {
+  AgentGateError,
   isAgentGateError,
   encodeXPayment,
   encodeXPaymentResponse,
@@ -8,6 +11,7 @@ import {
   type PaymentRequiredResponse,
 } from '@agentgate/shared';
 import {
+  PaidNotServedError,
   assertFetchableUrl,
   createAgentGateClient,
   parsePaymentRequired,
@@ -110,6 +114,20 @@ function queuedFetch(responses: Response[]) {
 }
 
 const SIGNER = { kind: 'mock', accountId: 'buyer.mock' } as const;
+
+/** A logger whose calls can be inspected. */
+function spyLogger(): Logger & { warn: ReturnType<typeof vi.fn> } {
+  const logger = {
+    name: 'test',
+    level: 'debug' as const,
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: (): Logger => logger,
+  };
+  return logger;
+}
 
 describe('createAgentGateClient · fetchPaid', () => {
   it('402 → pay → retry happy path returns paid result with X-PAYMENT and settlement', async () => {
@@ -277,6 +295,9 @@ describe('createAgentGateClient · fetchPaid', () => {
     ['bad priceYocto',        { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, priceYocto: '0.5' } }] }],
     ['bad storageFeeYocto',   { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, storageFeeYocto: undefined } }] }],
     ['price + fee ≠ total',   { ...validReq, accepts: [{ ...validAccept, maxAmountRequired: '503000000000000000000000' }] }],
+    // same total, different split: the storage fee is the registry's fixed 0.002 NEAR
+    ['fee ≠ registry fee',    { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, priceYocto: '499000000000000000000000', storageFeeYocto: '3000000000000000000000' } }] }],
+    ['no NEAR entry',         { ...validReq, accepts: [{ ...validAccept, asset: 'USDC' }] }],
   ] as [string, unknown][])('rejects invalid invoice (%s) with BAD_INVOICE and never pays', async (_name, bad) => {
     const { impl } = queuedFetch([json(bad, 402)]);
     const chain = makeChain();
@@ -317,20 +338,33 @@ describe('createAgentGateClient · fetchPaid', () => {
     expect(new Set(proofs).size).toBe(1); // the identical proof every time
   });
 
-  it('gives up after 3 pending retries and returns the final 402 (still marked paid)', async () => {
+  it('after 3 pending retries throws PAID_NOT_SERVED (settlement_pending) carrying the proof to re-present', async () => {
     const { impl, calls } = queuedFetch([
       json(requirements('42', 'near-mock'), 402),
       ...Array.from({ length: 5 }, () => pending402('42', 0)),
     ]);
-    const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
+    const logger = spyLogger();
+    const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl, logger });
 
-    const result = await client.fetchPaid('http://svc.test/svc/1');
-    expect(result.status).toBe(402);
-    expect(result.paid).toBe(true);
-    expect(result.txHash).toBe(TX_HASH);
-    expect(result.body).toMatchObject({ error: 'settlement_pending' });
+    const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PaidNotServedError);
+    expect(isAgentGateError(err)).toBe(true);
+    expect(err).toMatchObject({
+      code: 'PAID_NOT_SERVED',
+      reason: 'settlement_pending',
+      status: 402,
+      txHash: TX_HASH,
+      nonce: '42',
+      serviceId: 1,
+      depositYocto: MAX_AMOUNT,
+    });
+    expect((err as Error).message).toContain(TX_HASH);
     // 1 invoice fetch + 1 first proof attempt + 3 pending retries = 5
     expect(calls).toHaveLength(5);
+    // the log says what happened: settlement still pending, not a rejected proof
+    const warnings = logger.warn.mock.calls.map((c) => String(c[0]));
+    expect(warnings.some((m) => m.includes('still pending'))).toBe(true);
+    expect(warnings.some((m) => m.includes('rejected'))).toBe(false);
   });
 
   it('waits the Retry-After seconds between pending retries', async () => {
@@ -374,18 +408,103 @@ describe('createAgentGateClient · fetchPaid', () => {
   it.each([
     ['without Retry-After', undefined],
     ['even with Retry-After', 0],
-  ])('returns a rejected proof (not_found) without retrying, %s', async (_name, retryAfter) => {
+  ])('a refused proof (not_found) throws PAID_NOT_SERVED without retrying, %s', async (_name, retryAfter) => {
     const { impl, calls } = queuedFetch([
       json(requirements('42', 'near-mock'), 402),
       rejected402('43', 'not_found', retryAfter),
     ]);
+    const chain = makeChain();
+    const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
+
+    const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PaidNotServedError);
+    expect(err).toMatchObject({
+      code: 'PAID_NOT_SERVED',
+      reason: 'refused',
+      status: 402,
+      txHash: TX_HASH,
+      nonce: '42',
+      serviceId: 1,
+      depositYocto: MAX_AMOUNT,
+    });
+    expect((err as Error).message).toContain('not_found');
+    expect(calls).toHaveLength(2);
+    // the fresh invoice that comes with the refusal is never paid
+    expect(chain.pay).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['a timeout', (): never => {
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    }, 'timed out'],
+    ['a network failure', (): never => {
+      throw new TypeError('fetch failed');
+    }, 'fetch failed'],
+  ])('%s on the paid retry throws PAID_NOT_SERVED (transport) carrying the proof', async (_name, fail, text) => {
+    let n = 0;
+    const impl = vi.fn(async (): Promise<Response> => {
+      n += 1;
+      if (n === 1) return json(requirements('42', 'near-mock'), 402);
+      return fail();
+    }) as unknown as typeof fetch;
+    const chain = makeChain();
+    const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
+
+    const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PaidNotServedError);
+    expect(err).toMatchObject({
+      code: 'PAID_NOT_SERVED',
+      reason: 'transport',
+      txHash: TX_HASH,
+      nonce: '42',
+      serviceId: 1,
+      depositYocto: MAX_AMOUNT,
+    });
+    expect((err as PaidNotServedError).status).toBeUndefined();
+    expect((err as Error).message).toContain(text);
+    expect(chain.pay).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failing registry pay propagates as-is: nothing was paid, so it is not PAID_NOT_SERVED', async () => {
+    const { impl, calls } = queuedFetch([json(requirements('42', 'near-mock'), 402)]);
+    const chain = makeChain({
+      pay: vi.fn(async () => {
+        throw new AgentGateError('ERR_DEPOSIT_TOO_LOW', 'ERR_DEPOSIT_TOO_LOW: attach more', 400);
+      }),
+    });
+    const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
+
+    const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(PaidNotServedError);
+    expect(err).toMatchObject({ code: 'ERR_DEPOSIT_TOO_LOW' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('skips an accepts entry in another asset and pays the NEAR one', async () => {
+    const req = requirements('42', 'near-mock');
+    const nearEntry = req.accepts[0]!;
+    const other = {
+      ...nearEntry,
+      asset: 'USDC',
+      maxAmountRequired: '1',
+      extra: { ...nearEntry.extra, priceYocto: '1', storageFeeYocto: '0' },
+    };
+    const { impl } = queuedFetch([json({ ...req, accepts: [other, nearEntry] }, 402), json({ ok: true }, 200)]);
+    const chain = makeChain();
+    const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
+
+    const r = await client.fetchPaid('http://svc.test/svc/1');
+    expect(r.status).toBe(200);
+    expect(r.depositYocto).toBe(MAX_AMOUNT);
+    expect(chain.pay).toHaveBeenCalledWith({ serviceId: 1, nonce: '42', depositYocto: MAX_AMOUNT }, SIGNER);
+  });
+
+  it('asks fetch never to follow a redirect, on both legs, even when the caller asked it to', async () => {
+    const { impl, calls } = queuedFetch([json(requirements('42', 'near-mock'), 402), json({ ok: true }, 200)]);
     const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
 
-    const result = await client.fetchPaid('http://svc.test/svc/1');
-    expect(result.status).toBe(402);
-    expect(result.paid).toBe(true);
-    expect(result.body).toMatchObject({ error: 'not_found' });
-    expect(calls).toHaveLength(2);
+    await client.fetchPaid('http://svc.test/svc/1', { redirect: 'follow' });
+    expect(calls.map((c) => c.init?.redirect)).toEqual(['manual', 'manual']);
   });
 
   it('passes non-402 first responses straight through without paying', async () => {
@@ -563,6 +682,36 @@ describe('parsePaymentRequired', () => {
     expect(parsePaymentRequired(ok, 'near-mock').extra.serviceId).toBe(7);
   });
 
+  it('skips an entry in another asset listed first and returns the NEAR entry', () => {
+    const req = requirements('7', 'near-mock');
+    const nearEntry = req.accepts[0]!;
+    const other = { ...nearEntry, asset: 'USDC' };
+    expect(parsePaymentRequired({ ...req, accepts: [other, nearEntry] }, 'near-mock')).toEqual(nearEntry);
+  });
+
+  it('rejects an invoice with no NEAR entry on the network (BAD_INVOICE)', () => {
+    const req = requirements('7', 'near-mock');
+    const other = { ...req.accepts[0]!, asset: 'USDC' };
+    expect(() => parsePaymentRequired({ ...req, accepts: [other] }, 'near-mock')).toThrowError(
+      /invalid 402 invoice: no accepts entry pays in NEAR/,
+    );
+  });
+
+  it('rejects a storage fee other than the registry fee, even when the total adds up (BAD_INVOICE)', () => {
+    const req = requirements('7', 'near-mock');
+    const entry = req.accepts[0]!;
+    const resplit = {
+      ...req,
+      accepts: [
+        {
+          ...entry,
+          extra: { ...entry.extra, priceYocto: '499000000000000000000000', storageFeeYocto: '3000000000000000000000' },
+        },
+      ],
+    };
+    expect(() => parsePaymentRequired(resplit, 'near-mock')).toThrowError(/extra\.storageFeeYocto must be/);
+  });
+
   it('rejects expiresAtMs: NaN (BAD_INVOICE)', () => {
     const req = requirements('42', 'near-mock');
     const badReq = {
@@ -593,5 +742,80 @@ describe('assertFetchableUrl (registry-sourced endpoint URLs)', () => {
     await expect(assertFetchableUrl('http://10.0.0.8/svc/1', { rejectPrivateHosts: true })).rejects.toMatchObject({
       code: 'FORBIDDEN_HOST',
     });
+  });
+});
+
+/** Start an HTTP server on an ephemeral loopback port. */
+async function listen(handler: (req: IncomingMessage, res: ServerResponse) => void): Promise<{ server: Server; base: string }> {
+  const server = createServer(handler);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  return { server, base: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve) => server.close(() => resolve()));
+}
+
+describe('fetchPaid · a gateway redirect is never followed (R35)', () => {
+  let target: Server;
+  let gateway: Server;
+  let targetUrl: string;
+  let gatewayUrl: string;
+  let targetHits: Array<{ url: string; xPayment: string | undefined }>;
+  let gatewayHandler: (req: IncomingMessage, res: ServerResponse) => void;
+
+  beforeEach(async () => {
+    targetHits = [];
+    const t = await listen((req, res) => {
+      const xp = req.headers['x-payment'];
+      targetHits.push({ url: req.url ?? '', xPayment: typeof xp === 'string' ? xp : undefined });
+      res.end('{"instanceRole":"secret"}');
+    });
+    target = t.server;
+    targetUrl = `${t.base}/latest/meta-data/`;
+    const g = await listen((req, res) => gatewayHandler(req, res));
+    gateway = g.server;
+    gatewayUrl = `${g.base}/svc/1`;
+  });
+
+  afterEach(async () => {
+    await closeServer(gateway);
+    await closeServer(target);
+  });
+
+  it('a 302 on the invoice request is refused (REDIRECT_REFUSED, names the status): the target is never contacted, nothing is paid', async () => {
+    gatewayHandler = (_req, res) => {
+      res.writeHead(302, { location: targetUrl });
+      res.end();
+    };
+    const chain = makeChain();
+    const client = createAgentGateClient({ chain, signer: SIGNER }); // the real fetch
+
+    const err = await client.fetchPaid(gatewayUrl).catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: 'REDIRECT_REFUSED' });
+    expect((err as Error).message).toContain('302');
+    expect(targetHits).toHaveLength(0);
+    expect(chain.pay).not.toHaveBeenCalled();
+  });
+
+  it('a 307 on the paid retry is not followed: PAID_NOT_SERVED (redirect), the proof never reaches the target', async () => {
+    gatewayHandler = (req, res) => {
+      if (req.headers['x-payment'] === undefined) {
+        res.writeHead(402, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(requirements('42', 'near-mock')));
+        return;
+      }
+      res.writeHead(307, { location: targetUrl });
+      res.end();
+    };
+    const chain = makeChain();
+    const client = createAgentGateClient({ chain, signer: SIGNER });
+
+    const err = await client.fetchPaid(gatewayUrl).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PaidNotServedError);
+    expect(err).toMatchObject({ code: 'PAID_NOT_SERVED', reason: 'redirect', status: 307, txHash: TX_HASH, nonce: '42' });
+    expect((err as Error).message).toContain('307');
+    expect(chain.pay).toHaveBeenCalledTimes(1);
+    expect(targetHits).toHaveLength(0);
   });
 });

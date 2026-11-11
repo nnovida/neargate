@@ -5,9 +5,9 @@ import {
   AgentGateError,
   DEFAULT_DASHBOARD_URL,
   DEFAULT_GATEWAY_URL,
+  formatError,
   formatNear,
   formatPriceWithStorage,
-  isAgentGateError,
   loadConfig,
   type AgentGateConfig,
 } from '@agentgate/shared';
@@ -15,8 +15,10 @@ import { buyService, formatBuyBody, formatBuyReceipt } from './buy';
 import { createDemoAccounts } from './demo-accounts';
 import { cliSigner, type SignerFlags } from './identity';
 import { formatServiceTable, listServices } from './list';
+import { adminRetryCurl, mapLiveOnlyError, mapService } from './map';
 import { setServiceActive } from './pause';
 import { serviceStatus, STATUS_ATTESTATION_LIMIT } from './status';
+import { parseServiceIdArg } from './validate';
 import { wrapService } from './wrap';
 import { startAgentGateMcpServer } from './mcp';
 import { resolveCliEnv, type CliConfigFlags } from './cli-env';
@@ -55,18 +57,6 @@ function signerFlags(opts: SignerFlags): SignerFlags {
     ...(opts.account !== undefined ? { account: opts.account } : {}),
     ...(opts.keyFile !== undefined ? { keyFile: opts.keyFile } : {}),
   };
-}
-
-/** A positive integer service id from argv. */
-function parseServiceId(idRaw: string): number {
-  if (!/^\d+$/.test(idRaw.trim()) || Number(idRaw.trim()) < 1) {
-    throw new AgentGateError(
-      'INVALID_SERVICE_ID',
-      `service id must be a positive integer, got ${JSON.stringify(idRaw)}`,
-      400,
-    );
-  }
-  return Number(idRaw.trim());
 }
 
 /**
@@ -137,9 +127,45 @@ withConfigFlags(
   console.log(`dashboard:       ${result.dashboardUrl}`);
   console.log(`register tx:     ${result.txHash}`);
   if (!result.adminOk) {
-    // wrapService already printed the detailed warning to stderr.
-    console.log('note: gateway upstream mapping FAILED — see the warning above.');
+    // wrapService already printed the detailed warning (and the retry) to stderr.
+    console.log('note: gateway upstream mapping FAILED — see the warning above for the retry.');
   }
+});
+
+withConfigFlags(
+  withSignerFlags(
+    program
+      .command('map')
+      .description(
+        'Retry only the gateway mapping of a service you own (live mode): re-sends the signed self-map POST of `wrap`, never registers again',
+      )
+      .argument('<id>', 'service id (the one `wrap` registered)')
+      .argument('<upstreamUrl>', 'upstream API URL to map (kept private, only sent to the gateway)'),
+    'seller',
+  ),
+).action(async (idRaw: string, upstreamUrl: string, opts: CliConfigFlags & SignerFlags) => {
+  const id = parseServiceIdArg(idRaw);
+  const config = cliConfig(opts);
+  if (config.mode !== 'live') {
+    // Mock gateways map through the admin route: say so, with the exact retry.
+    const adminUrl = `http://localhost:${config.middlewarePort}/admin/services`;
+    throw mapLiveOnlyError(adminRetryCurl(adminUrl, id, upstreamUrl.trim()));
+  }
+  const chain = createChainClient(config);
+  const signer = await cliSigner(config, 'seller', signerFlags(opts));
+  const result = await mapService({
+    serviceId: id,
+    upstreamUrl,
+    chain,
+    signer,
+    mode: config.mode,
+    nearNetwork: config.nearNetwork,
+    timeoutMs: config.upstreamTimeoutMs,
+  });
+  console.log(`service id:      ${result.serviceId}`);
+  console.log(`gateway:         ${result.gateway}`);
+  console.log(`public endpoint: ${result.publicUrl}`);
+  console.log('mapping:         ok');
 });
 
 withConfigFlags(
@@ -148,11 +174,11 @@ withConfigFlags(
   const config = cliConfig(opts);
   const chain = createChainClient(config);
   const listings = await listServices({ chain });
-  if (listings.length === 0) {
-    console.log('no services registered yet — wrap one with `neargate wrap <upstreamUrl> --price 0.5 --name "My API"`');
-    return;
-  }
+  // stdout always carries the table, header line included (scripts parse it); the hint goes to stderr.
   console.log(formatServiceTable(listings));
+  if (listings.length === 0) {
+    console.error('no services registered yet — wrap one with `neargate wrap <upstreamUrl> --price 0.5 --name "My API"`');
+  }
 });
 
 interface BuyCmdOpts extends CliConfigFlags, SignerFlags {
@@ -177,7 +203,7 @@ withConfigFlags(
     'buyer',
   ),
 ).action(async (idRaw: string, opts: BuyCmdOpts) => {
-  const id = parseServiceId(idRaw);
+  const id = parseServiceIdArg(idRaw);
   const config = cliConfig(opts);
   const chain = createChainClient(config);
   const signer = await cliSigner(config, 'buyer', signerFlags(opts));
@@ -203,7 +229,7 @@ withConfigFlags(
     .description('Show one service: record, score, trust tier and recent attestations')
     .argument('<id>', 'service id'),
 ).action(async (idRaw: string, opts: CliConfigFlags) => {
-  const id = parseServiceId(idRaw);
+  const id = parseServiceIdArg(idRaw);
   const config = cliConfig(opts);
   const chain = createChainClient(config);
   const { service, score, tier, attestations } = await serviceStatus({ chain, id });
@@ -228,7 +254,7 @@ withConfigFlags(
 
 /** Shared action for `pause` / `resume`: toggle the on-chain active flag and report. */
 async function toggleActive(idRaw: string, active: boolean, opts: CliConfigFlags & SignerFlags): Promise<void> {
-  const id = parseServiceId(idRaw);
+  const id = parseServiceIdArg(idRaw);
   const config = cliConfig(opts);
   const chain = createChainClient(config);
   const signer = await cliSigner(config, 'seller', signerFlags(opts));
@@ -299,13 +325,6 @@ withConfigFlags(
 });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
-  const msg = isAgentGateError(err)
-    ? err.message.startsWith(err.code)
-      ? err.message
-      : `${err.code}: ${err.message}`
-    : err instanceof Error
-      ? err.message
-      : String(err);
-  console.error(`error: ${msg}`);
+  console.error(`error: ${formatError(err)}`);
   process.exit(1);
 });

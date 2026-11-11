@@ -22,7 +22,7 @@ import {
   yoctoToNear,
 } from '@agentgate/shared';
 import { createChainClient, loadNearSigner } from '@agentgate/chain';
-import { createAgentGateClient } from '@agentgate/client';
+import { createAgentGateClient, PaidNotServedError } from '@agentgate/client';
 import type { CatalogEntry, LlmClient } from './llm';
 import { AnthropicLlm, MockLlm } from './llm';
 import { DecisionLog, DEFAULT_DECISIONS_LOG, padCell, renderBlock } from './decision-log';
@@ -136,6 +136,8 @@ function catalogTable(catalog: CatalogEntry[]): string[] {
  * LLM decision loop: list services → pick (AnthropicLlm or MockLlm) →
  * budget check BEFORE paying → fetchPaid → summarize → attestation receipt.
  * Each step is printed as a console block AND appended to logs/decisions.jsonl.
+ * A call that was paid but not served (PAID_NOT_SERVED) ends the run with a paid
+ * report: the spend is counted and the proof (tx + nonce) is reported to re-present.
  */
 export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunReport> {
   if (!opts || typeof opts.task !== 'string' || opts.task.trim() === '') {
@@ -300,6 +302,46 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
         summary: refusal,
         spentYocto: '0',
       };
+    }
+    if (err instanceof PaidNotServedError) {
+      // The deposit is spent but nothing was served: account for the spend and report the
+      // proof (tx + nonce) to re-present. Never pay a fresh invoice for the same call.
+      spentYocto = addYocto(spentYocto, err.depositYocto);
+      const remaining: Yocto = (parseYocto(budgetYocto) - parseYocto(spentYocto)).toString();
+      const status = err.status !== undefined ? ` (HTTP ${err.status})` : '';
+      const summary =
+        `paid ${formatNear(err.depositYocto)} (tx ${err.txHash}) but the call was not served: ${err.reason}${status}. ` +
+        `Re-present the proof (nonce ${err.nonce}) instead of paying again.`;
+      print(
+        renderBlock('STEP 4 · PAYMENT — NOT SERVED', [
+          `paid ${formatNear(err.depositYocto)} → tx ${err.txHash}`,
+          `not served: ${err.reason}${status}`,
+          `re-present the proof (nonce ${err.nonce}) instead of paying again`,
+          `remaining budget: ${yoctoToNear(remaining)} NEAR`,
+        ]),
+      );
+      decisions.append('payment', {
+        serviceId: chosen.service.id,
+        paid: true,
+        served: false,
+        reason: err.reason,
+        status: err.status ?? null,
+        paymentTxHash: err.txHash,
+        nonce: err.nonce,
+        depositYocto: err.depositYocto,
+        spentYocto,
+      });
+      const report: BuyerRunReport = {
+        chosenServiceId: chosen.service.id,
+        reason: choice.reason,
+        paid: true,
+        paymentTxHash: err.txHash,
+        attestationTxHash: null,
+        summary,
+        spentYocto,
+      };
+      decisions.append('run_end', { ...report });
+      return report;
     }
     decisions.append('error', {
       code: isAgentGateError(err) ? err.code : 'FETCH_FAILED',

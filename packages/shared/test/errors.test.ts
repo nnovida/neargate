@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AgentGateError, chainErrorCode } from '../src/index';
+import { AgentGateError, chainErrorCode, formatError } from '../src/index';
 
 describe('chainErrorCode', () => {
   it("returns an AgentGateError's code when it is a contract ERR_* code", () => {
@@ -47,5 +47,28 @@ describe('chainErrorCode', () => {
     expect(chainErrorCode({ code: 'ERR_ALREADY_ATTESTED', message: 'ERR_ALREADY_ATTESTED: x' })).toBeNull();
     // ...but a message that starts with a contract code still counts (the live client's shape)
     expect(chainErrorCode(Object.assign(new Error('ERR_ALREADY_ATTESTED: x'), { code: 'ERR_INVALID_URL' }))).toBe('ERR_ALREADY_ATTESTED');
+  });
+});
+
+describe('formatError', () => {
+  it('leads with the code: "CODE: message"', () => {
+    expect(formatError(new AgentGateError('BUDGET_EXCEEDED', 'invoice asks too much', 402))).toBe(
+      'BUDGET_EXCEEDED: invoice asks too much',
+    );
+  });
+
+  it('does not repeat a code the message already leads with', () => {
+    expect(formatError(new AgentGateError('ERR_NOT_AUTHORIZED', 'ERR_NOT_AUTHORIZED: owner only', 403))).toBe(
+      'ERR_NOT_AUTHORIZED: owner only',
+    );
+    expect(formatError(new AgentGateError('ERR_NOT_AUTHORIZED', 'ERR_NOT_AUTHORIZED'))).toBe('ERR_NOT_AUTHORIZED');
+    // a longer code that merely starts with this one is not "the code"
+    expect(formatError(new AgentGateError('ERR_X', 'ERR_XY: other'))).toBe('ERR_X: ERR_XY: other');
+  });
+
+  it('gives the message of any other Error and String() of anything else', () => {
+    expect(formatError(new TypeError('fetch failed'))).toBe('fetch failed');
+    expect(formatError('plain')).toBe('plain');
+    expect(formatError(42)).toBe('42');
   });
 });

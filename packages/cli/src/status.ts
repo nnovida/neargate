@@ -1,7 +1,7 @@
 import type { AttestationRecord, ChainClient, ServiceRecord, ServiceScore } from '@agentgate/shared';
 import { AgentGateError, trustTier, type TrustTier } from '@agentgate/shared';
 
-/** How many recent attestations `agentgate status` shows. */
+/** How many recent attestations `neargate status` shows. */
 export const STATUS_ATTESTATION_LIMIT = 10;
 
 export interface ServiceStatusResult {
@@ -13,7 +13,7 @@ export interface ServiceStatusResult {
 }
 
 /**
- * Programmatic `agentgate status <id>`: service record + score + trust tier +
+ * Programmatic `neargate status <id>`: service record + score + trust tier +
  * recent attestations. Throws AgentGateError('SERVICE_NOT_FOUND', 404) for
  * unknown ids and AgentGateError('INVALID_SERVICE_ID', 400) for bad ids.
  * Service ids are 1-based, so 0 is rejected (matches pause/resume).

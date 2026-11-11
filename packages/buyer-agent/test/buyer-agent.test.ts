@@ -422,6 +422,51 @@ describe('runBuyerAgent', () => {
     expect(chain.pay).not.toHaveBeenCalled();
   });
 
+  it('paid but not served (the gateway refuses the proof): reports the spend and the tx to re-present, never pays twice', async () => {
+    const gold = makeService();
+    const chain = makeChain({ services: [gold] });
+    // The gateway answers the unpaid call with the invoice, then refuses the proof.
+    const fetchImpl = vi.fn(async (_input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> => {
+      const proof = new Headers(init?.headers).get('X-PAYMENT');
+      return json(proof === null ? invoiceFor(gold) : { ...invoiceFor(gold), error: 'not_found' }, 402);
+    }) as unknown as typeof fetch;
+    const logPath = tmpLogPath();
+
+    const report = await runBuyerAgent({
+      task: 'gold price',
+      budgetNear: '5',
+      chain,
+      signer: SIGNER,
+      llm: new MockLlm(),
+      fetchImpl,
+      decisionLogPath: logPath,
+      attestationTimeoutMs: 50,
+      attestationPollIntervalMs: 10,
+      print: silent,
+    });
+
+    expect(chain.pay).toHaveBeenCalledTimes(1);
+    expect(report).toMatchObject({
+      paid: true,
+      paymentTxHash: PAYMENT_TX,
+      attestationTxHash: null,
+      spentYocto: '502000000000000000000000',
+    });
+    expect(report.summary).toContain(PAYMENT_TX);
+    expect(report.summary).toContain('not served');
+    const entries = readFileSync(logPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as { step: string; data?: Record<string, unknown> } & Record<string, unknown>);
+    const payment = entries.find((e) => e.step === 'payment');
+    expect(payment).toBeDefined();
+    expect(JSON.stringify(payment)).toContain('"served":false');
+    expect(JSON.stringify(payment)).toContain('"reason":"refused"');
+    expect(JSON.stringify(payment)).toContain('"nonce":"424242"');
+    expect(entries.map((e) => e.step)).toContain('run_end');
+    expect(entries.map((e) => e.step)).not.toContain('error');
+  });
+
   it('returns attestationTxHash null when no attestation lands within the timeout', async () => {
     const gold = makeService();
     const chain = makeChain({ services: [gold], attestations: [] });

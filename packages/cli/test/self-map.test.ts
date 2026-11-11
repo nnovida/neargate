@@ -178,5 +178,41 @@ describe('wrapService in live mode: NEAR-key self-map', () => {
     expect(result.adminWarning).not.toContain(key.secretKey);
     expect(printed()).not.toContain(key.secretKey);
     expect(chain.registered).toHaveLength(1);
+    // the retry is `neargate map` (the key came from *_PRIVATE_KEY, so no --key-file to repeat)
+    expect(result.adminWarning).toContain(`neargate map 9 '${UPSTREAM}' --account ${SELLER} --registry registry.testnet`);
+    expect(result.adminWarning).not.toContain('--key-file');
+  });
+
+  it('a failed mapping names the exact `neargate map` retry, with the key file, and says not to re-wrap', async () => {
+    const chain = liveChain();
+    const { impl } = capturingFetch(503);
+    const signer: NearKeySigner = { kind: 'near', accountId: SELLER, keyPath };
+
+    const result = await wrapService(liveOpts(chain, signer, impl));
+
+    expect(result.adminOk).toBe(false);
+    expect(result.adminWarning).toContain('HTTP 503');
+    expect(result.adminWarning).toContain('answers 503 until the mapping exists');
+    expect(result.adminWarning).toContain(
+      `neargate map 9 '${UPSTREAM}' --account ${SELLER} --key-file '${keyPath}' --registry registry.testnet`,
+    );
+    expect(result.adminWarning).toContain('do NOT re-run `wrap`');
+  });
+
+  it('never follows a redirect on the self-map POST (the signed body stays on the registered gateway)', async () => {
+    const chain = liveChain();
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const impl = async (url: string, init?: RequestInit): Promise<Response> => {
+      calls.push({ url, init });
+      return new Response(null, { status: 307, headers: { location: 'http://169.254.169.254/latest/meta-data' } });
+    };
+
+    const result = await wrapService(liveOpts(chain, { kind: 'near', accountId: SELLER, keyPath }, impl));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.init?.redirect).toBe('manual');
+    expect(result.adminOk).toBe(false);
+    expect(result.adminWarning).toContain('HTTP 307');
+    expect(result.adminWarning).toContain('redirect');
   });
 });

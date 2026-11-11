@@ -9,6 +9,11 @@ export const DEFAULT_ADMIN_TOKEN = 'dev-admin-token';
 
 export type NearNetwork = 'testnet' | 'mainnet';
 
+/** A NEAR network NearGate runs on: the NEAR_NETWORK values and the ~/.near-credentials directories. */
+export function isNearNetwork(value: unknown): value is NearNetwork {
+  return value === 'testnet' || value === 'mainnet';
+}
+
 /**
  * The deployed `neargate-registry` contract id on NEAR testnet.
  * TODO(Task 7): set to the deployed contract id; empty until then.
@@ -175,11 +180,10 @@ export function loadConfig(
   const upstreamTimeoutMs = readInt(env, 'UPSTREAM_TIMEOUT_MS', 30_000, 1, Number.MAX_SAFE_INTEGER);
   const trustProxy = readInt(env, 'TRUST_PROXY', 0, 0, 10);
 
-  const nearNetworkRaw = readStr(env, 'NEAR_NETWORK', 'testnet');
-  if (nearNetworkRaw !== 'testnet' && nearNetworkRaw !== 'mainnet') {
-    throw configError(`NEAR_NETWORK must be "testnet" or "mainnet", got ${JSON.stringify(nearNetworkRaw)}`);
+  const nearNetwork = readStr(env, 'NEAR_NETWORK', 'testnet');
+  if (!isNearNetwork(nearNetwork)) {
+    throw configError(`NEAR_NETWORK must be "testnet" or "mainnet", got ${JSON.stringify(nearNetwork)}`);
   }
-  const nearNetwork: NearNetwork = nearNetworkRaw;
   const nearRpcUrl = readUrl(env, 'NEAR_RPC_URL', NEAR_DEFAULTS[nearNetwork].rpcUrl, ['http:', 'https:']);
   const nearExplorerUrl = readUrl(env, 'NEAR_EXPLORER_URL', NEAR_DEFAULTS[nearNetwork].explorerUrl, [
     'http:',

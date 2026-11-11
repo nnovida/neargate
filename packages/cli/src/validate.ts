@@ -122,6 +122,20 @@ export function normalizeBaseUrl(
   return normalized;
 }
 
+/**
+ * The `<id>` argument of `buy` / `status` / `pause` / `resume` / `map`: decimal digits only,
+ * a positive safe integer (registry ids start at 1). Throws INVALID_SERVICE_ID otherwise —
+ * past Number.MAX_SAFE_INTEGER a number no longer names one id.
+ */
+export function parseServiceIdArg(raw: string): number {
+  const trimmed = raw.trim();
+  const id = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  if (!Number.isSafeInteger(id) || id < 1) {
+    throw invalid('INVALID_SERVICE_ID', `service id must be a positive integer, got ${JSON.stringify(raw.slice(0, 40))}`);
+  }
+  return id;
+}
+
 /** Validates a NEAR account id (e.g. `seller.testnet`) and returns it trimmed. */
 export function requireAccountId(value: string, label: string): string {
   const trimmed = requireNonEmpty(value, label);

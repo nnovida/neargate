@@ -3,8 +3,19 @@ import {
   AgentGateError,
   DEFAULT_ADMIN_TOKEN,
   DEFAULT_REGISTRY_CONTRACT_ID,
+  isNearNetwork,
   loadConfig,
 } from '../src/index';
+
+describe('isNearNetwork', () => {
+  it('accepts testnet and mainnet only', () => {
+    expect(isNearNetwork('testnet')).toBe(true);
+    expect(isNearNetwork('mainnet')).toBe(true);
+    for (const value of ['near-testnet', 'Testnet', 'localnet', '', undefined, null, 1]) {
+      expect(isNearNetwork(value), String(value)).toBe(false);
+    }
+  });
+});
 
 describe('loadConfig — mock mode defaults', () => {
   it('loads all defaults from an empty env', () => {

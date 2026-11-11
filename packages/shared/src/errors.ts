@@ -22,6 +22,20 @@ export function isAgentGateError(err: unknown): err is AgentGateError {
   return err instanceof AgentGateError;
 }
 
+/**
+ * One printable line for any thrown value, as the CLI, the MCP tools and the demo show it:
+ * "CODE: message" for an AgentGateError (the message alone when it already leads with its
+ * code, as contract errors do: "ERR_NOT_AUTHORIZED: …"), the message of any other Error, and
+ * String() of anything else.
+ */
+export function formatError(err: unknown): string {
+  if (err instanceof AgentGateError) {
+    const ledByCode = err.message === err.code || err.message.startsWith(`${err.code}:`);
+    return ledByCode ? err.message : `${err.code}: ${err.message}`;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 const CHAIN_ERROR_CODE_RE = /^ERR_[A-Z_]+$/;
 const CHAIN_ERROR_MESSAGE_RE = /^ERR_[A-Z_]+(?![A-Za-z0-9_])/;
 

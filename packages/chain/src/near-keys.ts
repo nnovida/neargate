@@ -2,20 +2,20 @@ import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { KeyPair } from 'near-api-js';
-import { AgentGateError, isEd25519PublicKey, isNearAccountId } from '@agentgate/shared';
-import type { NearKeySigner } from '@agentgate/shared';
-
-/** The NEAR networks a key can be looked up for (`~/.near-credentials/<network>/`). */
-export type NearKeyNetwork = 'testnet' | 'mainnet';
+import { AgentGateError, isEd25519PublicKey, isNearAccountId, isNearNetwork, isRecord } from '@agentgate/shared';
+import type { NearKeySigner, NearNetwork } from '@agentgate/shared';
 
 export interface LoadNearSignerOpts {
   accountId: string;
-  /** A near-cli credentials JSON file: `{account_id, public_key, private_key}`. */
+  /**
+   * A near-cli credentials JSON file: `{account_id, public_key, private_key}`. A leading `~/`
+   * is the home directory.
+   */
   keyPath?: string;
   /** An `ed25519:<base58>` secret key. */
   secretKey?: string;
   /** Picks the default key file `~/.near-credentials/<network>/<accountId>.json`. */
-  network: NearKeyNetwork;
+  network: NearNetwork;
 }
 
 export interface LoadedNearSigner {
@@ -44,13 +44,14 @@ function isSet(value: string | undefined): value is string {
   return typeof value === 'string' && value.trim() !== '';
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+/** Where `near login` stores an account's key: `~/.near-credentials/<network>/<accountId>.json`. */
+export function defaultCredentialsPath(network: NearNetwork, accountId: string): string {
+  return join(homedir(), '.near-credentials', network, `${accountId}.json`);
 }
 
-/** Where `near login` stores an account's key: `~/.near-credentials/<network>/<accountId>.json`. */
-export function defaultCredentialsPath(network: NearKeyNetwork, accountId: string): string {
-  return join(homedir(), '.near-credentials', network, `${accountId}.json`);
+/** A leading `~/` is the home directory: a quoted `--key-file "~/…"` reaches us unexpanded. */
+function expandHome(path: string): string {
+  return path.startsWith('~/') ? join(homedir(), path.slice(2)) : path;
 }
 
 /**
@@ -133,8 +134,10 @@ async function readKeyFile(path: string, accountId: string): Promise<KeyPair> {
     throw keyError('SIGNER_KEY_INVALID', `key file ${path} has no private_key`);
   }
   const keyPair = parseSecretKey(secret, `the private_key in ${path}`);
-  // A 64-byte secret carries its public half and near-api-js takes it as given: a file whose
-  // public_key differs from the key its private_key derives would sign as some other key.
+  // near-api-js 7.4.0 derives the public key from the secret's 32-byte seed (the public half
+  // stored in a 64-byte secret is ignored), so this key always signs as the seed's key. The
+  // check catches a file whose public_key is not that key: a mixed-up or hand-edited file
+  // would otherwise sign as a key other than the one it names.
   const filePublic = parsed['public_key'];
   if (filePublic !== undefined && filePublic !== keyPair.getPublicKey().toString()) {
     throw keyError('SIGNER_KEY_INVALID', `key file ${path}: public_key does not match its private_key`);
@@ -157,7 +160,7 @@ async function fileExists(path: string): Promise<boolean> {
  * wins; a set source that fails is an error, never a fall-through):
  *
  * 1. `secretKey` (`ed25519:<base58>`)
- * 2. `keyPath` (near-cli credentials JSON)
+ * 2. `keyPath` (near-cli credentials JSON; a leading `~/` is the home directory)
  * 3. `~/.near-credentials/<network>/<accountId>.json`
  *
  * Warns on stderr (once per path) when a key file is group/other-accessible. Errors:
@@ -174,7 +177,7 @@ export async function loadNearSigner(opts: LoadNearSignerOpts): Promise<LoadedNe
       400,
     );
   }
-  if (network !== 'testnet' && network !== 'mainnet') {
+  if (!isNearNetwork(network)) {
     throw new AgentGateError(
       'CONFIG_INVALID',
       `NEAR network must be "testnet" or "mainnet", got ${JSON.stringify(String(network)).slice(0, 40)}`,
@@ -188,7 +191,9 @@ export async function loadNearSigner(opts: LoadNearSignerOpts): Promise<LoadedNe
     keyPair = parseSecretKey(opts.secretKey, `the secret key for ${accountId}`);
     signer = { kind: 'near', accountId, secretKey: opts.secretKey.trim() };
   } else {
-    const keyPath = isSet(opts.keyPath) ? resolve(opts.keyPath.trim()) : defaultCredentialsPath(network, accountId);
+    const keyPath = isSet(opts.keyPath)
+      ? resolve(expandHome(opts.keyPath.trim()))
+      : defaultCredentialsPath(network, accountId);
     if (!isSet(opts.keyPath) && !(await fileExists(keyPath))) {
       throw keyError(
         'SIGNER_MISSING',

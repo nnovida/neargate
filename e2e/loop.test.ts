@@ -193,13 +193,18 @@ describe('full mock-mode loop (e2e)', () => {
     const short = (BigInt(MAX_AMOUNT_YOCTO) - 1n).toString(); // 1 yocto below maxAmountRequired
     const buyerBefore = await balanceOf(buyer.accountId);
     const sellerBefore = await balanceOf(seller.accountId);
+    const registryBefore = await balanceOf(chain.registryId); // the registry keeps the storage fee of every pay
 
     const err = await chain.pay({ serviceId, nonce, depositYocto: short }, buyer).catch((e: unknown) => e);
     expect(chainErrorCode(err)).toBe('ERR_DEPOSIT_TOO_LOW');
 
     expect(await balanceOf(buyer.accountId)).toBe(buyerBefore);
     expect(await balanceOf(seller.accountId)).toBe(sellerBefore);
+    expect(await balanceOf(chain.registryId)).toBe(registryBefore);
     expect(await chain.getPayment(nonce)).toBeNull();
+    // No payment event at all: this rejected pay is the first payment attempt of the run.
+    const events = await chain.listRecentActivity(100);
+    expect(events.filter((e) => e.kind === 'payment')).toEqual([]);
 
     // Presenting a proof for that nonce gets a fresh invoice, never the data.
     const res = await fetch(publicUrl, {

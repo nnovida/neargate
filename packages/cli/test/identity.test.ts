@@ -38,6 +38,16 @@ function stderrText(): string {
   return stderrSpy.mock.calls.map((call) => String(call[0])).join('');
 }
 
+function stderrLines(): string[] {
+  return stderrText().split('\n').filter((line) => line !== '');
+}
+
+/** cliSigner from a fresh module instance: its once-per-process notes start unprinted. */
+async function freshIdentity(): Promise<typeof cliSigner> {
+  vi.resetModules();
+  return (await import('../src/identity')).cliSigner;
+}
+
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), 'neargate-cli-keys-'));
   vi.stubEnv('HOME', home);
@@ -70,6 +80,27 @@ describe('cliSigner · mock mode', () => {
       code: 'INVALID_ACCOUNT_ID',
     });
   });
+
+  it('a given --key-file is ignored, with a one-line note (once per process)', async () => {
+    const freshCliSigner = await freshIdentity();
+    const config = loadConfig({ AGENTGATE_MODE: 'mock', MOCK_SELLER_ACCOUNT: 's.mock' });
+
+    expect(await freshCliSigner(config, 'seller', { keyFile: '/nowhere/seller.json' })).toEqual({
+      kind: 'mock',
+      accountId: 's.mock',
+    });
+    expect(await freshCliSigner(config, 'buyer', { keyFile: '/nowhere/buyer.json' })).toMatchObject({ kind: 'mock' });
+
+    const notes = stderrLines().filter((line) => line.includes('--key-file'));
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/^note: mock mode ignores --key-file/);
+  });
+
+  it('no --key-file, no note', async () => {
+    const freshCliSigner = await freshIdentity();
+    await freshCliSigner(loadConfig({ AGENTGATE_MODE: 'mock', MOCK_SELLER_ACCOUNT: 's.mock' }), 'seller');
+    expect(stderrText()).toBe('');
+  });
 });
 
 describe('cliSigner · live mode: --key-file resolution order (D4)', () => {
@@ -84,6 +115,21 @@ describe('cliSigner · live mode: --key-file resolution order (D4)', () => {
     expect(signer).toEqual({ kind: 'near', accountId: SELLER, secretKey: secret.secretKey });
     expect(stderrText()).toContain('SELLER_PRIVATE_KEY');
     expect(stderrText()).toContain('--key-file');
+    expect(stderrText()).not.toContain(secret.secretKey);
+  });
+
+  it('prints the *_PRIVATE_KEY-over---key-file note once per process, not once per signer', async () => {
+    const freshCliSigner = await freshIdentity();
+    const secret = newKey();
+    const flagFile = await keyFile(join(home, 'flag.json'), SELLER);
+    const config = liveConfig({ SELLER_ACCOUNT_ID: SELLER, SELLER_PRIVATE_KEY: secret.secretKey });
+
+    await freshCliSigner(config, 'seller', { keyFile: flagFile.path });
+    await freshCliSigner(config, 'seller', { keyFile: flagFile.path });
+
+    const notes = stderrLines().filter((line) => line.includes('takes precedence over --key-file'));
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/^note: SELLER_PRIVATE_KEY is set and takes precedence over --key-file/);
     expect(stderrText()).not.toContain(secret.secretKey);
   });
 

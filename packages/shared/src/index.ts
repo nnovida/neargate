@@ -8,5 +8,6 @@ export * from './self-map';
 export * from './logger';
 export * from './trust';
 export * from './errors';
+export * from './guards';
 export * from './url';
 export * from './x402';

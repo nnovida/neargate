@@ -2,11 +2,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { assertFetchableUrl, parsePaymentRequired } from '@agentgate/client';
+import { assertFetchableUrl, parsePaymentRequired, refuseRedirect } from '@agentgate/client';
 import {
   AgentGateError,
+  formatError,
   formatPriceWithStorage,
-  isAgentGateError,
   isMockNetwork,
   trustTier,
   type AnySigner,
@@ -57,14 +57,7 @@ async function toolResult(fn: () => Promise<unknown>): Promise<CallToolResult> {
     return ok;
   } catch (err) {
     // Lead with the stable code so an agent can branch on it (BUDGET_EXCEEDED, SERVICE_INACTIVE…).
-    const message = isAgentGateError(err)
-      ? err.message.startsWith(err.code)
-        ? err.message
-        : `${err.code}: ${err.message}`
-      : err instanceof Error
-        ? err.message
-        : String(err);
-    const bad: ToolTextResult = { content: [{ type: 'text', text: message }], isError: true };
+    const bad: ToolTextResult = { content: [{ type: 'text', text: formatError(err) }], isError: true };
     return bad;
   }
 }
@@ -160,10 +153,13 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
         // off the devnet never a private/loopback host.
         await assertFetchableUrl(service.endpointUrl, { rejectPrivateHosts: !isMockNetwork(chain.network) });
         const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
+        // Never follow a redirect: it would take the request past the URL check above.
         const res = await fetchImpl(service.endpointUrl, {
           method: 'GET',
           signal: AbortSignal.timeout(INVOICE_FETCH_TIMEOUT_MS),
+          redirect: 'manual',
         });
+        await refuseRedirect(service.endpointUrl, res);
         const raw: unknown = await res.json().catch(() => null);
         if (res.status !== 402) {
           return { id, status: res.status, note: 'service did not return a 402 invoice', body: raw };

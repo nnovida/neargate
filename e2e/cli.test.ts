@@ -48,7 +48,7 @@ describe('neargate bin (subprocess, mock mode)', () => {
   let buyerAccount: string;
   let serviceId: number;
 
-  function runCli(args: string[]): Promise<CliRun> {
+  function runCli(args: string[], envOver: Record<string, string> = {}): Promise<CliRun> {
     return new Promise((resolve) => {
       execFile(
         process.execPath,
@@ -56,7 +56,13 @@ describe('neargate bin (subprocess, mock mode)', () => {
         {
           cwd: REPO_ROOT,
           // Never inherit the host shell's NearGate settings.
-          env: { PATH: process.env['PATH'] ?? '', HOME: home, DEVNET_URL: devnetUrl, MOCK_BUYER_ACCOUNT: buyerAccount },
+          env: {
+            PATH: process.env['PATH'] ?? '',
+            HOME: home,
+            DEVNET_URL: devnetUrl,
+            MOCK_BUYER_ACCOUNT: buyerAccount,
+            ...envOver,
+          },
           timeout: 20_000,
         },
         (error, stdout, stderr) => {
@@ -105,6 +111,33 @@ describe('neargate bin (subprocess, mock mode)', () => {
     const lines = run.stdout.trimEnd().split('\n');
     expect(lines[0]!.split(/\s{2,}/)).toEqual(['id', 'name', 'price(NEAR)', 'calls', 'tier', 'active']);
     expect(lines[1]!.split(/\s{2,}/)).toEqual([String(serviceId), 'CLI Oracle', '0.5', '0/0', 'new', 'yes']);
+  });
+
+  it('`neargate list` on an empty catalog prints the header line on stdout, the hint on stderr', async () => {
+    const empty = await startDevnet({ port: 0, config: baseConfig, logger: quietLogger() });
+    try {
+      const run = await runCli(['list', '--mode', 'mock'], { DEVNET_URL: `http://127.0.0.1:${empty.port}` });
+      expect(run.code, run.stderr).toBe(0);
+      expect(run.stdout).toBe('id  name  price(NEAR)  calls  tier  active\n');
+      expect(run.stderr).toContain('no services registered yet');
+    } finally {
+      await empty.close();
+    }
+  });
+
+  it('`neargate map` in mock mode refuses (LIVE_ONLY): mock mapping goes through the admin route', async () => {
+    const run = await runCli(['map', String(serviceId), 'http://127.0.0.1:9/feed', '--mode', 'mock']);
+    expect(run.code).toBe(1);
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toMatch(/^error: LIVE_ONLY: /);
+    expect(run.stderr).toContain('/admin/services');
+    expect(run.stderr).toContain('$AGENTGATE_ADMIN_TOKEN');
+  });
+
+  it('`neargate status` refuses an id past Number.MAX_SAFE_INTEGER (INVALID_SERVICE_ID)', async () => {
+    const run = await runCli(['status', '9007199254740993', '--mode', 'mock']);
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain('INVALID_SERVICE_ID');
   });
 
   it('`neargate buy` prints the body to stdout and the receipt to stderr', async () => {

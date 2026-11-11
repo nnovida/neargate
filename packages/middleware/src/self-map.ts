@@ -56,10 +56,11 @@ function parseBody(body: unknown): SelfMapBody | null {
 /**
  * `POST /services/:id/map`: a service OWNER maps their upstream by signing a canonical
  * challenge (`buildSelfMapMessage`) with a full-access key of their NEAR account, with no
- * shared admin token. This is what lets `agentgate wrap` run against a hosted gateway in one
- * line. The order is DoS-conscious: cheap rejects first, the signature only for a service that
- * exists and a fresh request, the chain call only for a signature that verifies and an
- * account that owns the service, the SSRF check only for a verified owner.
+ * shared admin token. This is what lets `neargate wrap` (and its retry, `neargate map`) run
+ * against a hosted gateway in one line. The order is DoS-conscious: cheap rejects first, the
+ * signature only for a service that exists and a fresh request, the chain call only for a
+ * signature that verifies and an account that owns the service, the SSRF check only for a
+ * verified owner.
  *
  *   id syntax 400 → body shape 400 → service exists 404 → fresh 400 stale_timestamp →
  *   signature 401 owner_signature_invalid → account is the owner 403 not_service_owner →
