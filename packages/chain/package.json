@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@agentgate/shared": "*"
+    "@agentgate/shared": "*",
+    "near-api-js": "7.4.0"
   },
   "devDependencies": {
     "@agentgate/devnet": "*"

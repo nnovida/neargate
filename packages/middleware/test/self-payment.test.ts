@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { isSelfPaid, type PaymentRequiredResponse, type ServiceRecord } from '@agentgate/shared';
-import { bootGateway, startUpstream, adminMap, proofHeaders, sleep } from './helpers';
+import { bootGateway, startUpstream, adminMap, payInvoice, proofHeaders, sleep, until } from './helpers';
 
 const svc = (over: Partial<ServiceRecord> = {}): ServiceRecord => ({
   id: 1,
@@ -35,29 +35,48 @@ describe('isSelfPaid (shared rule the gateway applies) — F1 wash-trade guard',
   });
 });
 
-describe('self-paid call is served but not scored — F1', () => {
-  it('payer == payment target → 200 to the buyer but no attestation recorded', async () => {
+describe('self-payment is served but not attested — F1', () => {
+  it.each([
+    ['the payment target', 'payout.mock'],
+    ['the service owner', 'owner.mock'],
+  ])('payer == %s → 200 to the buyer, no attestation recorded (the registry flags it selfPaid)', async (_who, payer) => {
     const gw = await bootGateway();
     const upstream = await startUpstream();
     try {
-      const target = 'payout.mock';
-      gw.fake.addService({ id: 7, paymentTarget: target });
+      gw.fake.addService({ id: 7, paymentTarget: 'payout.mock', owner: 'owner.mock' });
       await adminMap(gw, 7, `${upstream.url}/data`);
 
       const challenge = await fetch(`${gw.baseUrl}/svc/7`);
       const body = (await challenge.json()) as PaymentRequiredResponse;
       const req = body.accepts[0]!;
-      // Pay from the payout account itself — a wash-trade attempt.
+      // Pay from the payout account / owner itself: a wash-trade attempt.
       const { txHash } = await gw.fake.pay(
         { serviceId: 7, nonce: req.extra.nonce, depositYocto: req.maxAmountRequired },
-        { kind: 'mock', accountId: target },
+        { kind: 'mock', accountId: payer },
       );
       const res = await fetch(`${gw.baseUrl}/svc/7`, {
-        headers: proofHeaders({ txHash, nonce: req.extra.nonce, network: req.network, payer: target }),
+        headers: proofHeaders({ txHash, nonce: req.extra.nonce, network: req.network, payer }),
       });
       expect(res.status).toBe(200); // the buyer paid, so they are still served
+      expect(res.headers.get('x-payment-response')).not.toBeNull();
       await sleep(100);
       expect(gw.fake.attestations.filter((a) => a.serviceId === 7).length).toBe(0); // never scored
+      expect(gw.fake.attestationCalls).toBe(0); // and the gateway did not even try
+    } finally {
+      await gw.close();
+      await upstream.close();
+    }
+  });
+
+  it('a third-party payer on the same service IS attested', async () => {
+    const gw = await bootGateway();
+    const upstream = await startUpstream();
+    try {
+      gw.fake.addService({ id: 7, paymentTarget: 'payout.mock', owner: 'owner.mock' });
+      await adminMap(gw, 7, `${upstream.url}/data`);
+      const proof = await payInvoice(gw, 7);
+      expect((await fetch(`${gw.baseUrl}/svc/7`, { headers: proofHeaders(proof) })).status).toBe(200);
+      await until(() => gw.fake.attestations.length === 1);
     } finally {
       await gw.close();
       await upstream.close();

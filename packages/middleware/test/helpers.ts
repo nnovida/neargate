@@ -1,10 +1,18 @@
+import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
-import { encodeXPayment, type AgentGateConfig, type Logger, type PaymentRequiredResponse } from '@agentgate/shared';
-import { startServer, type MiddlewareStartOpts, type RunningServer } from '../src/index';
+import {
+  base58Encode,
+  buildSelfMapMessage,
+  encodeXPayment,
+  type AgentGateConfig,
+  type Logger,
+  type PaymentRequiredResponse,
+} from '@agentgate/shared';
+import { startServer, type InvoiceStore, type MiddlewareStartOpts, type RunningServer } from '../src/index';
 import { FakeChainClient } from './fake-chain';
 
 /** The account the test buyer pays from. */
@@ -75,6 +83,7 @@ export async function bootGateway(
     attestationRetryDelayMs?: number;
     attestationMaxAttempts?: number;
     attestationQueuePath?: string;
+    invoiceStore?: InvoiceStore;
   } = {},
 ): Promise<TestGateway> {
   const config = opts.config ?? testConfig();
@@ -98,6 +107,7 @@ export async function bootGateway(
   if (opts.attestationQueuePath !== undefined) {
     startOpts.attestationQueuePath = opts.attestationQueuePath;
   }
+  if (opts.invoiceStore !== undefined) startOpts.invoiceStore = opts.invoiceStore;
   const server: RunningServer = await startServer(startOpts);
   return {
     baseUrl: `http://127.0.0.1:${server.port}`,
@@ -227,6 +237,68 @@ export function proofHeaders(proof: {
       payload: { kind: 'tx', transaction: proof.txHash, nonce: proof.nonce, payer: proof.payer ?? TEST_BUYER },
     }),
   };
+}
+
+/** A throwaway ed25519 key in NEAR's wire formats (`ed25519:<base58>` public key, base64 signature). */
+export interface TestKey {
+  publicKey: string;
+  sign(message: Uint8Array): string;
+}
+
+export function newTestKey(): TestKey {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const x = publicKey.export({ format: 'jwk' }).x;
+  if (x === undefined) throw new Error('ed25519 public key has no x coordinate');
+  return {
+    publicKey: `ed25519:${base58Encode(Buffer.from(x, 'base64url'))}`,
+    sign: (message) => cryptoSign(null, message, privateKey).toString('base64'),
+  };
+}
+
+export interface SelfMapRequest {
+  upstreamUrl: string;
+  accountId: string;
+  publicKey: string;
+  timestamp: number;
+  signature: string;
+}
+
+/** A well-formed, correctly signed self-map body for `serviceId`, signed by `key`. */
+export function signSelfMap(opts: {
+  key: TestKey;
+  accountId: string;
+  serviceId: number;
+  upstreamUrl: string;
+  timestamp?: number;
+  network?: string;
+}): SelfMapRequest {
+  const timestamp = opts.timestamp ?? Date.now();
+  const message = buildSelfMapMessage({
+    network: opts.network ?? 'near-mock',
+    serviceId: opts.serviceId,
+    upstreamUrl: opts.upstreamUrl,
+    timestamp,
+  });
+  return {
+    upstreamUrl: opts.upstreamUrl,
+    accountId: opts.accountId,
+    publicKey: opts.key.publicKey,
+    timestamp,
+    signature: opts.key.sign(message),
+  };
+}
+
+/** POST /services/:id/map with a raw body (any shape, so malformed bodies can be sent too). */
+export function postSelfMap(
+  gw: TestGateway,
+  serviceId: number | string,
+  body: unknown,
+): Promise<globalThis.Response> {
+  return fetch(`${gw.baseUrl}/services/${serviceId}/map`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 
 export function sleep(ms: number): Promise<void> {

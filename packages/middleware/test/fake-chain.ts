@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
 import {
+  AgentGateError,
   base58Encode,
   compareYocto,
   isSelfPaid,
   nativeNearOption,
+  PAYMENT_STORAGE_FEE_YOCTO,
   type ActivityEvent,
   type AnySigner,
   type AttestationRecord,
@@ -21,19 +23,30 @@ interface FakePayment {
   txHash: string;
   serviceId: number;
   nonce: string;
-  /** The full attached deposit (the fake keeps no storage fee). */
+  /** The price forwarded to the seller: the attached deposit minus the storage fee the registry keeps. */
   amountYocto: Yocto;
   payer: string;
   timestamp: number;
+  /** Fixed at pay time by the registry rule: the payer is the service owner or payment target. */
+  selfPaid: boolean;
+  attested: boolean;
   /** While > 0, verifyPayment returns 'pending' and decrements. */
   pendingReads: number;
 }
 
+/** A contract panic as the chain clients surface it: `code` is the ERR_* code and the message starts with it. */
+export function contractError(code: string, text: string): AgentGateError {
+  return new AgentGateError(code, `${code}: ${text}`, 400);
+}
+
 /**
- * Minimal in-memory ChainClient fake for middleware tests.
- * Depends ONLY on the ChainClient interface from @agentgate/shared —
- * no devnet, no chain impl details.
- * TODO(Task 4): mirror the registry rules (fee kept, `already_attested`, `selfPaid` from the contract).
+ * In-memory ChainClient fake for middleware tests.
+ * Depends ONLY on the ChainClient interface from @agentgate/shared (no devnet, no chain
+ * client), and mirrors the registry's rules where the gateway relies on them: the storage fee
+ * is kept out of the forwarded amount, `selfPaid` comes from the registry, a payment is
+ * attested once (`ERR_ALREADY_ATTESTED`), and only the service's attestor or owner may attest.
+ * It stays lenient on `pay` (no ERR_DEPOSIT_TOO_LOW) so a test can produce an `amount_too_low`
+ * verdict.
  */
 export class FakeChainClient implements ChainClient {
   readonly network = 'near-mock';
@@ -42,8 +55,16 @@ export class FakeChainClient implements ChainClient {
   readonly attestations: AttestationRecord[] = [];
   /** Payments keyed by tx hash. */
   readonly payments = new Map<string, FakePayment>();
-  /** When > 0, recordAttestation throws and decrements (retry testing). */
+  /** Full-access keys per account (`isFullAccessKey`); any other key counts as function-call-only. */
+  readonly fullAccessKeys = new Map<string, Set<string>>();
+  /** When > 0, recordAttestation throws a plain Error and decrements (retry testing). */
   failAttestations = 0;
+  /** When set, every recordAttestation rejects with this error (e.g. a contract ERR_* panic). */
+  attestationFailure: Error | null = null;
+  /** Number of recordAttestation calls received, failed or not. */
+  attestationCalls = 0;
+  /** When set, isFullAccessKey rejects with this error (chain unreachable). */
+  keyLookupFailure: Error | null = null;
   private counter = 0;
 
   private nextHash(seed: string): string {
@@ -68,6 +89,13 @@ export class FakeChainClient implements ChainClient {
     };
     this.services.set(record.id, record);
     return record;
+  }
+
+  /** Grants `publicKey` full access on `accountId`. */
+  addFullAccessKey(accountId: string, publicKey: string): void {
+    const keys = this.fullAccessKeys.get(accountId) ?? new Set<string>();
+    keys.add(publicKey);
+    this.fullAccessKeys.set(accountId, keys);
   }
 
   /** Marks an existing payment as settling for the next `reads` verify calls. */
@@ -121,8 +149,8 @@ export class FakeChainClient implements ChainClient {
       amountYocto: p.amountYocto,
       timestamp: p.timestamp,
       blockHeight: 0,
-      selfPaid: service !== undefined && isSelfPaid(p.payer, service),
-      attested: this.attestations.some((a) => a.nonce === p.nonce),
+      selfPaid: p.selfPaid,
+      attested: p.attested,
     });
   }
 
@@ -142,18 +170,19 @@ export class FakeChainClient implements ChainClient {
       return Promise.resolve({ ok: false, reason: 'amount_too_low' });
     }
     if (Date.now() - p.timestamp > q.maxAgeMs) return Promise.resolve({ ok: false, reason: 'expired' });
-    const service = this.services.get(p.serviceId);
+    if (p.attested) return Promise.resolve({ ok: false, reason: 'already_attested' });
     return Promise.resolve({
       ok: true,
       amountYocto: p.amountYocto,
       payer: p.payer,
       timestamp: p.timestamp,
-      selfPaid: service !== undefined && isSelfPaid(p.payer, service),
+      selfPaid: p.selfPaid,
     });
   }
 
-  isFullAccessKey(): Promise<boolean> {
-    return Promise.resolve(false);
+  isFullAccessKey(accountId: string, publicKey: string): Promise<boolean> {
+    if (this.keyLookupFailure) return Promise.reject(this.keyLookupFailure);
+    return Promise.resolve(this.fullAccessKeys.get(accountId)?.has(publicKey) ?? false);
   }
 
   registerService(input: RegisterServiceInput, signer: AnySigner): Promise<{ serviceId: number; txHash: string }> {
@@ -176,13 +205,18 @@ export class FakeChainClient implements ChainClient {
     signer: AnySigner,
   ): Promise<{ txHash: string }> {
     const txHash = this.nextHash('pay');
+    const service = this.services.get(input.serviceId);
+    const deposit = BigInt(input.depositYocto);
+    const fee = BigInt(PAYMENT_STORAGE_FEE_YOCTO);
     this.payments.set(txHash, {
       txHash,
       serviceId: input.serviceId,
       nonce: input.nonce,
-      amountYocto: input.depositYocto,
+      amountYocto: (deposit > fee ? deposit - fee : 0n).toString(),
       payer: signer.accountId,
       timestamp: Date.now(),
+      selfPaid: service !== undefined && isSelfPaid(signer.accountId, service),
+      attested: false,
       pendingReads: 0,
     });
     return Promise.resolve({ txHash });
@@ -190,12 +224,34 @@ export class FakeChainClient implements ChainClient {
 
   recordAttestation(
     input: { serviceId: number; nonce: string; paymentTxHash: string; success: boolean },
-    _signer: AnySigner,
+    signer: AnySigner,
   ): Promise<{ txHash: string }> {
+    this.attestationCalls += 1;
+    if (this.attestationFailure) return Promise.reject(this.attestationFailure);
     if (this.failAttestations > 0) {
       this.failAttestations -= 1;
       return Promise.reject(new Error('injected attestation failure'));
     }
+    // The registry's checks, in its order.
+    const service = this.services.get(input.serviceId);
+    if (!service) return Promise.reject(contractError('ERR_SERVICE_NOT_FOUND', 'no such service'));
+    if (signer.accountId !== service.attestor && signer.accountId !== service.owner) {
+      return Promise.reject(contractError('ERR_NOT_AUTHORIZED', 'only the attestor or the owner may attest'));
+    }
+    const payment = [...this.payments.values()].find((p) => p.nonce === input.nonce);
+    if (!payment) return Promise.reject(contractError('ERR_PAYMENT_NOT_FOUND', 'no payment with this nonce'));
+    if (payment.serviceId !== input.serviceId) {
+      return Promise.reject(contractError('ERR_PAYMENT_WRONG_SERVICE', 'the payment belongs to another service'));
+    }
+    if (payment.attested) {
+      return Promise.reject(contractError('ERR_ALREADY_ATTESTED', 'this payment is already attested'));
+    }
+    if (payment.selfPaid) {
+      return Promise.reject(
+        contractError('ERR_SELF_PAYMENT', 'the owner or payment target paid; it cannot be attested'),
+      );
+    }
+    payment.attested = true;
     this.attestations.push({ ...input, timestamp: Date.now() });
     return Promise.resolve({ txHash: this.nextHash('attest') });
   }

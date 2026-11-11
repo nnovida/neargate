@@ -3,8 +3,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
-import { AgentGateError, decodeXPaymentResponse, encodeXPayment, type PaymentRequiredResponse } from '@agentgate/shared';
-import { createApp } from '../src/index';
+import {
+  AgentGateError,
+  decodeXPaymentResponse,
+  encodeXPayment,
+  type PaymentRequiredResponse,
+  type VerifyPaymentQuery,
+  type VerifyResult,
+} from '@agentgate/shared';
+import { createApp, MemoryInvoiceStore } from '../src/index';
 import {
   adminMap,
   bootGateway,
@@ -18,7 +25,15 @@ import {
   type TestGateway,
   type TestUpstream,
 } from './helpers';
-import { FakeChainClient } from './fake-chain';
+import { FakeChainClient, contractError } from './fake-chain';
+
+/** A FakeChainClient whose verifyPayment answers a scripted verdict (the real fake's rules when null). */
+class ScriptedVerdictChain extends FakeChainClient {
+  verdict: VerifyResult | null = null;
+  override verifyPayment(q: VerifyPaymentQuery): Promise<VerifyResult> {
+    return this.verdict ? Promise.resolve(this.verdict) : super.verifyPayment(q);
+  }
+}
 
 describe('paywall flow (mock mode)', () => {
   let gw: TestGateway;
@@ -257,6 +272,46 @@ describe('paywall flow (mock mode)', () => {
     expect(((await res.json()) as PaymentRequiredResponse).error).toBe('not_found');
   });
 
+  it('tx_mismatch → 402 tx_mismatch; the presented nonce is not burned and still pays', async () => {
+    const store = new MemoryInvoiceStore();
+    const mw = await bootGateway({ invoiceStore: store });
+    const up = await startUpstream();
+    try {
+      mw.fake.addService({ id: 1 });
+      await adminMap(mw, 1, `${up.url}/data`);
+      // The buyer's tx pays invoice A, but the proof names invoice B (a different, unpaid nonce).
+      const paidA = await payInvoice(mw, 1);
+      const challengeB = (await (await fetch(`${mw.baseUrl}/svc/1`)).json()) as PaymentRequiredResponse;
+      const nonceB = challengeB.accepts[0]!.extra.nonce;
+      const res = await fetch(`${mw.baseUrl}/svc/1`, {
+        headers: proofHeaders({ txHash: paidA.txHash, nonce: nonceB, network: paidA.network }),
+      });
+      expect(res.status).toBe(402);
+      const body = (await res.json()) as PaymentRequiredResponse;
+      expect(body.error).toBe('tx_mismatch');
+      expect(body.accepts[0]!.extra.nonce).not.toBe(nonceB); // a fresh invoice is offered
+      expect((await store.get(nonceB))?.used).toBe(false); // not burned
+      expect((await store.get(paidA.nonce))?.used).toBe(false);
+      expect(up.seen.length).toBe(0); // never proxied
+      await sleep(50);
+      expect(mw.fake.attestations.length).toBe(0);
+
+      // Invoice B is still good: pay it for real and it is served.
+      const { txHash } = await mw.fake.pay(
+        { serviceId: 1, nonce: nonceB, depositYocto: challengeB.accepts[0]!.maxAmountRequired },
+        { kind: 'mock', accountId: 'buyer.mock' },
+      );
+      const ok = await fetch(`${mw.baseUrl}/svc/1`, {
+        headers: proofHeaders({ txHash, nonce: nonceB, network: paidA.network }),
+      });
+      expect(ok.status).toBe(200);
+      expect((await store.get(nonceB))?.used).toBe(true);
+    } finally {
+      await mw.close();
+      await up.close();
+    }
+  });
+
   it('pending payment → 402 Retry-After:2 with the SAME nonce, then succeeds', async () => {
     const proof = await payInvoice(gw, 1, { pendingReads: 1 });
     const pending = await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
@@ -487,6 +542,243 @@ describe('attestation retry', () => {
       await gw2.close();
     } finally {
       await upstream.close();
+    }
+  });
+});
+
+describe('verify verdict → HTTP (the nonce burns only on ok)', () => {
+  const REASONS = ['not_found', 'wrong_service', 'amount_too_low', 'expired', 'already_attested', 'tx_mismatch'] as const;
+
+  async function boot() {
+    const store = new MemoryInvoiceStore();
+    const fake = new ScriptedVerdictChain();
+    const mw = await bootGateway({ fake, invoiceStore: store });
+    const up = await startUpstream();
+    fake.addService({ id: 1 });
+    await adminMap(mw, 1, `${up.url}/data`);
+    const proof = await payInvoice(mw, 1);
+    return { mw, fake, store, up, proof };
+  }
+
+  it.each(REASONS)('%s → 402 with that reason, a fresh invoice, no burn, no proxy, no attestation', async (reason) => {
+    const { mw, fake, store, up, proof } = await boot();
+    try {
+      fake.verdict = { ok: false, reason };
+      const res = await fetch(`${mw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
+      expect(res.status).toBe(402);
+      const body = (await res.json()) as PaymentRequiredResponse;
+      expect(body.error).toBe(reason);
+      expect(body.accepts[0]!.extra.nonce).not.toBe(proof.nonce);
+      expect(res.headers.get('retry-after')).toBeNull();
+      expect(res.headers.get('x-payment-response')).toBeNull();
+      expect((await store.get(proof.nonce))?.used).toBe(false);
+      expect(up.seen.length).toBe(0);
+      await sleep(50);
+      expect(fake.attestationCalls).toBe(0);
+    } finally {
+      await mw.close();
+      await up.close();
+    }
+  });
+
+  it('pending → 402 settlement_pending, Retry-After 2, the same nonce, no burn', async () => {
+    const { mw, fake, store, up, proof } = await boot();
+    try {
+      fake.verdict = { ok: false, reason: 'pending' };
+      const res = await fetch(`${mw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
+      expect(res.status).toBe(402);
+      expect(res.headers.get('retry-after')).toBe('2');
+      const body = (await res.json()) as PaymentRequiredResponse;
+      expect(body.error).toBe('settlement_pending');
+      expect(body.accepts[0]!.extra.nonce).toBe(proof.nonce);
+      expect((await store.get(proof.nonce))?.used).toBe(false);
+      expect(up.seen.length).toBe(0);
+    } finally {
+      await mw.close();
+      await up.close();
+    }
+  });
+
+  it('ok → the nonce is burned before the upstream is called, then served and attested', async () => {
+    const { mw, fake, store, up, proof } = await boot();
+    try {
+      await adminMap(mw, 1, `${up.url}/slow`); // the upstream holds the request for 400 ms
+      fake.verdict = null; // the fake's own rules: the payment is good
+      const inFlight = fetch(`${mw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
+      await until(() => up.seen.length === 1); // the upstream has the request...
+      expect((await store.get(proof.nonce))?.used).toBe(true); // ...and the nonce was already burned
+      // A concurrent replay of the same proof is refused while the first call is still in flight.
+      const replay = await fetch(`${mw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
+      expect(replay.status).toBe(402);
+      expect(((await replay.json()) as PaymentRequiredResponse).error).toBe('invoice_used');
+      expect(up.seen.length).toBe(1);
+      expect((await inFlight).status).toBe(200);
+      await until(() => fake.attestations.length === 1);
+    } finally {
+      await mw.close();
+      await up.close();
+    }
+  });
+
+  it('the verdict is asked with the invoice terms: nonce, service, price floor, ttl, tx hash and payer', async () => {
+    const { mw, fake, up, proof } = await boot();
+    try {
+      const queries: VerifyPaymentQuery[] = [];
+      const real = fake.verifyPayment.bind(fake);
+      fake.verifyPayment = (q) => {
+        queries.push(q);
+        return real(q);
+      };
+      await fetch(`${mw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
+      expect(queries).toEqual([
+        {
+          nonce: proof.nonce,
+          serviceId: 1,
+          minAmountYocto: '500000000000000000000000',
+          maxAgeMs: mw.config.invoiceTtlMs,
+          txHash: proof.txHash,
+          payer: proof.payer,
+        },
+      ]);
+    } finally {
+      await mw.close();
+      await up.close();
+    }
+  });
+});
+
+describe('attestation follows the registry verdict, not an account comparison', () => {
+  it('a verdict with selfPaid=true is served but never attested, even for an unrelated payer', async () => {
+    const fake = new ScriptedVerdictChain();
+    const mw = await bootGateway({ fake });
+    const up = await startUpstream();
+    try {
+      fake.addService({ id: 1 });
+      await adminMap(mw, 1, `${up.url}/data`);
+      const proof = await payInvoice(mw, 1); // buyer.mock: neither owner nor payment target
+      fake.verdict = { ok: true, amountYocto: '500000000000000000000000', payer: proof.payer, timestamp: Date.now(), selfPaid: true };
+      const res = await fetch(`${mw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
+      expect(res.status).toBe(200);
+      await sleep(100);
+      expect(fake.attestationCalls).toBe(0);
+    } finally {
+      await mw.close();
+      await up.close();
+    }
+  });
+
+  it('a verdict with selfPaid=false is attested even when the payer is the payout account', async () => {
+    const fake = new ScriptedVerdictChain();
+    const mw = await bootGateway({ fake });
+    const up = await startUpstream();
+    try {
+      fake.addService({ id: 1, paymentTarget: 'payout.mock' });
+      await adminMap(mw, 1, `${up.url}/data`);
+      const proof = await payInvoice(mw, 1, { payer: 'payout.mock' });
+      fake.verdict = { ok: true, amountYocto: '500000000000000000000000', payer: 'payout.mock', timestamp: Date.now(), selfPaid: false };
+      const res = await fetch(`${mw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
+      expect(res.status).toBe(200);
+      await until(() => fake.attestationCalls === 1);
+    } finally {
+      await mw.close();
+      await up.close();
+    }
+  });
+});
+
+describe('attestation outcomes the registry answers with ERR_ALREADY_ATTESTED', () => {
+  async function queueDir(): Promise<string> {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'agentgate-attq-'));
+    return path.join(dir, 'attestations.json');
+  }
+  const queued = (file: string): unknown[] => JSON.parse(readFileSync(file, 'utf8')) as unknown[];
+
+  const shapes: [string, () => Error][] = [
+    ['an AgentGateError carrying the contract code', () => contractError('ERR_ALREADY_ATTESTED', 'this payment is already attested')],
+    ['a plain Error whose message starts with the code', () => new Error('ERR_ALREADY_ATTESTED: this payment is already attested')],
+  ];
+
+  it.each(shapes)('%s counts as done: dropped from the durable queue, never retried', async (_name, makeError) => {
+    const queuePath = await queueDir();
+    const fake = new FakeChainClient();
+    fake.addService({ id: 1 });
+    const up = await startUpstream();
+    const mw = await bootGateway({
+      fake,
+      attestationQueuePath: queuePath,
+      attestationRetryDelayMs: 20,
+      attestationMaxAttempts: 4,
+    });
+    try {
+      await adminMap(mw, 1, `${up.url}/data`);
+      fake.attestationFailure = makeError();
+      const proof = await payInvoice(mw, 1);
+      const res = await fetch(`${mw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
+      expect(res.status).toBe(200);
+      await until(() => fake.attestationCalls >= 1);
+      await until(() => queued(queuePath).length === 0); // done, not parked for replay
+      await sleep(250); // far beyond every backoff delay (20, 40, 80 ms)
+      expect(fake.attestationCalls).toBe(1);
+    } finally {
+      await mw.close();
+      await up.close();
+    }
+  });
+
+  it('a payment attested by someone else while the entry sat in the queue is dropped on the next boot', async () => {
+    const queuePath = await queueDir();
+    const fake = new FakeChainClient();
+    fake.addService({ id: 1 });
+    const up = await startUpstream();
+    try {
+      const gw1 = await bootGateway({ fake, attestationQueuePath: queuePath, attestationRetryDelayMs: 20, attestationMaxAttempts: 2 });
+      await adminMap(gw1, 1, `${up.url}/data`);
+      fake.failAttestations = 99;
+      const proof = await payInvoice(gw1, 1);
+      expect((await fetch(`${gw1.baseUrl}/svc/1`, { headers: proofHeaders(proof) })).status).toBe(200);
+      await until(() => fake.attestationCalls === 2); // both attempts failed
+      expect(queued(queuePath)).toHaveLength(1); // parked for replay
+      await gw1.close();
+
+      // Meanwhile the payment gets attested elsewhere (e.g. by the owner); the next replay hits ERR_ALREADY_ATTESTED.
+      fake.failAttestations = 0;
+      await fake.recordAttestation(
+        { serviceId: 1, nonce: proof.nonce, paymentTxHash: proof.txHash, success: true },
+        { kind: 'mock', accountId: 'attestor.mock' },
+      );
+      const callsBefore = fake.attestationCalls;
+      const gw2 = await bootGateway({ fake, attestationQueuePath: queuePath, attestationRetryDelayMs: 20, attestationMaxAttempts: 4 });
+      try {
+        await until(() => queued(queuePath).length === 0);
+        await sleep(250);
+        expect(fake.attestationCalls).toBe(callsBefore + 1); // one replay attempt, no retries
+        expect(fake.attestations).toHaveLength(1); // not double-counted
+      } finally {
+        await gw2.close();
+      }
+    } finally {
+      await up.close();
+    }
+  });
+
+  it('any other contract error is still retried and the entry stays queued', async () => {
+    const queuePath = await queueDir();
+    const fake = new FakeChainClient();
+    fake.addService({ id: 1 });
+    const up = await startUpstream();
+    const mw = await bootGateway({ fake, attestationQueuePath: queuePath, attestationRetryDelayMs: 20, attestationMaxAttempts: 3 });
+    try {
+      await adminMap(mw, 1, `${up.url}/data`);
+      fake.attestationFailure = contractError('ERR_SERVICE_INACTIVE', 'the service is switched off');
+      const proof = await payInvoice(mw, 1);
+      expect((await fetch(`${mw.baseUrl}/svc/1`, { headers: proofHeaders(proof) })).status).toBe(200);
+      await until(() => fake.attestationCalls === 3); // initial attempt + 2 retries
+      await sleep(150);
+      expect(fake.attestationCalls).toBe(3);
+      expect(queued(queuePath)).toHaveLength(1); // left for the next boot
+    } finally {
+      await mw.close();
+      await up.close();
     }
   });
 });

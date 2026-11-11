@@ -76,6 +76,7 @@ export interface SettlementResponse {
 
 /** Longest base58 encoding of 32 bytes; anything longer is rejected before decoding. */
 const TX_HASH_MAX_CHARS = 44;
+const ED25519_KEY_PREFIX = 'ed25519:';
 /** Strict, padded standard base64. */
 const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 /** Upper bound on a relayed SignedDelegate (base64 chars); far above a single `pay` action. */
@@ -105,6 +106,23 @@ export function isNearTxHash(s: unknown): s is string {
   } catch {
     return false;
   }
+}
+
+/** `ed25519:` + the base58 of exactly 32 bytes: the wire format of a NEAR ed25519 public key. */
+export function isEd25519PublicKey(s: unknown): s is string {
+  if (typeof s !== 'string' || !s.startsWith(ED25519_KEY_PREFIX)) return false;
+  const encoded = s.slice(ED25519_KEY_PREFIX.length);
+  if (encoded.length > TX_HASH_MAX_CHARS) return false; // longest base58 of 32 bytes
+  try {
+    return base58Decode(encoded).length === 32;
+  } catch {
+    return false;
+  }
+}
+
+/** Non-empty, strict, padded standard base64 (no URL-safe alphabet, no whitespace). */
+export function isBase64(s: unknown): s is string {
+  return typeof s === 'string' && s !== '' && BASE64_RE.test(s);
 }
 
 export type Caip2 = 'near:testnet' | 'near:mainnet' | 'near:mock';

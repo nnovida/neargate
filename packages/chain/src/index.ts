@@ -3,6 +3,7 @@ import type { AgentGateConfig, ChainClient } from '@agentgate/shared';
 import { MockChainHttpClient } from './mock';
 
 export { MockChainHttpClient } from './mock';
+export { verifyNearSignature } from './near-signature';
 
 /**
  * Picks the ChainClient implementation by `config.mode`:

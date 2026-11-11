@@ -2,7 +2,7 @@ import { describe, it, expect, expectTypeOf } from 'vitest';
 import {
   X402_VERSION, X402_SCHEME, X402_ASSET_NEAR,
   encodeXPayment, decodeXPayment, encodeXPaymentResponse, decodeXPaymentResponse,
-  isNearAccountId, isNearTxHash, caip2For,
+  isNearAccountId, isNearTxHash, isEd25519PublicKey, isBase64, caip2For,
   type NearPaymentExtra, type PaymentPayload, type PaymentRequirements, type SettlementResponse,
 } from '../src/x402';
 import { AgentGateError, base58Encode, type Yocto } from '../src/index';
@@ -273,6 +273,52 @@ describe('isNearTxHash', () => {
   it('rejects other lengths, chars outside the alphabet and non-strings', () => {
     for (const h of ['z'.repeat(44), 'J'.repeat(44), '1'.repeat(31), '1'.repeat(33), TX_44 + '1', TX_44.replace('k', 'l'), 'I' + TX_43, '', 'a'.repeat(10_000), 42, null, undefined]) {
       expect(isNearTxHash(h), JSON.stringify(h)?.slice(0, 50)).toBe(false);
+    }
+  });
+});
+
+describe('isEd25519PublicKey', () => {
+  const key = (bytes: Uint8Array): string => `ed25519:${base58Encode(bytes)}`;
+
+  it('accepts ed25519: plus the base58 of exactly 32 bytes (including leading zero bytes)', () => {
+    for (let i = 0; i < 32; i++) {
+      const bytes = new Uint8Array(32);
+      globalThis.crypto.getRandomValues(bytes);
+      bytes.fill(0, 0, i % 3);
+      expect(isEd25519PublicKey(key(bytes))).toBe(true);
+    }
+    expect(isEd25519PublicKey(`ed25519:${'1'.repeat(32)}`)).toBe(true);
+  });
+
+  it('rejects a missing or other curve prefix, other lengths, bad alphabet and non-strings', () => {
+    const good = key(new Uint8Array(32).fill(9));
+    for (const bad of [
+      good.slice('ed25519:'.length),
+      `secp256k1:${base58Encode(new Uint8Array(32).fill(9))}`,
+      `ED25519:${base58Encode(new Uint8Array(32).fill(9))}`,
+      key(new Uint8Array(31).fill(9)),
+      key(new Uint8Array(33).fill(9)),
+      'ed25519:',
+      'ed25519:0OIl',
+      `${good}${'1'.repeat(10_000)}`,
+      '',
+      42,
+      null,
+      undefined,
+    ]) {
+      expect(isEd25519PublicKey(bad), JSON.stringify(bad)?.slice(0, 60)).toBe(false);
+    }
+  });
+});
+
+describe('isBase64', () => {
+  it('accepts strict padded standard base64', () => {
+    for (const ok of ['AAAA', 'QQ==', 'QUI=', Buffer.alloc(64, 7).toString('base64')]) expect(isBase64(ok), ok).toBe(true);
+  });
+
+  it('rejects empty, unpadded, URL-safe, whitespace and non-strings', () => {
+    for (const bad of ['', 'QQ', 'QQ=', 'a-b_', 'AA AA', 'AAAA\n', '!!!!', 7, null, undefined]) {
+      expect(isBase64(bad), JSON.stringify(bad)).toBe(false);
     }
   });
 });

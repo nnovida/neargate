@@ -58,8 +58,7 @@ export async function startServer(opts: MiddlewareStartOpts = {}): Promise<Runni
 
   let chain = opts.chain;
   if (!chain) {
-    // Lazy import so in-process consumers that inject a ChainClient never
-    // load the chain package (and its chain SDK dependencies) at all.
+    // Only built when no ChainClient is injected; in-process consumers pass their own.
     const { createChainClient } = await import('@agentgate/chain');
     chain = createChainClient(config);
   }

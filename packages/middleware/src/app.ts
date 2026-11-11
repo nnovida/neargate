@@ -14,10 +14,10 @@ import {
   addYocto,
   AgentGateError,
   caip2For,
+  chainErrorCode,
   createLogger,
   decodeXPayment,
   encodeXPaymentResponse,
-  isSelfPaid,
   PAYMENT_STORAGE_FEE_YOCTO,
   randomNonce,
   trustTier,
@@ -39,6 +39,8 @@ import { FileAttestationQueue } from './attestation-queue-file';
 import { UpstreamStore } from './upstream-store';
 import { ServiceCache } from './service-cache';
 import { isUpstreamSuccess, proxyToUpstream } from './proxy';
+import { createSelfMapHandler } from './self-map';
+import { parseServiceId } from './service-id';
 import { resolvedHostIsPublic, validateUpstreamUrl } from './ssrf';
 import {
   HEADER_X_PAYMENT,
@@ -86,7 +88,6 @@ const JSON_BODY_LIMIT = '256kb';
 const SVC_RATE_LIMIT_PER_MINUTE = 60;
 const ADMIN_RATE_LIMIT_PER_MINUTE = 20;
 const SELF_MAP_RATE_LIMIT_PER_MINUTE = 20;
-const SERVICE_ID_RE = /^\d{1,15}$/;
 
 /**
  * True when the request carries a body the gateway cannot faithfully forward.
@@ -109,11 +110,6 @@ function defaultUpstreamsFile(): string {
   // <package>/src/app.ts → <package>/data/upstreams.json
   const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   return path.join(packageDir, 'data', 'upstreams.json');
-}
-
-function parseServiceId(raw: string | undefined): number | null {
-  if (raw === undefined || !SERVICE_ID_RE.test(raw)) return null;
-  return Number(raw);
 }
 
 /** Constant-time string comparison (hash first so lengths never short-circuit). */
@@ -280,7 +276,9 @@ export function createApp(deps: MiddlewareDeps): Express {
    * process alive). On success the payment is dropped from the durable queue; a
    * run whose attempts all fail leaves it queued for replay on the next boot (F7),
    * so a served+paid call is under-counted only until the next restart, never
-   * over-counted.
+   * over-counted. A payment the registry already attested (`ERR_ALREADY_ATTESTED`:
+   * an earlier attempt landed after all, or the owner attested it) is done, not a
+   * failure: it leaves the queue and is never retried.
    */
   function runAttestation(
     service: ServiceRecord,
@@ -303,6 +301,11 @@ export function createApp(deps: MiddlewareDeps): Express {
           void attestations.remove(nonce);
         },
         (err: unknown) => {
+          if (chainErrorCode(err) === 'ERR_ALREADY_ATTESTED') {
+            logger.info('attestation_already_recorded', { ...input, attempt: n });
+            void attestations.remove(nonce);
+            return;
+          }
           if (n >= attestationMaxAttempts) {
             // Leave it queued: a persistent queue replays it on the next boot; an
             // in-memory one drops it (under-count, never over-count).
@@ -343,8 +346,8 @@ export function createApp(deps: MiddlewareDeps): Express {
 
   /**
    * Replay attestations persisted from a previous run that never confirmed (F7).
-   * The registry attests a payment at most once (`ERR_ALREADY_ATTESTED`), so
-   * re-recording an already-scored payment is a harmless rejected no-op.
+   * The registry attests a payment at most once (`ERR_ALREADY_ATTESTED`), so an
+   * already-scored payment is dropped from the queue on its first replay.
    * Fire-and-forget on boot.
    */
   function replayPendingAttestations(): void {
@@ -514,7 +517,7 @@ export function createApp(deps: MiddlewareDeps): Express {
         return;
       }
       if (payment.payload.kind !== 'tx') {
-        // TODO(Task 4): the gasless delegate rail stays off until Task 10.
+        // The gasless delegate rail stays off until the relayer lands (Task 10).
         await respond402Fresh(res, service, resource, 'relayer_disabled');
         return;
       }
@@ -590,15 +593,14 @@ export function createApp(deps: MiddlewareDeps): Express {
       // gateway-level failure (upstream_unreachable/upstream_timeout/too_large)
       // is the seller's backend being unreachable, not a service outcome, so it
       // is not scored either way. And never let a self-paid call earn trust
-      // (F1): a payer that is the owner or the payout account is wash-trading.
-      // TODO(Task 4): skip attestation on the registry's `selfPaid` verdict instead.
-      const selfPaid = isSelfPaid(verdict.payer, service);
-      if (outcome.kind === 'response' && !selfPaid) {
+      // (F1): the registry flags a payment whose payer is the owner or the payout
+      // account (`verdict.selfPaid`) and rejects attesting it, so we do not try.
+      if (outcome.kind === 'response' && !verdict.selfPaid) {
         scheduleAttestation(service, nonceHeader, txHashHeader, success);
       } else {
         logger.info('attestation_skipped', {
           serviceId: id,
-          reason: selfPaid ? 'self_payment' : outcome.kind === 'failure' ? outcome.error : 'skipped',
+          reason: verdict.selfPaid ? 'self_payment' : outcome.kind === 'failure' ? outcome.error : 'skipped',
         });
       }
     }),
@@ -664,12 +666,20 @@ export function createApp(deps: MiddlewareDeps): Express {
   // -------------------------------------------- self-service mapping (no token)
   //
   // A service OWNER maps their upstream by signing a canonical challenge
-  // (`buildSelfMapMessage`) — no shared admin token needed.
-  // TODO(Task 4): verify an ed25519 signature by a full-access key of the
-  // on-chain owner (`chain.isFullAccessKey`); until then the route is disabled.
-  app.post('/services/:id/map', (_req, res) => {
-    res.status(501).json({ error: 'self_map_pending_task4' });
-  });
+  // (`buildSelfMapMessage`) with a full-access key of their NEAR account — no
+  // shared admin token needed. The check order lives in ./self-map.
+  app.post(
+    '/services/:id/map',
+    wrap(
+      createSelfMapHandler({
+        config,
+        chain,
+        logger,
+        upstreams,
+        getService: (id) => services.get(id),
+      }),
+    ),
+  );
 
   // ------------------------------------------------------ fallbacks & errors
 
