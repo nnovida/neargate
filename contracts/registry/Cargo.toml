@@ -1,0 +1,26 @@
+[package]
+name = "neargate-registry"
+description = "NearGate registry: pay-through service registry with payment-backed attestations on NEAR"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk = { workspace = true }
+
+# Host builds (unit tests and cargo-near's ABI pass) get near-sdk's `abi` feature so the
+# BorshSchema / JsonSchema derives on the public types compile. The wasm build does not see
+# this section.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+near-sdk = { workspace = true, features = ["abi"] }
+
+[dev-dependencies]
+near-sdk = { workspace = true, features = ["unit-testing"] }
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(near)']

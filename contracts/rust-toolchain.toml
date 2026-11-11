@@ -1,0 +1,6 @@
+# near-sdk 5.30.x and near-workspaces 0.24.x declare rust-version = 1.95, so the
+# toolchain is pinned here. 1.95.0 emits bulk-memory / nontrapping-fptoint opcodes,
+# which nearcore accepts from protocol version 84 (testnet and the sandbox are newer).
+[toolchain]
+channel = "1.95.0"
+targets = ["wasm32-unknown-unknown"]

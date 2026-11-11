@@ -17,3 +17,7 @@ keys/
 
 # Internal planning docs — kept local, not published
 /AgentGate-PRD-Solo-Build-Plan.md
+
+# NEAR contract build output
+contracts/target/
+*.near-credentials*
