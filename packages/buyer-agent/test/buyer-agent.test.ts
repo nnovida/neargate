@@ -7,6 +7,7 @@ import type {
   ActivityEvent,
   AttestationRecord,
   ChainClient,
+  Logger,
   PaymentRequiredResponse,
   ServiceRecord,
   ServiceScore,
@@ -612,6 +613,158 @@ describe('runBuyerAgent', () => {
     }).catch((e: unknown) => e);
     expect(isAgentGateError(err)).toBe(true);
     if (isAgentGateError(err)) expect(err.code).toBe('BAD_TASK');
+  });
+});
+
+const quietLogger: Logger = {
+  name: 'test',
+  level: 'error',
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+  child: () => quietLogger,
+};
+
+describe('runBuyerAgent · attestation tx from the gateway receipt (live feed carries no tx hash)', () => {
+  const NONCE = '424242';
+
+  /** What a live activity feed holds: the attestation event, with `txHash` null (R33). */
+  function liveFeed(): { attestations: AttestationRecord[]; activity: ActivityEvent[] } {
+    return {
+      attestations: [
+        { serviceId: 1, nonce: NONCE, paymentTxHash: PAYMENT_TX, success: true, timestamp: Date.now() },
+      ],
+      activity: [
+        {
+          kind: 'attestation',
+          serviceId: 1,
+          account: 'gateway.testnet',
+          txHash: null,
+          blockHeight: 3,
+          success: true,
+          nonce: NONCE,
+          paymentTxHash: PAYMENT_TX,
+          timestamp: Date.now(),
+          detail: 'attestation success for service 1',
+        },
+      ],
+    };
+  }
+
+  function receiptBody(status: string, txHash?: string): unknown {
+    return {
+      nonce: NONCE,
+      serviceId: 1,
+      paymentTxHash: PAYMENT_TX,
+      attestation: { status, ...(txHash !== undefined ? { txHash } : {}) },
+    };
+  }
+
+  /** The paywall fake, plus a `/receipts/<nonce>` route answered by `receipts`. */
+  function routed(
+    service: ServiceRecord,
+    receipts: (call: number) => Response | Promise<Response>,
+  ): { impl: typeof fetch; receiptCalls: string[]; allCalls: string[] } {
+    const paywall = paywallFetch(service, { xau_usd: 3310.25 });
+    const receiptCalls: string[] = [];
+    const allCalls: string[] = [];
+    const impl = (async (input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      allCalls.push(url);
+      if (url.includes('/receipts/')) {
+        receiptCalls.push(url);
+        return receipts(receiptCalls.length);
+      }
+      return paywall(input, init);
+    }) as unknown as typeof fetch;
+    return { impl, receiptCalls, allCalls };
+  }
+
+  async function run(
+    chain: ChainClient,
+    fetchImpl: typeof fetch,
+    lines: string[] = [],
+  ): Promise<{ report: BuyerRunReport; logPath: string }> {
+    const logPath = tmpLogPath();
+    const report = await runBuyerAgent({
+      task: 'Get the gold price and summarize it',
+      budgetNear: '5',
+      chain,
+      signer: SIGNER,
+      llm: new MockLlm(),
+      fetchImpl,
+      logger: quietLogger,
+      decisionLogPath: logPath,
+      attestationTimeoutMs: 500,
+      attestationPollIntervalMs: 10,
+      print: (text) => lines.push(text),
+    });
+    return { report, logPath };
+  }
+
+  it('asks the gateway that served the call for the attestation tx, waiting out a pending receipt', async () => {
+    const gold = makeService();
+    const chain = makeChain({ services: [gold], ...liveFeed() });
+    const { impl, receiptCalls } = routed(gold, (call) =>
+      json(call === 1 ? receiptBody('pending') : receiptBody('recorded', ATTEST_TX)),
+    );
+    const lines: string[] = [];
+
+    const { report, logPath } = await run(chain, impl, lines);
+
+    expect(receiptCalls).toEqual(['http://gateway/receipts/424242', 'http://gateway/receipts/424242']);
+    expect(report.paid).toBe(true);
+    expect(report.paymentTxHash).toBe(PAYMENT_TX);
+    expect(report.attestationTxHash).toBe(ATTEST_TX);
+    expect(lines.join('\n')).toContain(`attestation tx: ${ATTEST_TX}`);
+    const attestation = readFileSync(logPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as { step: string; attestationTxHash?: string | null })
+      .find((entry) => entry.step === 'attestation');
+    expect(attestation?.attestationTxHash).toBe(ATTEST_TX);
+  });
+
+  it('does not ask the gateway when the activity feed already names the tx (mock mode)', async () => {
+    const gold = makeService();
+    const { attestations, activity } = liveFeed();
+    const chain = makeChain({ services: [gold], attestations, activity: [{ ...activity[0]!, txHash: ATTEST_TX }] });
+    const { impl, receiptCalls } = routed(gold, () => json(receiptBody('recorded', 'F'.repeat(44))));
+
+    const { report } = await run(chain, impl);
+
+    expect(report.attestationTxHash).toBe(ATTEST_TX);
+    expect(receiptCalls).toEqual([]);
+  });
+
+  it('reports no attestation tx when the receipt says it was recorded by someone else, skipped or failed', async () => {
+    for (const body of [receiptBody('recorded'), receiptBody('failed'), receiptBody('skipped_self_paid')]) {
+      const gold = makeService();
+      const chain = makeChain({ services: [gold], ...liveFeed() });
+      const { impl } = routed(gold, () => json(body));
+      const { report } = await run(chain, impl);
+      expect(report.paid).toBe(true);
+      expect(report.attestationTxHash).toBeNull();
+    }
+  });
+
+  it('keeps the paid report (attestationTxHash null) when the gateway cannot give a receipt', async () => {
+    const gold = makeService();
+    const chain = makeChain({ services: [gold], ...liveFeed() });
+    const { impl, receiptCalls } = routed(gold, () => json({ error: 'receipt_not_found' }, 404));
+    const { report, logPath } = await run(chain, impl);
+    expect(receiptCalls).toHaveLength(1); // an unknown nonce ends the wait at once
+    expect(report.paid).toBe(true);
+    expect(report.attestationTxHash).toBeNull();
+    expect(report.summary).toContain('3310.25');
+
+    const down = routed(gold, () => json({ error: 'down' }, 503));
+    const afterOutage = await run(makeChain({ services: [gold], ...liveFeed() }), down.impl);
+    expect(afterOutage.report.paid).toBe(true);
+    expect(afterOutage.report.attestationTxHash).toBeNull();
+    const steps = readFileSync(logPath, 'utf8').trim().split('\n').map((l) => (JSON.parse(l) as { step: string }).step);
+    expect(steps).toEqual(expect.arrayContaining(['attestation', 'run_end']));
   });
 });
 

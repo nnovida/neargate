@@ -1,4 +1,4 @@
-import type { AnySigner, ChainClient, Logger, Yocto } from '@agentgate/shared';
+import type { AnySigner, ChainClient, GatewayReceipt, Logger, Yocto } from '@agentgate/shared';
 import {
   AgentGateError,
   PAYMENT_STORAGE_FEE_YOCTO,
@@ -11,6 +11,7 @@ import {
   isNearAccountId,
   isRecord,
   isValidNonce,
+  parseGatewayReceipt,
   parseYocto,
 } from '@agentgate/shared';
 import {
@@ -552,4 +553,123 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
   }
 
   return { fetchPaid };
+}
+
+// ---------------------------------------------------------------------------
+// Gateway receipts: where a buyer learns its attestation's tx hash on a live chain
+// ---------------------------------------------------------------------------
+
+export interface ReceiptFetchOpts {
+  /** Injectable fetch implementation (tests). Defaults to globalThis.fetch. */
+  fetchImpl?: typeof fetch;
+  /** Refuse private/loopback/link-local gateway hosts (SSRF guard). Default true. */
+  rejectPrivateHosts?: boolean;
+  /** Per-request timeout (ms). Default 10000. */
+  requestTimeoutMs?: number;
+}
+
+export interface WaitForReceiptOpts extends ReceiptFetchOpts {
+  /** How long to wait for the attestation to leave `pending` (ms). Default 10000. */
+  timeoutMs?: number;
+  /** Pause between polls (ms). Default 500. */
+  pollIntervalMs?: number;
+}
+
+/** Failures that retrying cannot fix: `waitForReceipt` rethrows these at once. */
+const FATAL_RECEIPT_CODES = new Set(['BAD_URL', 'FORBIDDEN_HOST', 'REDIRECT_REFUSED', 'INVALID_NONCE', 'BAD_RECEIPT']);
+
+/**
+ * The gateway's receipts URL for a paid call: `<gateway>/receipts/<nonce>`, taken from the
+ * service's public endpoint `<gateway>/svc/<id>` (the form the registry records).
+ */
+export function receiptUrl(endpointUrl: string, nonce: string): string {
+  if (!isValidNonce(nonce)) {
+    throw new AgentGateError('INVALID_NONCE', `nonce must be 1-20 decimal digits, got ${quoteUrl(nonce)}`, 400);
+  }
+  const match = /^(.*)\/svc\/[0-9]+\/?$/.exec(endpointUrl);
+  if (match?.[1] === undefined) {
+    throw new AgentGateError('BAD_URL', `${quoteUrl(endpointUrl)} is not a <gateway>/svc/<id> endpoint`, 400);
+  }
+  return `${match[1]}/receipts/${nonce}`;
+}
+
+/**
+ * GET `<gateway>/receipts/<nonce>`: the gateway's record of one paid call, including the
+ * attestation tx once it has one. Resolves null when the gateway does not know the nonce (404).
+ * The gateway URL comes from seller-controlled on-chain data, so it passes the same guard as
+ * `fetchPaid` (http(s) only, no private host unless `rejectPrivateHosts: false`) and a
+ * redirect is never followed. Throws BAD_RECEIPT for a body that is not a receipt for this
+ * nonce and RECEIPT_UNAVAILABLE for any other failure to get one.
+ */
+export async function fetchReceipt(
+  endpointUrl: string,
+  nonce: string,
+  opts: ReceiptFetchOpts = {},
+): Promise<GatewayReceipt | null> {
+  const url = receiptUrl(endpointUrl, nonce);
+  await assertFetchableUrl(url, { rejectPrivateHosts: opts.rejectPrivateHosts ?? true });
+  const fetchImpl: typeof fetch = opts.fetchImpl ?? fetch;
+  let res: Response;
+  try {
+    res = await fetchImpl(url, { redirect: 'manual', signal: AbortSignal.timeout(opts.requestTimeoutMs ?? 10_000) });
+  } catch (err) {
+    throw new AgentGateError('RECEIPT_UNAVAILABLE', `could not get ${quoteUrl(url)}: ${formatError(err)}`, 502);
+  }
+  await refuseRedirect(url, res);
+  if (res.status === 404) {
+    await res.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (res.status !== 200) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new AgentGateError('RECEIPT_UNAVAILABLE', `the gateway answered HTTP ${res.status} for ${quoteUrl(url)}`, 502);
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await res.text()) as unknown;
+  } catch {
+    throw new AgentGateError('BAD_RECEIPT', `invalid gateway receipt: ${quoteUrl(url)} did not answer JSON`, 502);
+  }
+  const receipt = parseGatewayReceipt(raw);
+  if (receipt.nonce !== nonce) {
+    throw new AgentGateError('BAD_RECEIPT', `invalid gateway receipt: it is for nonce ${receipt.nonce}, not ${nonce}`, 502);
+  }
+  return receipt;
+}
+
+/**
+ * Polls the receipt until its attestation leaves `pending` (recorded, skipped or failed) or
+ * `timeoutMs` passes. Resolves with the final receipt, or with the last one it saw (still
+ * pending) on timeout, or null when the gateway does not know the nonce. Transient failures
+ * (network, 429, 5xx) are ridden out; if no receipt was ever read before the timeout the last
+ * failure is thrown. A failure retrying cannot fix (forbidden host, redirect, malformed
+ * receipt) is thrown at once.
+ */
+export async function waitForReceipt(
+  endpointUrl: string,
+  nonce: string,
+  opts: WaitForReceiptOpts = {},
+): Promise<GatewayReceipt | null> {
+  const deadline = Date.now() + (opts.timeoutMs ?? 10_000);
+  const pollMs = opts.pollIntervalMs ?? 500;
+  let last: GatewayReceipt | null = null;
+  let lastError: unknown;
+  for (;;) {
+    try {
+      const got = await fetchReceipt(endpointUrl, nonce, opts);
+      if (got === null) return last;
+      last = got;
+      lastError = undefined;
+      if (got.attestation.status !== 'pending') return got;
+    } catch (err) {
+      if (err instanceof AgentGateError && FATAL_RECEIPT_CODES.has(err.code)) throw err;
+      lastError = err;
+    }
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    await sleep(Math.min(pollMs, left));
+  }
+  if (last !== null) return last;
+  if (lastError !== undefined) throw lastError;
+  return null;
 }

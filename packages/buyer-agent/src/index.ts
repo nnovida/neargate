@@ -15,6 +15,7 @@ import {
   formatNear,
   formatPriceWithStorage,
   isAgentGateError,
+  isMockNetwork,
   loadConfig,
   nearToYocto,
   parseYocto,
@@ -22,7 +23,7 @@ import {
   yoctoToNear,
 } from '@agentgate/shared';
 import { createChainClient, loadNearSigner } from '@agentgate/chain';
-import { createAgentGateClient, PaidNotServedError } from '@agentgate/client';
+import { createAgentGateClient, PaidNotServedError, waitForReceipt } from '@agentgate/client';
 import type { CatalogEntry, LlmClient } from './llm';
 import { AnthropicLlm, MockLlm } from './llm';
 import { DecisionLog, DEFAULT_DECISIONS_LOG, padCell, renderBlock } from './decision-log';
@@ -82,6 +83,37 @@ const DEFAULT_ATTESTATION_POLL_MS = 500;
 function sleep(ms: number): Promise<void> {
   if (ms <= 0) return Promise.resolve();
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * The attestation tx the gateway that served the call names in its receipt
+ * (`GET <gateway>/receipts/<nonce>`), or null. A live activity feed cannot say which tx
+ * produced an event (a contract view does not know its own tx), so this is where a buyer on a
+ * live chain learns it. The payment has already gone through, so any failure only loses the hash.
+ */
+async function attestationTxFromReceipt(opts: {
+  endpointUrl: string;
+  nonce: string;
+  fetchImpl: typeof fetch | undefined;
+  rejectPrivateHosts: boolean;
+  timeoutMs: number;
+  pollIntervalMs: number;
+  logger: Logger;
+}): Promise<string | null> {
+  try {
+    const receipt = await waitForReceipt(opts.endpointUrl, opts.nonce, {
+      rejectPrivateHosts: opts.rejectPrivateHosts,
+      timeoutMs: opts.timeoutMs,
+      pollIntervalMs: opts.pollIntervalMs,
+      ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
+    });
+    return receipt?.attestation.status === 'recorded' ? (receipt.attestation.txHash ?? null) : null;
+  } catch (err) {
+    opts.logger.warn('attestation receipt lookup failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
 
 /**
@@ -417,7 +449,6 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
       // An AttestationRecord carries no tx hash of its own: the attestation tx is
       // the matching `attestation` event (same service + nonce) in the activity feed.
       // The payment has already gone through, so a failing feed read only loses the hash.
-      // TODO(Task 6): the live activity feed must carry nonce and txHash for this lookup
       const nonce = found.nonce;
       try {
         const activity = await chain.listRecentActivity(50);
@@ -429,6 +460,18 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
         attestationTxHash = null;
         logger.warn('attestation tx lookup failed', {
           error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      // A live feed has no tx for its events (txHash null): ask the gateway's receipt.
+      if (attestationTxHash === null) {
+        attestationTxHash = await attestationTxFromReceipt({
+          endpointUrl: chosen.service.endpointUrl,
+          nonce,
+          fetchImpl: opts.fetchImpl,
+          rejectPrivateHosts: !isMockNetwork(chain.network),
+          timeoutMs,
+          pollIntervalMs: pollMs,
+          logger,
         });
       }
       print(

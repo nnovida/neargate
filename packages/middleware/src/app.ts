@@ -18,6 +18,7 @@ import {
   createLogger,
   decodeXPayment,
   encodeXPaymentResponse,
+  isValidNonce,
   PAYMENT_STORAGE_FEE_YOCTO,
   randomNonce,
   trustTier,
@@ -39,6 +40,7 @@ import { FileAttestationQueue } from './attestation-queue-file';
 import { UpstreamStore } from './upstream-store';
 import { ServiceCache } from './service-cache';
 import { isUpstreamSuccess, proxyToUpstream } from './proxy';
+import { ReceiptStore } from './receipts';
 import { createSelfMapHandler } from './self-map';
 import { parseServiceId } from './service-id';
 import { resolvedHostIsPublic, validateUpstreamUrl } from './ssrf';
@@ -88,6 +90,7 @@ const JSON_BODY_LIMIT = '256kb';
 const SVC_RATE_LIMIT_PER_MINUTE = 60;
 const ADMIN_RATE_LIMIT_PER_MINUTE = 20;
 const SELF_MAP_RATE_LIMIT_PER_MINUTE = 20;
+const RECEIPTS_RATE_LIMIT_PER_MINUTE = 60;
 
 /**
  * True when the request carries a body the gateway cannot faithfully forward.
@@ -173,6 +176,7 @@ export function createApp(deps: MiddlewareDeps): Express {
     (url) => validateUpstreamUrl(url, { rejectPrivateHosts: config.mode === 'live' }).ok,
   );
   const services = new ServiceCache(chain);
+  const receipts = new ReceiptStore();
   const attestationRetryDelayMs = deps.attestationRetryDelayMs ?? DEFAULT_ATTESTATION_RETRY_DELAY_MS;
   const attestationMaxAttempts = deps.attestationMaxAttempts ?? DEFAULT_ATTESTATION_MAX_ATTEMPTS;
 
@@ -299,17 +303,21 @@ export function createApp(deps: MiddlewareDeps): Express {
           });
           // Confirmed on-chain — drop it from the durable queue so it is not replayed.
           void attestations.remove(nonce);
+          receipts.settle(nonce, { status: 'recorded', txHash: r.txHash });
         },
         (err: unknown) => {
           if (chainErrorCode(err) === 'ERR_ALREADY_ATTESTED') {
             logger.info('attestation_already_recorded', { ...input, attempt: n });
             void attestations.remove(nonce);
+            // Another party attested it: recorded, but this gateway has no tx to name.
+            receipts.settle(nonce, { status: 'recorded' });
             return;
           }
           if (n >= attestationMaxAttempts) {
             // Leave it queued: a persistent queue replays it on the next boot; an
             // in-memory one drops it (under-count, never over-count).
             logger.error('attestation_failed_final', { ...input, attempts: n, error: msg(err) });
+            receipts.settle(nonce, { status: 'failed' });
             return;
           }
           const retryInMs = attestationRetryDelayMs * 2 ** (n - 1);
@@ -355,6 +363,10 @@ export function createApp(deps: MiddlewareDeps): Express {
       for (const p of pending) {
         const service = await services.get(p.serviceId).catch(() => null);
         if (service) {
+          receipts.open(
+            { nonce: p.nonce, serviceId: p.serviceId, paymentTxHash: p.paymentTxHash },
+            { status: 'pending' },
+          );
           runAttestation(service, p.nonce, p.paymentTxHash, p.success);
         } else {
           logger.warn('attestation_replay_skipped_unknown_service', {
@@ -404,6 +416,18 @@ export function createApp(deps: MiddlewareDeps): Express {
     }),
   );
 
+  // Receipts are polled while a buyer waits for its attestation; same budget as /svc.
+  app.use(
+    '/receipts',
+    rateLimit({
+      windowMs: 60_000,
+      limit: RECEIPTS_RATE_LIMIT_PER_MINUTE,
+      standardHeaders: 'draft-7',
+      legacyHeaders: false,
+      message: { error: 'rate_limited' },
+    }),
+  );
+
   // ------------------------------------------------------- public endpoints
 
   // Liveness: the process is up. Cheap and dependency-free (for Docker/Railway).
@@ -443,6 +467,19 @@ export function createApp(deps: MiddlewareDeps): Express {
       res.json({ service, score, trustTier: trustTier(score) });
     }),
   );
+
+  // Public: what the gateway did about attesting one paid call, keyed by the invoice nonce.
+  // Everything in it is already public on chain (service id, payment tx, attestation tx).
+  app.get('/receipts/:nonce', (req, res) => {
+    const nonce = req.params.nonce;
+    const receipt = nonce !== undefined && isValidNonce(nonce) ? receipts.get(nonce) : undefined;
+    if (receipt === undefined) {
+      res.status(404).json({ error: 'receipt_not_found' });
+      return;
+    }
+    res.set('Cache-Control', 'no-store'); // a pending receipt changes
+    res.json(receipt);
+  });
 
   // ---------------------------------------------------------------- paywall
 
@@ -569,6 +606,22 @@ export function createApp(deps: MiddlewareDeps): Express {
       });
       const success = isUpstreamSuccess(outcome);
 
+      // Attest only when the upstream actually returned a response (F4): a
+      // gateway-level failure (upstream_unreachable/upstream_timeout/too_large)
+      // is the seller's backend being unreachable, not a service outcome, so it
+      // is not scored either way. And never let a self-paid call earn trust
+      // (F1): the registry flags a payment whose payer is the owner or the payout
+      // account (`verdict.selfPaid`) and rejects attesting it, so we do not try.
+      const attest = outcome.kind === 'response' && !verdict.selfPaid;
+
+      // The receipt exists before the buyer is answered, so it can ask for it at once.
+      receipts.open(
+        { nonce: nonceHeader, serviceId: id, paymentTxHash: txHashHeader },
+        {
+          status: attest ? 'pending' : verdict.selfPaid ? 'skipped_self_paid' : 'skipped_upstream_failed',
+        },
+      );
+
       // 5. Respond to the buyer first, then attest asynchronously.
       // Always set the settlement confirmation header (payment was processed).
       res.set(
@@ -589,13 +642,7 @@ export function createApp(deps: MiddlewareDeps): Express {
         res.status(outcome.status).json({ error: outcome.error });
       }
 
-      // Attest only when the upstream actually returned a response (F4): a
-      // gateway-level failure (upstream_unreachable/upstream_timeout/too_large)
-      // is the seller's backend being unreachable, not a service outcome, so it
-      // is not scored either way. And never let a self-paid call earn trust
-      // (F1): the registry flags a payment whose payer is the owner or the payout
-      // account (`verdict.selfPaid`) and rejects attesting it, so we do not try.
-      if (outcome.kind === 'response' && !verdict.selfPaid) {
+      if (attest) {
         scheduleAttestation(service, nonceHeader, txHashHeader, success);
       } else {
         logger.info('attestation_skipped', {

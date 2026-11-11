@@ -31,6 +31,11 @@ export interface BuyServiceOpts {
   settleDelayMs?: number;
   fetchImpl?: typeof fetch;
   requestTimeoutMs?: number;
+  /**
+   * Forwarded to createAgentGateClient. Off-mock the client refuses private/loopback gateway
+   * hosts; pass `false` to lift that for this one call (a dev-only escape hatch).
+   */
+  rejectPrivateHosts?: boolean;
 }
 
 export interface BuyServiceResult {
@@ -111,6 +116,7 @@ export async function buyService(opts: BuyServiceOpts): Promise<BuyServiceResult
     ...(opts.settleDelayMs !== undefined ? { settleDelayMs: opts.settleDelayMs } : {}),
     ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
     ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
+    ...(opts.rejectPrivateHosts !== undefined ? { rejectPrivateHosts: opts.rejectPrivateHosts } : {}),
   });
 
   const init: RequestInit | undefined =

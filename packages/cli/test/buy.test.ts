@@ -194,6 +194,25 @@ describe('buyService', () => {
     expect(new Headers(calls[1]!.init?.headers).has('X-PAYMENT')).toBe(true);
   });
 
+  it('keeps the private-host guard on a live chain; rejectPrivateHosts: false lifts it for that one call', async () => {
+    const live = {
+      ...makeFakeChain(makeService(1, { endpointUrl: 'http://127.0.0.1:4021/svc/1' })),
+      network: 'near-testnet',
+    } as FakeChain;
+    let asked = 0;
+    const impl = (async () => {
+      asked += 1;
+      return Response.json({ free: true });
+    }) as typeof fetch;
+
+    await expect(buyService(baseOpts(live, impl))).rejects.toMatchObject({ code: 'FORBIDDEN_HOST' });
+    expect(asked).toBe(0); // refused before any request
+
+    const { result } = await buyService({ ...baseOpts(live, impl), rejectPrivateHosts: false });
+    expect(asked).toBe(1);
+    expect(result).toMatchObject({ status: 200, paid: false });
+  });
+
   it('--max caps the total spend: price + storage fee above it is refused before any HTTP', async () => {
     const chain = makeFakeChain(makeService(1)); // 0.5 NEAR + 0.002 NEAR storage
     const { impl, calls } = gatewayFetch(() => Response.json({}));
