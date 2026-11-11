@@ -46,7 +46,7 @@ describe('paywall flow (mock mode)', () => {
   it('GET /healthz reports ok + network', async () => {
     const res = await fetch(`${gw.baseUrl}/healthz`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, network: 'mock' });
+    expect(await res.json()).toEqual({ ok: true, network: 'near-mock' });
   });
 
   it('unpaid request gets a 402 challenge with a valid x402 PaymentRequiredResponse', async () => {

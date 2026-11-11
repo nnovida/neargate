@@ -1,5 +1,6 @@
 import { base58Decode } from './base58';
 import { AgentGateError } from './errors';
+import { MOCK_NETWORK } from './network';
 import { isValidNonce } from './nonce';
 import type { Yocto } from './types';
 
@@ -106,11 +107,24 @@ export function isNearTxHash(s: unknown): s is string {
   }
 }
 
-/** CAIP-2 id for a chain network: `near-testnet` → `near:testnet`. Idempotent for CAIP-2 input. */
-export function caip2For(network: string): string {
-  if (network.includes(':')) return network;
-  const reference = network.startsWith('near-') ? network.slice('near-'.length) : network;
-  return `near:${reference}`;
+export type Caip2 = 'near:testnet' | 'near:mainnet' | 'near:mock';
+
+/** CAIP-2 id for a chain network: `near-testnet` → `near:testnet`. Any other network is a config error. */
+export function caip2For(network: string): Caip2 {
+  switch (network) {
+    case 'near-testnet':
+      return 'near:testnet';
+    case 'near-mainnet':
+      return 'near:mainnet';
+    case MOCK_NETWORK:
+      return 'near:mock';
+    default:
+      throw new AgentGateError(
+        'CONFIG_INVALID',
+        `unknown chain network ${JSON.stringify(network)} (expected near-testnet, near-mainnet or ${MOCK_NETWORK})`,
+        500,
+      );
+  }
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

@@ -36,7 +36,7 @@ interface FakePayment {
  * TODO(Task 4): mirror the registry rules (fee kept, `already_attested`, `selfPaid` from the contract).
  */
 export class FakeChainClient implements ChainClient {
-  readonly network = 'mock';
+  readonly network = 'near-mock';
   readonly registryId = 'registry.mock';
   readonly services = new Map<number, ServiceRecord>();
   readonly attestations: AttestationRecord[] = [];

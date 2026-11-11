@@ -1,4 +1,11 @@
-import { AgentGateError, isSelfPaid, isValidNonce, stripTrailingSlashes } from '@agentgate/shared';
+import {
+  AgentGateError,
+  MOCK_NETWORK,
+  MOCK_REGISTRY_ID,
+  REGISTRATION_DEPOSIT_YOCTO,
+  isValidNonce,
+  stripTrailingSlashes,
+} from '@agentgate/shared';
 import type {
   ActivityEvent,
   AnySigner,
@@ -15,16 +22,6 @@ import type {
 } from '@agentgate/shared';
 
 const YOCTO_RE = /^(0|[1-9]\d*)$/;
-
-/** Shape of the devnet's GET /chain/transfers/:txHash response. */
-interface DevnetTransfer {
-  txHash: string;
-  from: string;
-  to: string;
-  amountYocto: Yocto;
-  transferId: string;
-  timestamp: number;
-}
 
 /** Devnet is local/in-process, but never let a hung socket block a request forever. */
 const DEVNET_REQUEST_TIMEOUT_MS = 30_000;
@@ -47,8 +44,10 @@ function requireMockSigner(signer: AnySigner): MockSigner {
   return signer;
 }
 
-function notYet(method: string): AgentGateError {
-  return new AgentGateError('not_implemented', `MockChainHttpClient.${method} lands in Task 3`, 501);
+function assertNonEmpty(value: string, what: string): void {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw invalid(`${what} must be a non-empty string`);
+  }
 }
 
 function assertServiceId(id: number): void {
@@ -58,13 +57,15 @@ function assertServiceId(id: number): void {
 }
 
 /**
- * ChainClient backed by the local devnet's REST API.
- * Maps every read/write 1:1 onto the devnet routes.
- * TODO(Task 3): mirror the NEAR registry routes (`/registry/*`), `network = 'near-mock'`.
+ * ChainClient backed by the local devnet's REST API (`/registry/*` and `/accounts/*`).
+ *
+ * Contract rejections come back as AgentGateError whose `code` is the contract's `ERR_*` code
+ * and whose message starts with it ("ERR_NONCE_USED: nonce already paid"), the same shape a
+ * contract panic has, so mock and live callers handle one error format.
  */
 export class MockChainHttpClient implements ChainClient {
-  readonly network = 'mock';
-  readonly registryId = 'registry.mock';
+  readonly network = MOCK_NETWORK;
+  readonly registryId = MOCK_REGISTRY_ID;
   private readonly baseUrl: string;
 
   constructor(devnetUrl: string) {
@@ -117,13 +118,14 @@ export class MockChainHttpClient implements ChainClient {
     if (res.status === 404 && allow404) return null;
     if (!res.ok) {
       const errBody = (parsed ?? {}) as { error?: unknown; message?: unknown };
-      throw new AgentGateError(
-        typeof errBody.error === 'string' ? errBody.error : 'devnet_error',
+      const code = typeof errBody.error === 'string' ? errBody.error : 'devnet_error';
+      const detail =
         typeof errBody.message === 'string'
           ? errBody.message
-          : `devnet responded ${res.status} on ${method} ${path}`,
-        res.status,
-      );
+          : `devnet responded ${res.status} on ${method} ${path}`;
+      // A contract panic message starts with its ERR_* code; the devnet sends the text alone.
+      const message = code.startsWith('ERR_') && !detail.startsWith(code) ? `${code}: ${detail}` : detail;
+      throw new AgentGateError(code, message, res.status);
     }
     return parsed as T;
   }
@@ -145,55 +147,62 @@ export class MockChainHttpClient implements ChainClient {
 
   async getService(id: number): Promise<ServiceRecord | null> {
     assertServiceId(id);
-    return await this.request<ServiceRecord>('GET', `/chain/services/${id}`, undefined, true);
+    return await this.request<ServiceRecord>('GET', `/registry/services/${id}`, undefined, true);
   }
 
   async listServices(): Promise<ServiceRecord[]> {
-    return await this.get<ServiceRecord[]>('/chain/services');
+    return await this.get<ServiceRecord[]>('/registry/services');
   }
 
   async getScore(id: number): Promise<ServiceScore> {
     assertServiceId(id);
-    return await this.get<ServiceScore>(`/chain/services/${id}/score`);
+    return await this.get<ServiceScore>(`/registry/services/${id}/score`);
   }
 
   async listAttestations(serviceId: number, limit?: number): Promise<AttestationRecord[]> {
     assertServiceId(serviceId);
     const qs = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`;
-    return await this.get<AttestationRecord[]>(`/chain/services/${serviceId}/attestations${qs}`);
+    return await this.get<AttestationRecord[]>(`/registry/services/${serviceId}/attestations${qs}`);
   }
 
   async listRecentActivity(limit?: number): Promise<ActivityEvent[]> {
     const qs = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`;
-    return await this.get<ActivityEvent[]>(`/chain/activity${qs}`);
+    return await this.get<ActivityEvent[]>(`/registry/activity${qs}`);
   }
 
   async getBalance(accountId: string): Promise<Yocto> {
-    if (typeof accountId !== 'string' || accountId.trim() === '') {
-      throw invalid('accountId must be a non-empty string');
-    }
-    const result = await this.get<{ account: string; balanceYocto: Yocto }>(
-      `/chain/balance/${encodeURIComponent(accountId)}`,
+    assertNonEmpty(accountId, 'accountId');
+    const result = await this.get<{ accountId: string; balanceYocto: Yocto }>(
+      `/accounts/${encodeURIComponent(accountId)}/balance`,
     );
     return result.balanceYocto;
   }
 
-  /** TODO(Task 3): GET the registry payment record by nonce. */
-  async getPayment(_nonce: string): Promise<PaymentRecord | null> {
-    throw notYet('getPayment');
+  async getPayment(nonce: string): Promise<PaymentRecord | null> {
+    assertNonEmpty(nonce, 'nonce');
+    return await this.request<PaymentRecord>(
+      'GET',
+      `/registry/payments/${encodeURIComponent(nonce)}`,
+      undefined,
+      true,
+    );
   }
 
-  /** TODO(Task 3): devnet accounts get deterministic full-access keys. */
-  async isFullAccessKey(_accountId: string, _publicKey: string): Promise<boolean> {
-    throw notYet('isFullAccessKey');
+  /** Devnet accounts own exactly one full-access key, derived from the account id. */
+  async isFullAccessKey(accountId: string, publicKey: string): Promise<boolean> {
+    assertNonEmpty(accountId, 'accountId');
+    assertNonEmpty(publicKey, 'publicKey');
+    const result = await this.get<{ fullAccess: boolean }>(
+      `/accounts/${encodeURIComponent(accountId)}/keys/${encodeURIComponent(publicKey)}`,
+    );
+    return result.fullAccess;
   }
 
   /**
-   * Looks up the transfer by txHash, then checks nonce → service target →
-   * amount → age. `pending` never occurs in mock mode because devnet transfers
-   * settle synchronously.
-   * TODO(Task 3): verify against the registry payment record (by nonce), with
-   * `already_attested` and `selfPaid` from the contract rules.
+   * Checks the registry's payment record for the nonce: not_found, wrong_service,
+   * amount_too_low, expired, already_attested, then ok. `pending` never occurs in mock mode
+   * because devnet payments settle synchronously, and `txHash`/`payer` are ignored: matching
+   * the transaction to the nonce (`tx_mismatch`) is a live-only check.
    */
   async verifyPayment(q: VerifyPaymentQuery): Promise<VerifyResult> {
     if (typeof q.nonce !== 'string' || !isValidNonce(q.nonce)) {
@@ -206,45 +215,57 @@ export class MockChainHttpClient implements ChainClient {
     if (typeof q.maxAgeMs !== 'number' || !Number.isFinite(q.maxAgeMs) || q.maxAgeMs < 0) {
       throw invalid('maxAgeMs must be a non-negative number');
     }
-    if (q.txHash === undefined || q.txHash.trim() === '') return { ok: false, reason: 'not_found' };
 
-    const transfer = await this.request<DevnetTransfer>(
-      'GET',
-      `/chain/transfers/${encodeURIComponent(q.txHash)}`,
-      undefined,
-      true,
-    );
-    if (transfer === null) return { ok: false, reason: 'not_found' };
-    if (transfer.transferId !== q.nonce) return { ok: false, reason: 'tx_mismatch' };
-    const service = await this.getService(q.serviceId);
-    if (service === null || transfer.to !== service.paymentTarget) {
-      return { ok: false, reason: 'wrong_service' };
-    }
-    if (BigInt(transfer.amountYocto) < BigInt(q.minAmountYocto)) {
+    const payment = await this.getPayment(q.nonce);
+    if (payment === null) return { ok: false, reason: 'not_found' };
+    if (payment.serviceId !== q.serviceId) return { ok: false, reason: 'wrong_service' };
+    if (BigInt(payment.amountYocto) < BigInt(q.minAmountYocto)) {
       return { ok: false, reason: 'amount_too_low' };
     }
-    if (Date.now() - transfer.timestamp > q.maxAgeMs) {
-      return { ok: false, reason: 'expired' };
-    }
+    if (Date.now() - payment.timestamp > q.maxAgeMs) return { ok: false, reason: 'expired' };
+    if (payment.attested) return { ok: false, reason: 'already_attested' };
     return {
       ok: true,
-      amountYocto: transfer.amountYocto,
-      payer: transfer.from,
-      timestamp: transfer.timestamp,
-      selfPaid: isSelfPaid(transfer.from, service),
+      amountYocto: payment.amountYocto,
+      payer: payment.payer,
+      timestamp: payment.timestamp,
+      selfPaid: payment.selfPaid,
     };
   }
 
   // ---- writes ---------------------------------------------------------------
 
+  /** Registers a service, attaching exactly the registration deposit. */
   async registerService(
     input: RegisterServiceInput,
     signer: AnySigner,
   ): Promise<{ serviceId: number; txHash: string }> {
     const mockSigner = requireMockSigner(signer);
-    return await this.post<{ serviceId: number; txHash: string }>('/chain/register-service', {
-      ...input,
-      ownerAccountId: mockSigner.accountId,
+    return await this.post<{ serviceId: number; txHash: string }>('/registry/register', {
+      signer: mockSigner.accountId,
+      input,
+      depositYocto: REGISTRATION_DEPOSIT_YOCTO,
+    });
+  }
+
+  /**
+   * Calls the registry's `pay` with `depositYocto` attached: the price goes to the service's
+   * payment target, the storage fee stays in the registry, the rest is refunded.
+   */
+  async pay(
+    input: { serviceId: number; nonce: string; depositYocto: Yocto },
+    signer: AnySigner,
+  ): Promise<{ txHash: string }> {
+    const mockSigner = requireMockSigner(signer);
+    assertServiceId(input.serviceId);
+    if (typeof input.depositYocto !== 'string' || !YOCTO_RE.test(input.depositYocto)) {
+      throw invalid('depositYocto must be a yocto decimal string');
+    }
+    return await this.post<{ txHash: string }>('/registry/pay', {
+      signer: mockSigner.accountId,
+      serviceId: input.serviceId,
+      nonce: input.nonce, // the registry checks the shape (ERR_INVALID_NONCE)
+      depositYocto: input.depositYocto,
     });
   }
 
@@ -254,12 +275,12 @@ export class MockChainHttpClient implements ChainClient {
   ): Promise<{ txHash: string }> {
     const mockSigner = requireMockSigner(signer);
     assertServiceId(input.serviceId);
-    return await this.post<{ txHash: string }>('/chain/attestations', {
+    return await this.post<{ txHash: string }>('/registry/attest', {
+      signer: mockSigner.accountId,
       serviceId: input.serviceId,
       nonce: input.nonce,
       paymentTxHash: input.paymentTxHash,
       success: input.success,
-      byAccountId: mockSigner.accountId,
     });
   }
 
@@ -270,39 +291,10 @@ export class MockChainHttpClient implements ChainClient {
   ): Promise<{ txHash: string }> {
     const mockSigner = requireMockSigner(signer);
     assertServiceId(serviceId);
-    return await this.post<{ txHash: string }>(`/chain/services/${serviceId}/active`, {
+    return await this.post<{ txHash: string }>('/registry/active', {
+      signer: mockSigner.accountId,
+      serviceId,
       active,
-      byAccountId: mockSigner.accountId,
     });
-  }
-
-  /**
-   * Pays a service: moves `depositYocto` to the service's payment target,
-   * tagged with the invoice nonce.
-   * TODO(Task 3): call the devnet registry `pay` (price forwarded, storage fee kept, excess refunded).
-   */
-  async pay(
-    input: { serviceId: number; nonce: string; depositYocto: Yocto },
-    signer: AnySigner,
-  ): Promise<{ txHash: string }> {
-    const mockSigner = requireMockSigner(signer);
-    assertServiceId(input.serviceId);
-    if (typeof input.nonce !== 'string' || !isValidNonce(input.nonce)) {
-      throw invalid('nonce must be 1–20 decimal digits');
-    }
-    if (typeof input.depositYocto !== 'string' || !YOCTO_RE.test(input.depositYocto)) {
-      throw invalid('depositYocto must be a yocto decimal string');
-    }
-    const service = await this.getService(input.serviceId);
-    if (service === null) {
-      throw new AgentGateError('service_not_found', `no service with id ${input.serviceId}`, 404);
-    }
-    const result = await this.post<{ txHash: string; timestamp: number }>('/chain/transfers', {
-      fromAccountId: mockSigner.accountId,
-      to: service.paymentTarget,
-      amountYocto: input.depositYocto,
-      transferId: input.nonce,
-    });
-    return { txHash: result.txHash };
   }
 }

@@ -13,9 +13,10 @@
  *   → activity feed holds all three event kinds
  *   plus: expired-invoice (TTL 100ms) and inactive-service tests.
  *
- * TODO(Task 5): mechanically ported; red until the devnet mirrors the registry
- * (Task 3: base58 tx hashes, `pay` keeps the storage fee) and the loop is re-asserted
- * on balances (seller +0.5 NEAR, buyer −0.502 NEAR).
+ * TODO(Task 4/5): the devnet now mirrors the registry (base58 tx hashes, `pay` keeps the
+ * storage fee). Red until the middleware verifies registry payments (Task 4), and until the
+ * loop is re-asserted on balances (seller +0.5 NEAR, buyer −0.502 NEAR) with the underpay case
+ * rebuilt, since the registry now rejects an under-deposited `pay` itself (Task 5).
  */
 import { rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -30,6 +31,7 @@ import {
   decodeXPaymentResponse,
   encodeXPayment,
   isNearAccountId,
+  isNearTxHash,
   loadConfig,
   X402_SCHEME,
   X402_VERSION,
@@ -42,7 +44,6 @@ import {
 const PRICE_YOCTO = '500000000000000000000000'; // 0.5 NEAR
 /** Price + the 0.002 NEAR storage fee: what a NEAR invoice asks for. */
 const MAX_AMOUNT_YOCTO = '502000000000000000000000';
-const HASH_RE = /^[0-9a-f]{64}$/;
 
 interface Running {
   port: number;
@@ -133,7 +134,7 @@ describe('full mock-mode loop (e2e)', () => {
 
     expect(wrapped.adminOk).toBe(true);
     expect(wrapped.serviceId).toBeGreaterThanOrEqual(1);
-    expect(wrapped.txHash).toMatch(HASH_RE);
+    expect(isNearTxHash(wrapped.txHash)).toBe(true);
     expect(wrapped.publicUrl).toBe(`${gateway}/svc/${wrapped.serviceId}`);
 
     serviceId = wrapped.serviceId;
@@ -163,7 +164,7 @@ describe('full mock-mode loop (e2e)', () => {
 
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const req = body.accepts[0]!;
-    expect(req.network).toBe('mock');
+    expect(req.network).toBe('near-mock');
     expect(req.extra.serviceId).toBe(serviceId);
     expect(req.description).toBe('RWA FX & Gold Oracle');
     expect(req.maxAmountRequired).toBe(MAX_AMOUNT_YOCTO);

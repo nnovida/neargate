@@ -1,6 +1,6 @@
 import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
-import { AgentGateError, createLogger, MIN_PRICE_YOCTO } from '@agentgate/shared';
+import { AgentGateError, MOCK_NETWORK, createLogger, parseYocto } from '@agentgate/shared';
 import type { AgentGateConfig, Logger, Yocto } from '@agentgate/shared';
 import { DevnetState } from './state';
 
@@ -9,20 +9,17 @@ export interface DevnetDeps {
   logger?: Logger;
 }
 
-const U64_MAX = 18_446_744_073_709_551_615n;
-const YOCTO_RE = /^(0|[1-9]\d*)$/;
 const MAX_QUERY_LIMIT = 1000;
 
 function badRequest(message: string, code = 'invalid_request'): AgentGateError {
   return new AgentGateError(code, message, 400);
 }
 
-function asBody(req: Request): Record<string, unknown> {
-  const body: unknown = req.body;
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    throw badRequest('request body must be a JSON object');
+function asObject(value: unknown, what: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw badRequest(`${what} must be a JSON object`);
   }
-  return body as Record<string, unknown>;
+  return value as Record<string, unknown>;
 }
 
 function reqString(body: Record<string, unknown>, field: string, allowEmpty = false): string {
@@ -38,31 +35,21 @@ function reqBool(body: Record<string, unknown>, field: string): boolean {
   return value;
 }
 
-/** Yocto amounts are bigint-backed decimal strings — never floats. */
-function reqYocto(body: Record<string, unknown>, field: string, minInclusive = 0n): Yocto {
+/** Yocto amounts are bigint-backed decimal strings (at most u128::MAX), never floats. */
+function reqYocto(body: Record<string, unknown>, field: string): Yocto {
   const value = reqString(body, field);
-  if (!YOCTO_RE.test(value)) {
-    throw badRequest(`"${field}" must be a non-negative integer yocto string`);
+  try {
+    return parseYocto(value).toString();
+  } catch {
+    throw badRequest(`"${field}" must be a non-negative integer yocto string (at most 2^128 - 1)`);
   }
-  if (BigInt(value) < minInclusive) {
-    throw badRequest(`"${field}" must be ≥ ${minInclusive} yocto`);
-  }
-  return value;
 }
 
-/** transfer_id is a u64 decimal string. */
-function reqU64(body: Record<string, unknown>, field: string): string {
-  const value = reqString(body, field);
-  if (!YOCTO_RE.test(value) || BigInt(value) > U64_MAX) {
-    throw badRequest(`"${field}" must be a u64 decimal string`);
-  }
-  return value;
-}
-
-function reqServiceIdBody(body: Record<string, unknown>, field = 'serviceId'): number {
-  const value = body[field];
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
-    throw badRequest(`"${field}" must be a positive integer`);
+/** The contract's `service_id` is a u64: 0 is a well-formed id that simply does not exist. */
+function reqServiceIdBody(body: Record<string, unknown>): number {
+  const value = body['serviceId'];
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw badRequest('"serviceId" must be a non-negative integer');
   }
   return value;
 }
@@ -88,25 +75,14 @@ function parseLimit(req: Request, fallback: number): number {
   return limit;
 }
 
-function reqUrl(body: Record<string, unknown>, field: string): string {
-  const value = reqString(body, field);
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw badRequest(`"${field}" must be a valid URL`, 'invalid_endpoint_url');
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw badRequest(`"${field}" must be an http(s) URL`, 'invalid_endpoint_url');
-  }
-  return value;
-}
-
 type SyncHandler = (req: Request, res: Response) => void;
 
 /**
  * Pure express app factory for the in-memory mock chain — no listen().
- * TODO(Task 3): move to the /registry/* routes that mirror the NEAR registry.
+ *
+ * Writes name the signing account as `signer` (an account id; the devnet trusts it) and answer a
+ * rejected contract call with HTTP 400 `{ error: 'ERR_*', message }`. Reads of a missing service
+ * or payment answer 404.
  */
 export function createApp(deps: DevnetDeps = {}): Express {
   const logger = deps.logger ?? createLogger('devnet');
@@ -135,143 +111,156 @@ export function createApp(deps: DevnetDeps = {}): Express {
     };
   };
 
-  // POST /faucet {account, amountYocto} → {balanceYocto}
+  // ---- accounts -------------------------------------------------------------
+
+  // POST /faucet {accountId, amountYocto} → {accountId, balanceYocto, publicKey, secretKey}
   app.post(
     '/faucet',
     wrap((req, res) => {
-      const body = asBody(req);
-      const account = reqString(body, 'account');
-      const amountYocto = reqYocto(body, 'amountYocto');
-      res.json(state.faucet(account, amountYocto));
+      const body = asObject(req.body, 'request body');
+      res.json(state.faucet(reqString(body, 'accountId'), reqYocto(body, 'amountYocto')));
     }),
   );
 
-  // GET /chain/balance/:account → {account, balanceYocto}
+  // GET /accounts/:id/balance → {accountId, balanceYocto}
   app.get(
-    '/chain/balance/:account',
+    '/accounts/:id/balance',
     wrap((req, res) => {
-      const account = req.params['account'] ?? '';
-      if (account.trim() === '') throw badRequest('account must not be empty');
-      res.json({ account, balanceYocto: state.getBalance(account) });
+      const accountId = req.params['id'] ?? '';
+      res.json({ accountId, balanceYocto: state.getBalance(accountId) });
     }),
   );
 
-  // POST /chain/transfers {fromAccountId, to, amountYocto, transferId} → {txHash, timestamp}
-  app.post(
-    '/chain/transfers',
-    wrap((req, res) => {
-      const body = asBody(req);
-      res.json(
-        state.transfer({
-          fromAccountId: reqString(body, 'fromAccountId'),
-          to: reqString(body, 'to'),
-          amountYocto: reqYocto(body, 'amountYocto', 1n),
-          transferId: reqU64(body, 'transferId'),
-        }),
-      );
-    }),
-  );
-
-  // GET /chain/transfers/:txHash → transfer record or 404
+  // GET /accounts/:id/keys/:publicKey → {fullAccess}
   app.get(
-    '/chain/transfers/:txHash',
+    '/accounts/:id/keys/:publicKey',
     wrap((req, res) => {
-      const txHash = req.params['txHash'] ?? '';
-      if (txHash.trim() === '') throw badRequest('txHash must not be empty');
-      res.json(state.getTransfer(txHash));
+      res.json({
+        fullAccess: state.hasFullAccessKey(req.params['id'] ?? '', req.params['publicKey'] ?? ''),
+      });
     }),
   );
 
-  // POST /chain/register-service RegisterServiceInput & {ownerAccountId} → {serviceId, txHash}
+  // ---- registry writes ------------------------------------------------------
+
+  // POST /registry/register {signer, input: RegisterServiceInput, depositYocto} → {serviceId, txHash}
   app.post(
-    '/chain/register-service',
+    '/registry/register',
     wrap((req, res) => {
-      const body = asBody(req);
+      const body = asObject(req.body, 'request body');
+      const input = asObject(body['input'], '"input"');
       res.json(
-        state.registerService({
-          name: reqString(body, 'name', true), // emptiness mirrored as the contract's empty_name error
-          description: reqString(body, 'description', true),
-          gatewayBaseUrl: reqUrl(body, 'gatewayBaseUrl'),
-          priceYocto: reqYocto(body, 'priceYocto'),
-          paymentTarget: reqString(body, 'paymentTarget'),
-          attestor: reqString(body, 'attestor'),
-          ownerAccountId: reqString(body, 'ownerAccountId'),
-        }),
+        state.registerService(
+          reqString(body, 'signer'),
+          {
+            name: reqString(input, 'name', true), // blankness is the contract's ERR_EMPTY_NAME
+            description: reqString(input, 'description', true),
+            gatewayBaseUrl: reqString(input, 'gatewayBaseUrl', true),
+            priceYocto: reqYocto(input, 'priceYocto'),
+            paymentTarget: reqString(input, 'paymentTarget'),
+            attestor: reqString(input, 'attestor'),
+          },
+          reqYocto(body, 'depositYocto'),
+        ),
       );
     }),
   );
 
-  // POST /chain/attestations {serviceId, nonce, paymentTxHash, success, byAccountId} → {txHash}
+  // POST /registry/pay {signer, serviceId, nonce, depositYocto} → {txHash}
   app.post(
-    '/chain/attestations',
+    '/registry/pay',
     wrap((req, res) => {
-      const body = asBody(req);
+      const body = asObject(req.body, 'request body');
       res.json(
-        state.recordAttestation({
-          serviceId: reqServiceIdBody(body),
-          nonce: reqString(body, 'nonce'),
-          paymentTxHash: reqString(body, 'paymentTxHash'),
-          success: reqBool(body, 'success'),
-          byAccountId: reqString(body, 'byAccountId'),
-        }),
+        state.pay(
+          reqString(body, 'signer'),
+          reqServiceIdBody(body),
+          reqString(body, 'nonce', true), // the shape is the contract's ERR_INVALID_NONCE
+          reqYocto(body, 'depositYocto'),
+        ),
       );
     }),
   );
 
-  // POST /chain/services/:id/active {active, byAccountId} → {txHash} — owner only
+  // POST /registry/attest {signer, serviceId, nonce, paymentTxHash, success} → {txHash}
   app.post(
-    '/chain/services/:id/active',
+    '/registry/attest',
     wrap((req, res) => {
-      const body = asBody(req);
+      const body = asObject(req.body, 'request body');
       res.json(
-        state.setActive(serviceIdParam(req), reqBool(body, 'active'), reqString(body, 'byAccountId')),
+        state.recordAttestation(
+          reqString(body, 'signer'),
+          reqServiceIdBody(body),
+          reqString(body, 'nonce', true), // an unknown nonce is the contract's ERR_PAYMENT_NOT_FOUND
+          reqString(body, 'paymentTxHash', true),
+          reqBool(body, 'success'),
+        ),
       );
     }),
   );
 
-  // GET /chain/services → ServiceRecord[]
+  // POST /registry/active {signer, serviceId, active} → {txHash} — owner only
+  app.post(
+    '/registry/active',
+    wrap((req, res) => {
+      const body = asObject(req.body, 'request body');
+      res.json(state.setActive(reqString(body, 'signer'), reqServiceIdBody(body), reqBool(body, 'active')));
+    }),
+  );
+
+  // ---- registry reads -------------------------------------------------------
+
+  // GET /registry/services → ServiceRecord[] (ids ascending)
   app.get(
-    '/chain/services',
+    '/registry/services',
     wrap((_req, res) => {
       res.json(state.listServices());
     }),
   );
 
-  // GET /chain/services/:id → ServiceRecord or 404
+  // GET /registry/services/:id → ServiceRecord or 404
   app.get(
-    '/chain/services/:id',
+    '/registry/services/:id',
     wrap((req, res) => {
       res.json(state.getService(serviceIdParam(req)));
     }),
   );
 
-  // GET /chain/services/:id/score → ServiceScore
+  // GET /registry/services/:id/score → ServiceScore
   app.get(
-    '/chain/services/:id/score',
+    '/registry/services/:id/score',
     wrap((req, res) => {
       res.json(state.getScore(serviceIdParam(req)));
     }),
   );
 
-  // GET /chain/services/:id/attestations?limit= → AttestationRecord[] (newest first)
+  // GET /registry/services/:id/attestations?limit= → AttestationRecord[] (newest first)
   app.get(
-    '/chain/services/:id/attestations',
+    '/registry/services/:id/attestations',
     wrap((req, res) => {
       res.json(state.listAttestations(serviceIdParam(req), parseLimit(req, MAX_QUERY_LIMIT)));
     }),
   );
 
-  // GET /chain/activity?limit= → ActivityEvent[] (newest first, default 50)
+  // GET /registry/payments/:nonce → PaymentRecord or 404
   app.get(
-    '/chain/activity',
+    '/registry/payments/:nonce',
+    wrap((req, res) => {
+      res.json(state.getPayment(req.params['nonce'] ?? ''));
+    }),
+  );
+
+  // GET /registry/activity?limit= → ActivityEvent[] (newest first, default 50)
+  app.get(
+    '/registry/activity',
     wrap((req, res) => {
       res.json(state.listActivity(parseLimit(req, 50)));
     }),
   );
 
-  // GET /healthz → {ok:true, network:'mock'}
+  // GET /healthz → {ok:true, network:'near-mock'}
   app.get('/healthz', (_req, res) => {
-    res.json({ ok: true, network: 'mock' });
+    res.json({ ok: true, network: MOCK_NETWORK });
   });
 
   // Unknown routes → 404 JSON.
@@ -294,9 +283,6 @@ export function createApp(deps: DevnetDeps = {}): Express {
     });
     res.status(500).json({ error: 'internal_error', message: 'unexpected devnet error' });
   });
-
-  // Expose the contract floor for tooling/tests without re-hardcoding it.
-  app.set('minPriceYocto', MIN_PRICE_YOCTO);
 
   return app;
 }

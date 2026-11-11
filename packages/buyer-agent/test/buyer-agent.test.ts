@@ -60,7 +60,7 @@ function makeChain(opts: FakeChainOpts = {}): ChainClient {
   const attestations = opts.attestations ?? [];
   const activity = opts.activity ?? [];
   return {
-    network: 'mock',
+    network: 'near-mock',
     registryId: REGISTRY,
     getService: vi.fn(async (id: number) => services.find((s) => s.id === id) ?? null),
     listServices: vi.fn(async () => services),
@@ -90,7 +90,7 @@ function invoiceFor(service: ServiceRecord): PaymentRequiredResponse {
     accepts: [
       {
         scheme: X402_SCHEME,
-        network: 'mock',
+        network: 'near-mock',
         maxAmountRequired: service.priceYocto,
         asset: 'NEAR',
         payTo: REGISTRY,

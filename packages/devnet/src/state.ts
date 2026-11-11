@@ -1,80 +1,88 @@
-import { createHash } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
 import {
   AgentGateError,
+  MIN_PRICE_YOCTO,
+  MOCK_REGISTRY_ID,
+  PAYMENT_STORAGE_FEE_YOCTO,
+  REGISTRATION_DEPOSIT_YOCTO,
+  addYocto,
+  base58Encode,
   formatNear,
   isNearAccountId,
-  MIN_PRICE_YOCTO,
+  isSelfPaid,
+  isValidNonce,
   nativeNearOption,
+  parseYocto,
   stripTrailingSlashes,
 } from '@agentgate/shared';
 import type {
   ActivityEvent,
   AttestationRecord,
+  PaymentRecord,
+  RegisterServiceInput,
   ServiceRecord,
   ServiceScore,
   Yocto,
 } from '@agentgate/shared';
 
-// TODO(Task 3): mirror the neargate-registry pay-through rules (pay / payments by
-// nonce / storage fee / self-paid) instead of plain value transfers.
+// The rules below copy contracts/registry/src/lib.rs: same checks, same order, same ERR_* codes
+// and texts. Outside the contract sit two mock-only errors (ERR_INSUFFICIENT_BALANCE,
+// ERR_INVALID_ACCOUNT_ID) and the MAX_SERVICES memory guard. The contract's ERR_STORAGE_EXCEEDED
+// is not simulated: the devnet keeps no storage accounting.
 
-/** Activity feed retains at most this many events (oldest dropped). */
-export const ACTIVITY_LOG_CAP = 500;
-/** Mirrors the on-chain contract: last 100 attestations per service. */
-export const ATTESTATIONS_PER_SERVICE_CAP = 100;
+/** Attestations kept per service, newest first (lib.rs MAX_ATTESTATIONS). */
+export const MAX_ATTESTATIONS = 100;
+/** Events the activity feed keeps, newest first (lib.rs ACTIVITY_CAP). */
+export const ACTIVITY_CAP = 200;
 /**
- * Transfer-lookup ring buffer cap (oldest tx hash dropped). The mock chain's
- * faucet/transfer are unauthenticated, so bound this map to keep memory finite.
- */
-export const TRANSFER_LOG_CAP = 2000;
-/**
- * Hard ceiling on registered services. register-service is unauthenticated on
- * the mock chain; cap it so the registry can't grow without bound.
+ * Memory guard for the in-process devnet, NOT a protocol rule: the contract has no cap.
+ * register is unauthenticated here, so bound the registry to keep memory finite.
  */
 export const MAX_SERVICES = 1000;
 
-export interface TransferRecord {
-  txHash: string;
-  /** Sender account id. */
-  from: string;
-  /** Target account id. */
-  to: string;
-  amountYocto: Yocto;
-  transferId: string;
-  timestamp: number;
+// Field limits in UTF-8 bytes, as lib.rs counts them (NAME_MAX, DESC_MAX, URL_MAX, TX_HASH_MAX).
+const NAME_MAX = 64;
+const DESC_MAX = 280;
+const URL_MAX = 200;
+const TX_HASH_MAX = 64;
+
+/** The devnet's one full-access key for an account, as near-cli strings. */
+export interface DevnetKey {
+  /** `ed25519:<base58 of the 32-byte public key>` */
+  publicKey: string;
+  /** `ed25519:<base58 of seed || public key>` (64 bytes, the near-cli format) */
+  secretKey: string;
 }
 
-export interface TransferInput {
-  fromAccountId: string;
-  to: string;
-  amountYocto: Yocto;
-  transferId: string;
-}
+/** PKCS#8 DER header for an ed25519 private key; the 32-byte seed follows it. */
+const PKCS8_ED25519_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
-export interface RegisterInput {
-  name: string;
-  description: string;
-  /** The GATEWAY BASE url; readers compute `<base>/svc/<id>`. */
-  gatewayBaseUrl: string;
-  priceYocto: Yocto;
-  paymentTarget: string;
-  attestor: string;
-  ownerAccountId: string;
-}
-
-export interface AttestationInput {
-  serviceId: number;
-  nonce: string;
-  paymentTxHash: string;
-  success: boolean;
-  byAccountId: string;
+/**
+ * The key pair every devnet account owns: an ed25519 key whose 32-byte seed is
+ * `sha256('neargate-devnet-key/v1:' + accountId)`. Computed on demand, never stored, so the
+ * repo holds no key material.
+ */
+export function deriveDevnetKey(accountId: string): DevnetKey {
+  const seed = createHash('sha256').update(`neargate-devnet-key/v1:${accountId}`).digest();
+  const privateKey = createPrivateKey({
+    key: Buffer.concat([PKCS8_ED25519_PREFIX, seed]),
+    format: 'der',
+    type: 'pkcs8',
+  });
+  const publicBytes = Buffer.from(createPublicKey(privateKey).export({ format: 'jwk' }).x ?? '', 'base64url');
+  return {
+    publicKey: `ed25519:${base58Encode(publicBytes)}`,
+    secretKey: `ed25519:${base58Encode(Buffer.concat([seed, publicBytes]))}`,
+  };
 }
 
 interface InternalService {
   id: number;
   name: string;
   description: string;
+  /** Stored as given; readers compute `<base>/svc/<id>`. */
   gatewayBaseUrl: string;
+  /** The service's one option, the native NEAR price (`accepts` is derived from it). */
   priceYocto: Yocto;
   paymentTarget: string;
   owner: string;
@@ -83,239 +91,315 @@ interface InternalService {
   createdAt: number;
 }
 
-function err(httpStatus: number, code: string, message: string): AgentGateError {
-  return new AgentGateError(code, message, httpStatus);
+/** A contract panic: HTTP 400 with the stable `ERR_*` code the contract panics with. */
+function contractError(code: string, message: string): AgentGateError {
+  return new AgentGateError(code, message, 400);
+}
+
+/** The mock counterpart of the runtime failing to deserialize a malformed `AccountId` argument. */
+function assertAccountId(value: string, field: string): void {
+  if (!isNearAccountId(value)) {
+    throw contractError('ERR_INVALID_ACCOUNT_ID', `${field} is not a valid NEAR account id`);
+  }
+}
+
+/** lib.rs check_len: limits count UTF-8 bytes, not characters. */
+function checkLen(field: string, value: string, max: number): void {
+  if (Buffer.byteLength(value, 'utf8') > max) {
+    throw contractError('ERR_FIELD_TOO_LONG', `${field} is longer than ${max} bytes`);
+  }
 }
 
 /**
- * In-memory mock chain: account balances in yocto (keyed by account id), value
- * transfers tagged with a transfer id, the registry contract's state and an
- * activity log. Enforces the registry's attestation rules (attestor-or-owner
- * auth, one attestation per payment nonce, inactive service, owner-only
- * set_active).
+ * In-memory mock chain: account balances in yoctoNEAR and the registry contract's state
+ * (services, payments by nonce, scores, attestations, activity ring). Every write is atomic: it
+ * checks everything first, then moves balances, stores state and takes a block, so a rejected
+ * call changes nothing.
  */
 export class DevnetState {
   private readonly balances = new Map<string, bigint>();
-  private readonly transfers = new Map<string, TransferRecord>();
-  /** Insertion order of `transfers` keys, oldest first — drives TRANSFER_LOG_CAP eviction. */
-  private readonly transferOrder: string[] = [];
   private readonly services = new Map<number, InternalService>();
   private readonly scores = new Map<number, { total: number; success: number }>();
-  /** Newest first, capped at ATTESTATIONS_PER_SERVICE_CAP per service. */
+  /** Newest first, capped at MAX_ATTESTATIONS per service. */
   private readonly attestations = new Map<number, AttestationRecord[]>();
-  private readonly seenPayments = new Set<string>();
-  /** Newest first, capped at ACTIVITY_LOG_CAP. */
+  /** Keyed by nonce. Never deleted: that is what makes a nonce single-use. */
+  private readonly payments = new Map<string, PaymentRecord>();
+  /** Newest first, capped at ACTIVITY_CAP. */
   private readonly activity: ActivityEvent[] = [];
   private txCounter = 0;
+  private blockHeight = 0;
   private nextServiceId = 1;
 
-  /** Deterministic-ish 64-char tx hash: sha256(JSON.stringify(payload) + monotonic counter). TODO(Task 3): base58. */
-  private txHash(payload: unknown): string {
+  /** Starts a block for a successful mutating call and names its transaction. */
+  private nextTx(payload: unknown): { txHash: string; blockHeight: number; timestamp: number } {
+    this.blockHeight += 1;
     this.txCounter += 1;
-    return createHash('sha256')
+    const digest = createHash('sha256')
       .update(JSON.stringify(payload) + String(this.txCounter))
-      .digest('hex');
+      .digest();
+    // Setting the top bit makes the 32-byte value >= 2^255, which base58-encodes to exactly 44 chars.
+    digest.writeUInt8(digest.readUInt8(0) | 0x80, 0);
+    return { txHash: base58Encode(digest), blockHeight: this.blockHeight, timestamp: Date.now() };
   }
 
   private pushActivity(event: ActivityEvent): void {
     this.activity.unshift(event);
-    if (this.activity.length > ACTIVITY_LOG_CAP) this.activity.length = ACTIVITY_LOG_CAP;
+    if (this.activity.length > ACTIVITY_CAP) this.activity.length = ACTIVITY_CAP;
   }
 
-  private balanceOf(accountKey: string): bigint {
-    return this.balances.get(accountKey) ?? 0n;
+  private balanceOf(accountId: string): bigint {
+    return this.balances.get(accountId) ?? 0n;
   }
 
-  // ---- balances & transfers -------------------------------------------------
-
-  faucet(account: string, amountYocto: Yocto): { balanceYocto: Yocto } {
-    const next = this.balanceOf(account) + BigInt(amountYocto);
-    this.balances.set(account, next);
-    return { balanceYocto: next.toString() };
-  }
-
-  getBalance(account: string): Yocto {
-    return this.balanceOf(account).toString();
-  }
-
-  transfer(input: TransferInput): { txHash: string; timestamp: number } {
-    const from = input.fromAccountId;
-    const to = input.to;
-    const amount = BigInt(input.amountYocto);
-    const balance = this.balanceOf(from);
-    if (balance < amount) {
-      throw err(
-        400,
-        'insufficient_balance',
-        `account ${from} has ${balance} yocto, needs ${amount} yocto`,
+  /**
+   * ERR_INSUFFICIENT_BALANCE (mock-only): NEAR rejects a transaction whose signer cannot fund the
+   * attached deposit before the contract runs, so this check precedes every contract check.
+   */
+  private assertCanFund(accountId: string, attached: bigint): void {
+    const balance = this.balanceOf(accountId);
+    if (balance < attached) {
+      throw contractError(
+        'ERR_INSUFFICIENT_BALANCE',
+        `${accountId} has ${balance} yocto, the attached deposit is ${attached} yocto`,
       );
     }
-    const timestamp = Date.now();
-    const txHash = this.txHash({
-      kind: 'transfer',
-      from,
-      to,
-      amountYocto: input.amountYocto,
-      transferId: input.transferId,
-    });
-    this.balances.set(from, balance - amount);
+  }
+
+  private move(from: string, to: string, amount: bigint): void {
+    this.balances.set(from, this.balanceOf(from) - amount);
     this.balances.set(to, this.balanceOf(to) + amount);
-    const record: TransferRecord = {
-      txHash,
-      from,
-      to,
-      amountYocto: amount.toString(),
-      transferId: input.transferId,
-      timestamp,
-    };
-    this.transfers.set(txHash, record);
-    this.transferOrder.push(txHash);
-    while (this.transferOrder.length > TRANSFER_LOG_CAP) {
-      const evicted = this.transferOrder.shift();
-      if (evicted !== undefined) this.transfers.delete(evicted);
+  }
+
+  private service(serviceId: number): InternalService {
+    const service = this.services.get(serviceId);
+    if (!service) throw contractError('ERR_SERVICE_NOT_FOUND', 'no such service');
+    return service;
+  }
+
+  // ---- accounts -------------------------------------------------------------
+
+  /** Credits an account (creating it) and returns its balance and its devnet key. */
+  faucet(accountId: string, amountYocto: Yocto): { accountId: string; balanceYocto: Yocto } & DevnetKey {
+    assertAccountId(accountId, 'accountId');
+    const balanceYocto = addYocto(this.balanceOf(accountId).toString(), amountYocto);
+    this.balances.set(accountId, BigInt(balanceYocto));
+    this.blockHeight += 1;
+    return { accountId, balanceYocto, ...deriveDevnetKey(accountId) };
+  }
+
+  getBalance(accountId: string): Yocto {
+    assertAccountId(accountId, 'accountId');
+    return this.balanceOf(accountId).toString();
+  }
+
+  /** True iff the devnet knows the account (it has a balance record) and `publicKey` is its key. */
+  hasFullAccessKey(accountId: string, publicKey: string): boolean {
+    return this.balances.has(accountId) && deriveDevnetKey(accountId).publicKey === publicKey;
+  }
+
+  // ---- registry writes (lib.rs change methods) -----------------------------------
+
+  /** lib.rs `register_service`. The registry keeps REGISTRATION_DEPOSIT_YOCTO and refunds the rest. */
+  registerService(
+    signer: string,
+    input: RegisterServiceInput,
+    depositYocto: Yocto,
+  ): { serviceId: number; txHash: string } {
+    assertAccountId(signer, 'signer');
+    const attached = parseYocto(depositYocto);
+    this.assertCanFund(signer, attached);
+    assertAccountId(input.paymentTarget, 'paymentTarget');
+    assertAccountId(input.attestor, 'attestor');
+    const priceYocto = parseYocto(input.priceYocto);
+
+    const name = input.name.trim();
+    if (name === '') throw contractError('ERR_EMPTY_NAME', 'the service name must not be blank');
+    checkLen('name', name, NAME_MAX);
+    checkLen('description', input.description, DESC_MAX);
+    checkLen('gateway_base_url', input.gatewayBaseUrl, URL_MAX);
+    // validate_accepts: the devnet registers exactly one option, the native price, so only the
+    // native floor can fail (and ERR_NO_NATIVE_PRICE in `pay` cannot happen).
+    if (priceYocto < parseYocto(MIN_PRICE_YOCTO)) {
+      throw contractError(
+        'ERR_INVALID_PRICE',
+        `the near amount must be at least ${MIN_PRICE_YOCTO} yocto`,
+      );
     }
-
-    const service = [...this.services.values()].find((s) => s.paymentTarget === to) ?? null;
-    this.pushActivity({
-      kind: 'payment',
-      serviceId: service?.id ?? null,
-      account: from,
-      txHash,
-      blockHeight: this.txCounter,
-      amountYocto: amount.toString(),
-      nonce: input.transferId,
-      timestamp,
-      detail: `payment of ${formatNear(amount.toString())} to ${to} (nonce ${input.transferId})`,
-    });
-    return { txHash, timestamp };
-  }
-
-  getTransfer(txHash: string): TransferRecord {
-    const record = this.transfers.get(txHash);
-    if (!record) throw err(404, 'transfer_not_found', `no transfer with tx hash ${txHash}`);
-    return record;
-  }
-
-  // ---- registry (mirrors the registry contract) -----------------------------
-
-  registerService(input: RegisterInput): { serviceId: number; txHash: string } {
+    if (attached < parseYocto(REGISTRATION_DEPOSIT_YOCTO)) {
+      throw contractError(
+        'ERR_DEPOSIT_TOO_LOW',
+        `attach at least ${REGISTRATION_DEPOSIT_YOCTO} yocto (${formatNear(REGISTRATION_DEPOSIT_YOCTO)})`,
+      );
+    }
     if (this.services.size >= MAX_SERVICES) {
-      throw err(429, 'service_limit_reached', `mock chain caps the registry at ${MAX_SERVICES} services`);
-    }
-    if (input.name.trim() === '') throw err(400, 'empty_name', 'service name must not be empty');
-    if (BigInt(input.priceYocto) < BigInt(MIN_PRICE_YOCTO)) {
-      throw err(400, 'invalid_price', `priceYocto must be ≥ ${MIN_PRICE_YOCTO} yocto`);
-    }
-    const paymentTarget = input.paymentTarget;
-    if (!isNearAccountId(paymentTarget)) {
-      throw err(400, 'invalid_payment_target', 'paymentTarget must be a NEAR account id');
+      throw new AgentGateError(
+        'service_limit_reached',
+        `the devnet caps the registry at ${MAX_SERVICES} services`,
+        429,
+      );
     }
 
     const serviceId = this.nextServiceId;
     this.nextServiceId += 1;
-    const createdAt = Date.now();
-    const txHash = this.txHash({ kind: 'register_service', serviceId, name: input.name });
-    const service: InternalService = {
+    const { txHash, blockHeight, timestamp } = this.nextTx({ kind: 'register_service', serviceId, name });
+    this.move(signer, MOCK_REGISTRY_ID, parseYocto(REGISTRATION_DEPOSIT_YOCTO));
+    this.services.set(serviceId, {
       id: serviceId,
-      name: input.name,
+      name,
       description: input.description,
-      gatewayBaseUrl: stripTrailingSlashes(input.gatewayBaseUrl),
-      priceYocto: BigInt(input.priceYocto).toString(),
-      paymentTarget,
-      owner: input.ownerAccountId,
+      gatewayBaseUrl: input.gatewayBaseUrl,
+      priceYocto: priceYocto.toString(),
+      paymentTarget: input.paymentTarget,
+      owner: signer,
       attestor: input.attestor,
       active: true,
-      createdAt,
-    };
-    this.services.set(serviceId, service);
-    this.scores.set(serviceId, { total: 0, success: 0 });
-    this.attestations.set(serviceId, []);
-
+      createdAt: timestamp,
+    });
     this.pushActivity({
       kind: 'service_registered',
       serviceId,
-      account: service.owner,
+      account: signer,
       txHash,
-      blockHeight: this.txCounter,
-      timestamp: createdAt,
-      detail: `service "${input.name}" registered (id ${serviceId}) at ${formatNear(service.priceYocto)}/call`,
+      blockHeight,
+      timestamp,
+      detail: `service #${serviceId} registered by ${signer}`,
     });
     return { serviceId, txHash };
   }
 
-  recordAttestation(input: AttestationInput): { txHash: string } {
-    const service = this.services.get(input.serviceId);
-    if (!service) throw err(404, 'service_not_found', `no service with id ${input.serviceId}`);
-    if (input.byAccountId !== service.attestor && input.byAccountId !== service.owner) {
-      throw err(
-        403,
-        'not_authorized',
-        'attestations may only be recorded by the service attestor or owner',
+  /**
+   * lib.rs `pay`. Debits exactly price + PAYMENT_STORAGE_FEE_YOCTO from the payer (the excess of
+   * the attached deposit is never taken), credits the price to the payment target and the fee to
+   * the registry.
+   */
+  pay(
+    signer: string,
+    serviceId: number,
+    nonce: string,
+    depositYocto: Yocto,
+  ): { txHash: string } {
+    assertAccountId(signer, 'signer');
+    const attached = parseYocto(depositYocto);
+    this.assertCanFund(signer, attached);
+
+    const service = this.service(serviceId);
+    if (!service.active) throw contractError('ERR_SERVICE_INACTIVE', 'the service is switched off');
+    const price = parseYocto(service.priceYocto);
+    const fee = parseYocto(PAYMENT_STORAGE_FEE_YOCTO);
+    const required = price + fee;
+    if (attached < required) {
+      throw contractError(
+        'ERR_DEPOSIT_TOO_LOW',
+        `attach at least ${required} yocto (price + storage fee)`,
       );
     }
-    if (!service.active) {
-      throw err(400, 'service_inactive', `service ${service.id} is inactive`);
+    if (!isValidNonce(nonce)) {
+      throw contractError('ERR_INVALID_NONCE', 'the nonce must be 1 to 20 decimal digits');
     }
-    const dupKey = `${service.id}:${input.nonce}`;
-    if (this.seenPayments.has(dupKey)) {
-      throw err(
-        409,
-        'duplicate_attestation',
-        `payment ${input.nonce} already attested for service ${service.id}`,
-      );
-    }
-    this.seenPayments.add(dupKey);
+    if (this.payments.has(nonce)) throw contractError('ERR_NONCE_USED', 'nonce already paid');
 
-    const timestamp = Date.now();
-    const txHash = this.txHash({
-      kind: 'record_attestation',
-      serviceId: service.id,
-      nonce: input.nonce,
-      paymentTxHash: input.paymentTxHash,
-      success: input.success,
-    });
-    const score = this.scores.get(service.id) ?? { total: 0, success: 0 };
-    score.total += 1;
-    if (input.success) score.success += 1;
-    this.scores.set(service.id, score);
-
-    const list = this.attestations.get(service.id) ?? [];
-    list.unshift({
-      serviceId: service.id,
-      nonce: input.nonce,
-      paymentTxHash: input.paymentTxHash,
-      success: input.success,
+    const { txHash, blockHeight, timestamp } = this.nextTx({ kind: 'pay', serviceId, nonce, payer: signer });
+    this.move(signer, service.paymentTarget, price);
+    this.move(signer, MOCK_REGISTRY_ID, fee);
+    this.payments.set(nonce, {
+      nonce,
+      serviceId,
+      payer: signer,
+      amountYocto: price.toString(),
       timestamp,
+      blockHeight,
+      selfPaid: isSelfPaid(signer, service),
+      attested: false,
     });
-    if (list.length > ATTESTATIONS_PER_SERVICE_CAP) list.length = ATTESTATIONS_PER_SERVICE_CAP;
-    this.attestations.set(service.id, list);
+    this.pushActivity({
+      kind: 'payment',
+      serviceId,
+      account: signer,
+      txHash,
+      blockHeight,
+      amountYocto: price.toString(),
+      nonce,
+      timestamp,
+      detail: `${signer} paid ${formatNear(price.toString())} to service #${serviceId}`,
+    });
+    return { txHash };
+  }
+
+  /** lib.rs `record_attestation`: attestor or owner only, once per payment, never a self-payment. */
+  recordAttestation(
+    signer: string,
+    serviceId: number,
+    nonce: string,
+    paymentTxHash: string,
+    success: boolean,
+  ): { txHash: string } {
+    assertAccountId(signer, 'signer');
+    const service = this.service(serviceId);
+    if (signer !== service.attestor && signer !== service.owner) {
+      throw contractError('ERR_NOT_AUTHORIZED', 'only the attestor or the owner may attest');
+    }
+    if (!service.active) throw contractError('ERR_SERVICE_INACTIVE', 'the service is switched off');
+    checkLen('payment_tx_hash', paymentTxHash, TX_HASH_MAX);
+
+    const payment = this.payments.get(nonce);
+    if (!payment) throw contractError('ERR_PAYMENT_NOT_FOUND', 'no payment with this nonce');
+    if (payment.serviceId !== serviceId) {
+      throw contractError('ERR_PAYMENT_WRONG_SERVICE', 'the payment belongs to another service');
+    }
+    if (payment.attested) {
+      throw contractError('ERR_ALREADY_ATTESTED', 'this payment is already attested');
+    }
+    if (payment.selfPaid) {
+      throw contractError(
+        'ERR_SELF_PAYMENT',
+        'the owner or payment target paid; it cannot be attested',
+      );
+    }
+
+    const { txHash, blockHeight, timestamp } = this.nextTx({
+      kind: 'record_attestation',
+      serviceId,
+      nonce,
+      success,
+    });
+    payment.attested = true;
+    const score = this.scores.get(serviceId) ?? { total: 0, success: 0 };
+    score.total += 1;
+    if (success) score.success += 1;
+    this.scores.set(serviceId, score);
+
+    const list = this.attestations.get(serviceId) ?? [];
+    list.unshift({ serviceId, nonce, paymentTxHash, success, timestamp });
+    if (list.length > MAX_ATTESTATIONS) list.length = MAX_ATTESTATIONS;
+    this.attestations.set(serviceId, list);
 
     this.pushActivity({
       kind: 'attestation',
-      serviceId: service.id,
-      account: input.byAccountId,
+      serviceId,
+      account: signer,
       txHash,
-      blockHeight: this.txCounter,
-      success: input.success,
-      nonce: input.nonce,
+      blockHeight,
+      success,
+      nonce,
       timestamp,
-      detail: `attestation ${input.success ? 'success' : 'failure'} for service ${service.id} (payment ${input.paymentTxHash.slice(0, 10)}…)`,
+      detail: `attested service #${serviceId} — ${success ? 'success' : 'failure'}`,
     });
     return { txHash };
   }
 
-  setActive(serviceId: number, active: boolean, byAccountId: string): { txHash: string } {
-    const service = this.services.get(serviceId);
-    if (!service) throw err(404, 'service_not_found', `no service with id ${serviceId}`);
-    if (byAccountId !== service.owner) {
-      throw err(403, 'not_authorized', 'only the service owner may change the active flag');
+  /** lib.rs `set_active`: owner only. Writes no activity entry. */
+  setActive(signer: string, serviceId: number, active: boolean): { txHash: string } {
+    assertAccountId(signer, 'signer');
+    const service = this.service(serviceId);
+    if (service.owner !== signer) {
+      throw contractError('ERR_NOT_AUTHORIZED', 'only the service owner may do this');
     }
+    const { txHash } = this.nextTx({ kind: 'set_active', serviceId, active });
     service.active = active;
-    const txHash = this.txHash({ kind: 'set_active', serviceId, active });
     return { txHash };
   }
 
-  // ---- reads ----------------------------------------------------------------
+  // ---- registry views -------------------------------------------------------
 
   /** Every reader computes endpointUrl = `<gateway base>/svc/<id>`. */
   private toRecord(service: InternalService): ServiceRecord {
@@ -323,7 +407,7 @@ export class DevnetState {
       id: service.id,
       name: service.name,
       description: service.description,
-      endpointUrl: `${service.gatewayBaseUrl}/svc/${service.id}`,
+      endpointUrl: `${stripTrailingSlashes(service.gatewayBaseUrl)}/svc/${service.id}`,
       priceYocto: service.priceYocto,
       paymentTarget: service.paymentTarget,
       owner: service.owner,
@@ -336,7 +420,7 @@ export class DevnetState {
 
   getService(serviceId: number): ServiceRecord {
     const service = this.services.get(serviceId);
-    if (!service) throw err(404, 'service_not_found', `no service with id ${serviceId}`);
+    if (!service) throw new AgentGateError('ERR_SERVICE_NOT_FOUND', 'no such service', 404);
     return this.toRecord(service);
   }
 
@@ -344,6 +428,7 @@ export class DevnetState {
     return [...this.services.values()].map((s) => this.toRecord(s));
   }
 
+  /** Unknown services score zero, like the contract's default. */
   getScore(serviceId: number): ServiceScore {
     const score = this.scores.get(serviceId);
     return { totalCalls: score?.total ?? 0, successCalls: score?.success ?? 0 };
@@ -354,7 +439,13 @@ export class DevnetState {
     return list.slice(0, limit ?? list.length);
   }
 
+  getPayment(nonce: string): PaymentRecord {
+    const payment = this.payments.get(nonce);
+    if (!payment) throw new AgentGateError('ERR_PAYMENT_NOT_FOUND', 'no payment with this nonce', 404);
+    return payment;
+  }
+
   listActivity(limit: number): ActivityEvent[] {
-    return this.activity.slice(0, limit);
+    return this.activity.slice(0, Math.min(limit, ACTIVITY_CAP));
   }
 }

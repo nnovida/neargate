@@ -51,7 +51,7 @@ function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceReco
 function makeFakeChain(service: ServiceRecord | null): FakeChain {
   const payments: FakeChain['payments'] = [];
   return {
-    network: 'mock',
+    network: 'near-mock',
     registryId: REGISTRY,
     payments,
     async getService(id) {
@@ -106,7 +106,7 @@ function invoice402(over: Record<string, unknown> = {}): Response {
       accepts: [
         {
           scheme: 'exact',
-          network: 'mock',
+          network: 'near-mock',
           maxAmountRequired: MAX_AMOUNT,
           asset: 'NEAR',
           payTo: REGISTRY,

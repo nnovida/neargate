@@ -278,14 +278,26 @@ describe('isNearTxHash', () => {
 });
 
 describe('caip2For', () => {
-  it('maps the chain network to a CAIP-2 id', () => {
+  it('maps the three chain networks to their CAIP-2 ids', () => {
     expect(caip2For('near-testnet')).toBe('near:testnet');
     expect(caip2For('near-mainnet')).toBe('near:mainnet');
     expect(caip2For('near-mock')).toBe('near:mock');
   });
 
-  it('accepts a bare network name and is idempotent for CAIP-2 input', () => {
-    expect(caip2For('testnet')).toBe('near:testnet');
-    expect(caip2For('near:testnet')).toBe('near:testnet');
+  it('has a typed return, so a payload cannot carry an arbitrary CAIP-2 string', () => {
+    expectTypeOf(caip2For).returns.toEqualTypeOf<'near:testnet' | 'near:mainnet' | 'near:mock'>();
+  });
+
+  it('throws CONFIG_INVALID for anything else, CAIP-2 input and the retired bare "mock" included', () => {
+    for (const network of ['mock', 'testnet', 'near:testnet', 'near-localnet', 'constructor', '__proto__', '']) {
+      let thrown: unknown;
+      try {
+        caip2For(network);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown, JSON.stringify(network)).toBeInstanceOf(AgentGateError);
+      expect(thrown).toMatchObject({ code: 'CONFIG_INVALID', httpStatus: 500 });
+    }
   });
 });

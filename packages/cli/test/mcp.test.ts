@@ -45,7 +45,7 @@ function makeChain(): ChainClient {
     [2, { totalCalls: 0, successCalls: 0 }],
   ]);
   return {
-    network: 'mock',
+    network: 'near-mock',
     registryId: 'registry.mock',
     async getService(id: number) {
       return services.get(id) ?? null;

@@ -1,5 +1,5 @@
 import type { AnySigner, ChainClient, Logger, Yocto } from '@agentgate/shared';
-import { AgentGateError, compareYocto, isNearAccountId, isValidNonce, parseYocto } from '@agentgate/shared';
+import { AgentGateError, compareYocto, isMockNetwork, isNearAccountId, isValidNonce, parseYocto } from '@agentgate/shared';
 import {
   encodeXPayment, decodeXPaymentResponse,
   X402_VERSION, X402_SCHEME,
@@ -186,9 +186,9 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
     parseYocto(maxPriceYocto); // throws AgentGateError('INVALID_AMOUNT') on garbage
   }
   const fetchImpl: typeof fetch = opts.fetchImpl ?? fetch;
-  const settleDelayMs = opts.settleDelayMs ?? (chain.network === 'mock' ? 0 : 3000);
+  const settleDelayMs = opts.settleDelayMs ?? (isMockNetwork(chain.network) ? 0 : 3000);
   const requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
-  const rejectPrivateHosts = opts.rejectPrivateHosts ?? chain.network !== 'mock';
+  const rejectPrivateHosts = opts.rejectPrivateHosts ?? !isMockNetwork(chain.network);
 
   /** Adds a per-request timeout unless the caller supplied their own signal. */
   function withTimeout(init?: RequestInit): RequestInit {

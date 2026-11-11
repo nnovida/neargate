@@ -383,7 +383,7 @@ withConfigFlags(
     console.log(`seller: ${result.seller.accountId}  (${formatNear(result.seller.balanceYocto)})`);
     console.log('');
     console.log('# paste into your shell (used by the buyer agent and `agentgate wrap`):');
-    for (const line of result.exportLines) {
+    for (const line of [...result.exportLines, ...result.publicKeyLines]) {
       console.log(line);
     }
   });

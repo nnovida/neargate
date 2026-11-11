@@ -45,7 +45,7 @@ function requirements(nonce: string, network: string): PaymentRequiredResponse {
 
 function makeChain(overrides: Partial<ChainClient> = {}): ChainClient {
   return {
-    network: 'mock',
+    network: 'near-mock',
     registryId: REGISTRY,
     getService: vi.fn(async () => null),
     listServices: vi.fn(async () => []),
@@ -73,7 +73,7 @@ function json(body: unknown, status = 200): Response {
 
 /** A 402 response with a Retry-After header (seconds), used to simulate a pending settlement. */
 function pending402(nonce: string, retryAfterSec = 0): Response {
-  return new Response(JSON.stringify(requirements(nonce, 'mock')), {
+  return new Response(JSON.stringify(requirements(nonce, 'near-mock')), {
     status: 402,
     headers: { 'content-type': 'application/json', 'retry-after': String(retryAfterSec) },
   });
@@ -95,8 +95,8 @@ const SIGNER = { kind: 'mock', accountId: 'buyer.mock' } as const;
 
 describe('createAgentGateClient · fetchPaid', () => {
   it('402 → pay → retry happy path returns paid result with X-PAYMENT and settlement', async () => {
-    const req = requirements('42', 'mock');
-    const settlementHeader = encodeXPaymentResponse({ success: true, transaction: TX_HASH, network: 'mock' });
+    const req = requirements('42', 'near-mock');
+    const settlementHeader = encodeXPaymentResponse({ success: true, transaction: TX_HASH, network: 'near-mock' });
     const { impl, calls } = queuedFetch([
       json(req, 402),
       new Response(JSON.stringify({ gold: 3310.25 }), {
@@ -140,7 +140,7 @@ describe('createAgentGateClient · fetchPaid', () => {
   });
 
   it('preserves caller-provided headers on the proof retry', async () => {
-    const req = requirements('42', 'mock');
+    const req = requirements('42', 'near-mock');
     const { impl, calls } = queuedFetch([json(req, 402), json({ ok: true }, 200)]);
     const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
 
@@ -152,7 +152,7 @@ describe('createAgentGateClient · fetchPaid', () => {
   });
 
   it('settlement is undefined when x-payment-response header is absent', async () => {
-    const req = requirements('42', 'mock');
+    const req = requirements('42', 'near-mock');
     const { impl } = queuedFetch([json(req, 402), json({ ok: true }, 200)]);
     const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
 
@@ -162,7 +162,7 @@ describe('createAgentGateClient · fetchPaid', () => {
   });
 
   it('settlement is undefined when x-payment-response header is malformed (no throw)', async () => {
-    const req = requirements('42', 'mock');
+    const req = requirements('42', 'near-mock');
     const { impl } = queuedFetch([
       json(req, 402),
       new Response(JSON.stringify({ ok: true }), {
@@ -179,7 +179,7 @@ describe('createAgentGateClient · fetchPaid', () => {
   });
 
   it('refuses to pay when invoice price exceeds maxPriceYocto (PRICE_EXCEEDED)', async () => {
-    const req = requirements('42', 'mock'); // maxAmountRequired = MAX_AMOUNT
+    const req = requirements('42', 'near-mock'); // maxAmountRequired = MAX_AMOUNT
     const { impl, calls } = queuedFetch([json(req, 402)]);
     const chain = makeChain();
     const client = createAgentGateClient({
@@ -200,7 +200,7 @@ describe('createAgentGateClient · fetchPaid', () => {
   });
 
   it('pays when invoice price equals maxPriceYocto exactly', async () => {
-    const req = requirements('42', 'mock'); // maxAmountRequired = MAX_AMOUNT
+    const req = requirements('42', 'near-mock'); // maxAmountRequired = MAX_AMOUNT
     const { impl } = queuedFetch([json(req, 402), json({ ok: 1 }, 200)]);
     const chain = makeChain();
     const client = createAgentGateClient({
@@ -215,7 +215,7 @@ describe('createAgentGateClient · fetchPaid', () => {
   });
 
   // helpers for bad-fixture tests (captured at describe-parse time; 300s window is plenty)
-  const validReq = requirements('42', 'mock');
+  const validReq = requirements('42', 'near-mock');
   const validAccept = validReq.accepts[0]!;
   const validExtra = validAccept.extra;
 
@@ -254,7 +254,7 @@ describe('createAgentGateClient · fetchPaid', () => {
   });
 
   it('retries on 402 Retry-After (pending) and then succeeds', async () => {
-    const req = requirements('42', 'mock');
+    const req = requirements('42', 'near-mock');
     const { impl, calls } = queuedFetch([
       json(req, 402),          // initial → pay
       pending402('42', 0),     // proof attempt 1 → pending (retry-after: 0s)
@@ -274,7 +274,7 @@ describe('createAgentGateClient · fetchPaid', () => {
 
   it('gives up after 5 pending retries and returns the final 402 (still marked paid)', async () => {
     const { impl, calls } = queuedFetch([
-      json(requirements('42', 'mock'), 402),
+      json(requirements('42', 'near-mock'), 402),
       ...Array.from({ length: 6 }, () => pending402('42', 0)),
     ]);
     const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
@@ -288,7 +288,7 @@ describe('createAgentGateClient · fetchPaid', () => {
   });
 
   it('returns a non-pending 402 proof rejection without retrying (no Retry-After header)', async () => {
-    const req = requirements('42', 'mock');
+    const req = requirements('42', 'near-mock');
     // 2nd 402 has no retry-after header → stop immediately
     const { impl, calls } = queuedFetch([json(req, 402), json(req, 402)]);
     const client = createAgentGateClient({ chain: makeChain(), signer: SIGNER, fetchImpl: impl });
@@ -382,10 +382,10 @@ describe('createAgentGateClient · fetchPaid', () => {
   });
 
   it('refuses to pay when no accepts entry matches chain network (NETWORK_MISMATCH)', async () => {
-    // accepts[0].network = 'near-testnet' but chain.network = 'mock' → network mismatch
+    // accepts[0].network = 'near-testnet' but chain.network = 'near-mock' → network mismatch
     const req = requirements('42', 'near-testnet');
     const { impl } = queuedFetch([json(req, 402)]);
-    const chain = makeChain({ network: 'mock' });
+    const chain = makeChain({ network: 'near-mock' });
     const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
     const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
     expect(isAgentGateError(err)).toBe(true);
@@ -398,10 +398,10 @@ describe('createAgentGateClient · fetchPaid', () => {
 
   it('refuses to pay when accepts entry has wrong scheme (BAD_INVOICE)', async () => {
     // scheme is not X402_SCHEME → structural bad invoice
-    const req = requirements('42', 'mock');
+    const req = requirements('42', 'near-mock');
     const badReq = { ...req, accepts: [{ ...req.accepts[0]!, scheme: 'upto' }] };
     const { impl } = queuedFetch([json(badReq, 402)]);
-    const chain = makeChain({ network: 'mock' });
+    const chain = makeChain({ network: 'near-mock' });
     const client = createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl });
     const err = await client.fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
     expect(isAgentGateError(err)).toBe(true);
@@ -412,8 +412,8 @@ describe('createAgentGateClient · fetchPaid', () => {
 
 describe('parsePaymentRequired', () => {
   it('returns the matching PaymentRequirements entry', () => {
-    const r = requirements('42', 'mock');
-    const result = parsePaymentRequired(r, 'mock');
+    const r = requirements('42', 'near-mock');
+    const result = parsePaymentRequired(r, 'near-mock');
     expect(result).toEqual(r.accepts[0]);
     expect(result.maxAmountRequired).toBe(MAX_AMOUNT);
     expect(result.extra.nonce).toBe('42');
@@ -421,51 +421,51 @@ describe('parsePaymentRequired', () => {
 
   it('rejects non-object bodies', () => {
     for (const bad of [null, 'str', 42, [1, 2]]) {
-      expect(() => parsePaymentRequired(bad, 'mock')).toThrowError(/invalid 402 invoice/);
+      expect(() => parsePaymentRequired(bad, 'near-mock')).toThrowError(/invalid 402 invoice/);
     }
   });
 
   it('rejects wrong x402Version', () => {
     expect(() =>
-      parsePaymentRequired({ ...requirements('42', 'mock'), x402Version: 2 }, 'mock'),
+      parsePaymentRequired({ ...requirements('42', 'near-mock'), x402Version: 2 }, 'near-mock'),
     ).toThrowError(/invalid 402 invoice/);
   });
 
   it('rejects when no accepts entry matches chain network (NETWORK_MISMATCH)', () => {
     let thrown: unknown;
-    try { parsePaymentRequired(requirements('42', 'near-testnet'), 'mock'); }
+    try { parsePaymentRequired(requirements('42', 'near-testnet'), 'near-mock'); }
     catch (e) { thrown = e; }
     expect(isAgentGateError(thrown)).toBe(true);
     if (isAgentGateError(thrown)) expect(thrown.code).toBe('NETWORK_MISMATCH');
   });
 
   it('rejects when no accepts entry matches scheme (BAD_INVOICE)', () => {
-    const req = requirements('42', 'mock');
+    const req = requirements('42', 'near-mock');
     const badReq = { ...req, accepts: [{ ...req.accepts[0]!, scheme: 'upto' }] };
-    expect(() => parsePaymentRequired(badReq, 'mock')).toThrowError(/invalid 402 invoice/);
+    expect(() => parsePaymentRequired(badReq, 'near-mock')).toThrowError(/invalid 402 invoice/);
   });
 
   it('rejects an extra.serviceId that is not a positive safe integer (BAD_INVOICE)', () => {
-    const req = requirements('42', 'mock');
+    const req = requirements('42', 'near-mock');
     for (const serviceId of [undefined, null, 0, -1, 1.5, 2 ** 53, Number.NaN, '1']) {
       const badReq = {
         ...req,
         accepts: [{ ...req.accepts[0]!, extra: { ...req.accepts[0]!.extra, serviceId } }],
       };
-      expect(() => parsePaymentRequired(badReq, 'mock'), String(serviceId)).toThrowError(
+      expect(() => parsePaymentRequired(badReq, 'near-mock'), String(serviceId)).toThrowError(
         /invalid 402 invoice: extra\.serviceId must be a positive integer/,
       );
     }
     const ok = { ...req, accepts: [{ ...req.accepts[0]!, extra: { ...req.accepts[0]!.extra, serviceId: 7 } }] };
-    expect(parsePaymentRequired(ok, 'mock').extra.serviceId).toBe(7);
+    expect(parsePaymentRequired(ok, 'near-mock').extra.serviceId).toBe(7);
   });
 
   it('rejects expiresAtMs: NaN (BAD_INVOICE)', () => {
-    const req = requirements('42', 'mock');
+    const req = requirements('42', 'near-mock');
     const badReq = {
       ...req,
       accepts: [{ ...req.accepts[0]!, extra: { ...req.accepts[0]!.extra, expiresAtMs: NaN } }],
     };
-    expect(() => parsePaymentRequired(badReq, 'mock')).toThrowError(/invalid 402 invoice/);
+    expect(() => parsePaymentRequired(badReq, 'near-mock')).toThrowError(/invalid 402 invoice/);
   });
 });

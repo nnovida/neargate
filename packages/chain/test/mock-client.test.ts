@@ -1,11 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startServer } from '@agentgate/devnet';
 import type { RunningServer } from '@agentgate/devnet';
-import { AgentGateError, loadConfig } from '@agentgate/shared';
+import {
+  AgentGateError,
+  MOCK_NETWORK,
+  MOCK_REGISTRY_ID,
+  PAYMENT_STORAGE_FEE_YOCTO,
+  REGISTRATION_DEPOSIT_YOCTO,
+  isMockNetwork,
+  isNearTxHash,
+  loadConfig,
+  nearToYocto,
+} from '@agentgate/shared';
 import type { ChainClient, MockSigner, RegisterServiceInput } from '@agentgate/shared';
 import { MockChainHttpClient, createChainClient } from '../src/index';
-
-// TODO(Task 3): port to the NEAR registry rules (pay / getPayment / selfPaid / already_attested).
 
 const OWNER: MockSigner = { kind: 'mock', accountId: 'owner.mock' };
 const ATTESTOR: MockSigner = { kind: 'mock', accountId: 'attestor.mock' };
@@ -13,12 +21,20 @@ const BUYER: MockSigner = { kind: 'mock', accountId: 'buyer.mock' };
 const STRANGER: MockSigner = { kind: 'mock', accountId: 'stranger.mock' };
 
 const GATEWAY = 'http://localhost:4021';
-const PRICE = '500000000000000000000000'; // 0.5 NEAR
+const PRICE = nearToYocto('0.5');
+const FEE = PAYMENT_STORAGE_FEE_YOCTO;
 const SELLER_TARGET = 'seller.mock';
+const DEPOSIT = (BigInt(PRICE) + BigInt(FEE)).toString();
 
 let server: RunningServer;
 let base: string;
 let chain: ChainClient;
+let nonceCounter = 500_000;
+
+function freshNonce(): string {
+  nonceCounter += 1;
+  return String(nonceCounter);
+}
 
 function registerInput(overrides: Partial<RegisterServiceInput> = {}): RegisterServiceInput {
   return {
@@ -32,14 +48,38 @@ function registerInput(overrides: Partial<RegisterServiceInput> = {}): RegisterS
   };
 }
 
-async function faucet(account: string, amountYocto: string): Promise<void> {
+async function faucet(
+  accountId: string,
+  amountYocto: string,
+): Promise<{ accountId: string; balanceYocto: string; publicKey: string; secretKey: string }> {
   const res = await fetch(`${base}/faucet`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ account, amountYocto }),
+    body: JSON.stringify({ accountId, amountYocto }),
   });
   expect(res.status).toBe(200);
-  await res.json();
+  return (await res.json()) as {
+    accountId: string;
+    balanceYocto: string;
+    publicKey: string;
+    secretKey: string;
+  };
+}
+
+/** The mock client throws `AgentGateError`: code = the ERR_* code, message starts with it. */
+async function expectContractError(promise: Promise<unknown>, code: string): Promise<void> {
+  let caught: unknown;
+  try {
+    await promise;
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(AgentGateError);
+  const err = caught as AgentGateError;
+  expect(err.code).toBe(code);
+  expect(err.message.startsWith(`${code}: `)).toBe(true);
+  expect(err.message.length).toBeGreaterThan(code.length + 2);
+  expect(err.httpStatus).toBe(400);
 }
 
 async function expectAgentGateError(
@@ -63,6 +103,9 @@ beforeAll(async () => {
   server = await startServer({ port: 0 });
   base = `http://127.0.0.1:${server.port}`;
   chain = createChainClient(loadConfig({ AGENTGATE_MODE: 'mock', DEVNET_URL: base }));
+  for (const signer of [OWNER, ATTESTOR, BUYER, STRANGER]) {
+    await faucet(signer.accountId, nearToYocto('1000'));
+  }
 });
 
 afterAll(async () => {
@@ -70,10 +113,13 @@ afterAll(async () => {
 });
 
 describe('createChainClient', () => {
-  it('selects MockChainHttpClient in mock mode', () => {
+  it('selects MockChainHttpClient in mock mode, on the near-mock network', () => {
     expect(chain).toBeInstanceOf(MockChainHttpClient);
-    expect(chain.network).toBe('mock');
+    expect(chain.network).toBe('near-mock');
+    expect(chain.network).toBe(MOCK_NETWORK);
+    expect(isMockNetwork(chain.network)).toBe(true);
     expect(chain.registryId).toBe('registry.mock');
+    expect(chain.registryId).toBe(MOCK_REGISTRY_ID);
   });
 
   it('refuses live mode with CONFIG_INVALID until the live NEAR client lands (Task 6)', () => {
@@ -87,21 +133,37 @@ describe('createChainClient', () => {
     expect(thrown).toBeInstanceOf(AgentGateError);
     expect(thrown).toMatchObject({ code: 'CONFIG_INVALID', message: expect.stringMatching(/Task 6/) });
   });
+
+  it('rejects a non-http devnet URL', () => {
+    expect(() => new MockChainHttpClient('ftp://localhost')).toThrow(AgentGateError);
+    expect(() => new MockChainHttpClient('not a url')).toThrow(AgentGateError);
+  });
+
+  it('ping resolves while the devnet is up', async () => {
+    await expect(chain.ping?.()).resolves.toBeUndefined();
+  });
 });
 
 describe('MockChainHttpClient — full surface against an in-process devnet', () => {
   let serviceId: number;
-  let txHash: string;
-  const nonce = '987654321';
+  let payTx: string;
+  const nonce = freshNonce();
 
-  it('registerService returns the id and tx hash; reads see the computed endpointUrl', async () => {
-    const result = await chain.registerService(registerInput(), OWNER);
+  it('registerService returns the id and a base58 tx hash; reads see the computed endpointUrl', async () => {
+    const registryBefore = BigInt(await chain.getBalance(MOCK_REGISTRY_ID));
+    const ownerBefore = BigInt(await chain.getBalance(OWNER.accountId));
+
+    const result = await chain.registerService(registerInput({ gatewayBaseUrl: `${GATEWAY}/` }), OWNER);
     expect(result.serviceId).toBeGreaterThanOrEqual(1);
-    expect(result.txHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.txHash).toHaveLength(44);
+    expect(isNearTxHash(result.txHash)).toBe(true);
     serviceId = result.serviceId;
 
+    // the registration deposit moved from the owner to the registry
+    expect(BigInt(await chain.getBalance(OWNER.accountId))).toBe(ownerBefore - BigInt(REGISTRATION_DEPOSIT_YOCTO));
+    expect(BigInt(await chain.getBalance(MOCK_REGISTRY_ID))).toBe(registryBefore + BigInt(REGISTRATION_DEPOSIT_YOCTO));
+
     const record = await chain.getService(serviceId);
-    expect(record).not.toBeNull();
     expect(record).toMatchObject({
       id: serviceId,
       name: 'USD/IDR Feed',
@@ -111,6 +173,7 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
       owner: OWNER.accountId,
       attestor: ATTESTOR.accountId,
       active: true,
+      accepts: [{ asset: 'near', amount: PRICE, decimals: 24, symbol: 'NEAR' }],
     });
 
     const all = await chain.listServices();
@@ -121,23 +184,43 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
     expect(await chain.getService(424242)).toBeNull();
   });
 
-  it('getBalance + pay move yocto and verifyPayment accepts the payment', async () => {
-    await faucet(BUYER.accountId, '1000000000000000000000000');
-    expect(await chain.getBalance(BUYER.accountId)).toBe('1000000000000000000000000');
+  it('getBalance + pay: the price reaches the seller, the fee stays in the registry, the excess comes back', async () => {
+    const buyerBefore = BigInt(await chain.getBalance(BUYER.accountId));
+    const sellerBefore = BigInt(await chain.getBalance(SELLER_TARGET));
+    const registryBefore = BigInt(await chain.getBalance(MOCK_REGISTRY_ID));
 
-    const result = await chain.pay({ serviceId, nonce, depositYocto: PRICE }, BUYER);
-    expect(result.txHash).toMatch(/^[0-9a-f]{64}$/);
-    txHash = result.txHash;
+    const result = await chain.pay({ serviceId, nonce, depositYocto: nearToYocto('2') }, BUYER);
+    expect(result.txHash).toHaveLength(44);
+    expect(isNearTxHash(result.txHash)).toBe(true);
+    payTx = result.txHash;
 
-    expect(await chain.getBalance(BUYER.accountId)).toBe('500000000000000000000000');
-    expect(BigInt(await chain.getBalance(SELLER_TARGET))).toBeGreaterThanOrEqual(BigInt(PRICE));
+    expect(BigInt(await chain.getBalance(BUYER.accountId))).toBe(buyerBefore - BigInt(DEPOSIT));
+    expect(BigInt(await chain.getBalance(SELLER_TARGET))).toBe(sellerBefore + BigInt(PRICE));
+    expect(BigInt(await chain.getBalance(MOCK_REGISTRY_ID))).toBe(registryBefore + BigInt(FEE));
+  });
 
+  it('getPayment returns the registry record by nonce, null for an unknown nonce', async () => {
+    const payment = await chain.getPayment(nonce);
+    expect(payment).toMatchObject({
+      nonce,
+      serviceId,
+      payer: BUYER.accountId,
+      amountYocto: PRICE,
+      selfPaid: false,
+      attested: false,
+    });
+    expect(typeof payment?.timestamp).toBe('number');
+    expect(typeof payment?.blockHeight).toBe('number');
+    expect(await chain.getPayment(freshNonce())).toBeNull();
+  });
+
+  it('verifyPayment accepts the payment by nonce', async () => {
     const verdict = await chain.verifyPayment({
       nonce,
       serviceId,
       minAmountYocto: PRICE,
       maxAgeMs: 60_000,
-      txHash,
+      txHash: payTx,
     });
     expect(verdict.ok).toBe(true);
     if (verdict.ok) {
@@ -148,184 +231,278 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
     }
   });
 
-  it('pay surfaces insufficient_balance as a 400 AgentGateError', async () => {
-    await expectAgentGateError(
-      chain.pay({ serviceId, nonce: '1', depositYocto: '999999999999999999999999999' }, BUYER),
-      'insufficient_balance',
-      400,
+  it('pay surfaces the contract and devnet errors as AgentGateError: code ERR_*, message starting with it', async () => {
+    await expectContractError(
+      chain.pay({ serviceId, nonce: freshNonce(), depositYocto: nearToYocto('999999999') }, BUYER),
+      'ERR_INSUFFICIENT_BALANCE',
+    );
+    await expectContractError(chain.pay({ serviceId, nonce, depositYocto: DEPOSIT }, BUYER), 'ERR_NONCE_USED');
+    await expectContractError(
+      chain.pay({ serviceId, nonce: freshNonce(), depositYocto: PRICE }, BUYER),
+      'ERR_DEPOSIT_TOO_LOW',
+    );
+    await expectContractError(chain.pay({ serviceId, nonce: 'abc', depositYocto: DEPOSIT }, BUYER), 'ERR_INVALID_NONCE');
+    await expectContractError(
+      chain.pay({ serviceId: 999_999, nonce: freshNonce(), depositYocto: DEPOSIT }, BUYER),
+      'ERR_SERVICE_NOT_FOUND',
+    );
+    await expectContractError(
+      chain.pay({ serviceId, nonce: freshNonce(), depositYocto: DEPOSIT }, { kind: 'mock', accountId: 'Bad Id' }),
+      'ERR_INVALID_ACCOUNT_ID',
     );
   });
 
   it('recordAttestation bumps the score and lists newest first', async () => {
     const result = await chain.recordAttestation(
-      { serviceId, nonce, paymentTxHash: txHash, success: true },
+      { serviceId, nonce, paymentTxHash: payTx, success: true },
       ATTESTOR,
     );
-    expect(result.txHash).toMatch(/^[0-9a-f]{64}$/);
-
+    expect(isNearTxHash(result.txHash)).toBe(true);
     expect(await chain.getScore(serviceId)).toEqual({ totalCalls: 1, successCalls: 1 });
+    expect((await chain.getPayment(nonce))?.attested).toBe(true);
 
-    await chain.recordAttestation(
-      { serviceId, nonce: '2', paymentTxHash: 'G'.repeat(44), success: false },
-      OWNER, // owner is also authorized
-    );
+    // a second payment, attested by the owner (also authorized)
+    const nonce2 = freshNonce();
+    const tx2 = (await chain.pay({ serviceId, nonce: nonce2, depositYocto: DEPOSIT }, BUYER)).txHash;
+    await chain.recordAttestation({ serviceId, nonce: nonce2, paymentTxHash: tx2, success: false }, OWNER);
     expect(await chain.getScore(serviceId)).toEqual({ totalCalls: 2, successCalls: 1 });
 
     const attestations = await chain.listAttestations(serviceId);
     expect(attestations).toHaveLength(2);
-    expect(attestations[0]?.paymentTxHash).toBe('G'.repeat(44));
-    expect(attestations[1]).toMatchObject({
-      serviceId,
-      nonce,
-      paymentTxHash: txHash,
-      success: true,
-    });
+    expect(attestations[0]).toMatchObject({ serviceId, nonce: nonce2, paymentTxHash: tx2, success: false });
+    expect(attestations[1]).toMatchObject({ serviceId, nonce, paymentTxHash: payTx, success: true });
     expect(await chain.listAttestations(serviceId, 1)).toHaveLength(1);
   });
 
-  it('rejects stranger attestations (403) and duplicates (409)', async () => {
-    await expectAgentGateError(
-      chain.recordAttestation(
-        { serviceId, nonce: '3', paymentTxHash: '9'.repeat(44), success: true },
-        STRANGER,
-      ),
-      'not_authorized',
-      403,
+  it('rejects a stranger (ERR_NOT_AUTHORIZED) and a second attestation (ERR_ALREADY_ATTESTED)', async () => {
+    await expectContractError(
+      chain.recordAttestation({ serviceId, nonce, paymentTxHash: payTx, success: true }, STRANGER),
+      'ERR_NOT_AUTHORIZED',
     );
-    await expectAgentGateError(
-      chain.recordAttestation({ serviceId, nonce, paymentTxHash: txHash, success: true }, ATTESTOR),
-      'duplicate_attestation',
-      409,
+    await expectContractError(
+      chain.recordAttestation({ serviceId, nonce, paymentTxHash: payTx, success: true }, ATTESTOR),
+      'ERR_ALREADY_ATTESTED',
+    );
+    await expectContractError(
+      chain.recordAttestation({ serviceId, nonce: freshNonce(), paymentTxHash: payTx, success: true }, ATTESTOR),
+      'ERR_PAYMENT_NOT_FOUND',
     );
   });
 
-  it('setActive is owner-only and inactive services reject attestations', async () => {
-    await expectAgentGateError(chain.setActive(serviceId, false, STRANGER), 'not_authorized', 403);
+  it('a self-paid payment cannot be attested (ERR_SELF_PAYMENT)', async () => {
+    const selfNonce = freshNonce();
+    const selfTx = (await chain.pay({ serviceId, nonce: selfNonce, depositYocto: DEPOSIT }, OWNER)).txHash;
+    await expectContractError(
+      chain.recordAttestation({ serviceId, nonce: selfNonce, paymentTxHash: selfTx, success: true }, ATTESTOR),
+      'ERR_SELF_PAYMENT',
+    );
+  });
+
+  it('setActive is owner-only and inactive services reject payments and attestations', async () => {
+    await expectContractError(chain.setActive(serviceId, false, STRANGER), 'ERR_NOT_AUTHORIZED');
+    await expectContractError(chain.setActive(424_242, false, OWNER), 'ERR_SERVICE_NOT_FOUND');
+
+    const pending = freshNonce();
+    const pendingTx = (await chain.pay({ serviceId, nonce: pending, depositYocto: DEPOSIT }, BUYER)).txHash;
 
     const result = await chain.setActive(serviceId, false, OWNER);
-    expect(result.txHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(isNearTxHash(result.txHash)).toBe(true);
     expect((await chain.getService(serviceId))?.active).toBe(false);
 
-    await expectAgentGateError(
-      chain.recordAttestation(
-        { serviceId, nonce: '4', paymentTxHash: '8'.repeat(44), success: true },
-        ATTESTOR,
-      ),
-      'service_inactive',
-      400,
+    await expectContractError(
+      chain.recordAttestation({ serviceId, nonce: pending, paymentTxHash: pendingTx, success: true }, ATTESTOR),
+      'ERR_SERVICE_INACTIVE',
+    );
+    await expectContractError(
+      chain.pay({ serviceId, nonce: freshNonce(), depositYocto: DEPOSIT }, BUYER),
+      'ERR_SERVICE_INACTIVE',
     );
 
     await chain.setActive(serviceId, true, OWNER);
     expect((await chain.getService(serviceId))?.active).toBe(true);
   });
 
-  it('listRecentActivity returns newest-first events covering the whole loop', async () => {
+  it('listRecentActivity returns newest-first events covering the whole loop, with mock tx hashes', async () => {
     const activity = await chain.listRecentActivity(100);
     expect(activity.length).toBeGreaterThanOrEqual(4);
     const timestamps = activity.map((e) => e.timestamp);
     expect([...timestamps].sort((a, b) => b - a)).toEqual(timestamps);
-    const kinds = new Set(activity.map((e) => e.kind));
-    expect(kinds.has('service_registered')).toBe(true);
-    expect(kinds.has('payment')).toBe(true);
-    expect(kinds.has('attestation')).toBe(true);
+    const heights = activity.map((e) => e.blockHeight);
+    expect([...heights].sort((a, b) => b - a)).toEqual(heights);
+    expect(new Set(heights).size).toBe(heights.length); // one block per call: strictly decreasing
+    expect(new Set(activity.map((e) => e.kind))).toEqual(new Set(['service_registered', 'payment', 'attestation']));
+    for (const event of activity) expect(isNearTxHash(event.txHash)).toBe(true);
 
-    const limited = await chain.listRecentActivity(2);
-    expect(limited).toHaveLength(2);
+    const payment = activity.find((e) => e.kind === 'payment' && e.nonce === nonce);
+    expect(payment).toMatchObject({ serviceId, account: BUYER.accountId, txHash: payTx, amountYocto: PRICE });
+
+    expect(await chain.listRecentActivity(2)).toHaveLength(2);
+    expect((await chain.listRecentActivity())[0]).toEqual(activity[0]);
   });
 
-  it('rejects non-mock signers', async () => {
+  it('isFullAccessKey: true only for the account\'s own devnet key', async () => {
+    const owner = await faucet(OWNER.accountId, '1');
+    const buyer = await faucet(BUYER.accountId, '1');
+    expect(await chain.isFullAccessKey(OWNER.accountId, owner.publicKey)).toBe(true);
+    expect(await chain.isFullAccessKey(BUYER.accountId, buyer.publicKey)).toBe(true);
+    expect(await chain.isFullAccessKey(OWNER.accountId, buyer.publicKey)).toBe(false);
+    expect(await chain.isFullAccessKey(OWNER.accountId, 'ed25519:nope')).toBe(false);
+    expect(await chain.isFullAccessKey('never-seen.mock', owner.publicKey)).toBe(false);
+  });
+
+  it('rejects non-mock signers and empty arguments before touching the devnet', async () => {
     await expectAgentGateError(
       chain.pay(
-        { serviceId, nonce: '5', depositYocto: PRICE },
+        { serviceId, nonce: freshNonce(), depositYocto: DEPOSIT },
         { kind: 'near', accountId: 'buyer.testnet', keyPath: '/tmp/nope.json' },
       ),
       'invalid_signer',
       400,
     );
+    await expectAgentGateError(
+      chain.pay({ serviceId, nonce: freshNonce(), depositYocto: DEPOSIT }, { kind: 'mock', accountId: ' ' }),
+      'invalid_signer',
+      400,
+    );
+    await expectAgentGateError(chain.getService(0), 'invalid_query', 400);
+    await expectAgentGateError(chain.getBalance(''), 'invalid_query', 400);
+    await expectAgentGateError(chain.isFullAccessKey('', 'ed25519:x'), 'invalid_query', 400);
+    await expectAgentGateError(chain.isFullAccessKey(OWNER.accountId, ''), 'invalid_query', 400);
+    await expectAgentGateError(
+      chain.pay({ serviceId, nonce: freshNonce(), depositYocto: '1.5' }, BUYER),
+      'invalid_query',
+      400,
+    );
+  });
+
+  it('registerService maps contract errors too', async () => {
+    await expectContractError(chain.registerService(registerInput({ name: '  ' }), OWNER), 'ERR_EMPTY_NAME');
+    await expectContractError(chain.registerService(registerInput({ priceYocto: '1' }), OWNER), 'ERR_INVALID_PRICE');
+    await expectContractError(
+      chain.registerService(registerInput({ name: 'n'.repeat(65) }), OWNER),
+      'ERR_FIELD_TOO_LONG',
+    );
+    await expectContractError(
+      chain.registerService(registerInput(), { kind: 'mock', accountId: 'unfunded-seller.mock' }),
+      'ERR_INSUFFICIENT_BALANCE',
+    );
   });
 });
 
-describe('MockChainHttpClient.verifyPayment — every failure reason', () => {
+describe('MockChainHttpClient.verifyPayment — every failure reason, in the registry-record order', () => {
   let serviceId: number;
+  let otherServiceId: number;
   let txHash: string;
-  const nonce = '777000777';
+  let nonce: string;
+  const query = (overrides: Partial<Parameters<ChainClient['verifyPayment']>[0]> = {}) => ({
+    nonce,
+    serviceId,
+    minAmountYocto: PRICE,
+    maxAgeMs: 60_000,
+    txHash,
+    ...overrides,
+  });
 
   beforeAll(async () => {
     serviceId = (await chain.registerService(registerInput(), OWNER)).serviceId;
-    await faucet(BUYER.accountId, '10000000000000000000000000');
-    txHash = (await chain.pay({ serviceId, nonce, depositYocto: PRICE }, BUYER)).txHash;
+    otherServiceId = (await chain.registerService(registerInput({ paymentTarget: 'someone-else.mock' }), OWNER))
+      .serviceId;
+    nonce = freshNonce();
+    txHash = (await chain.pay({ serviceId, nonce, depositYocto: DEPOSIT }, BUYER)).txHash;
   });
 
-  it('not_found for unknown tx hashes', async () => {
-    const verdict = await chain.verifyPayment({
-      nonce,
-      serviceId,
-      minAmountYocto: PRICE,
-      maxAgeMs: 60_000,
-      txHash: 'F'.repeat(44), // well-formed (32 bytes) but unknown
-    });
-    expect(verdict).toEqual({ ok: false, reason: 'not_found' });
+  it('not_found for a nonce the registry never saw', async () => {
+    expect(await chain.verifyPayment(query({ nonce: freshNonce() }))).toEqual({ ok: false, reason: 'not_found' });
   });
 
-  it('wrong_service when the payment went to another service', async () => {
-    const other = (
-      await chain.registerService(registerInput({ paymentTarget: 'someone-else.mock' }), OWNER)
-    ).serviceId;
-    const verdict = await chain.verifyPayment({
-      nonce,
-      serviceId: other,
-      minAmountYocto: PRICE,
-      maxAgeMs: 60_000,
-      txHash,
+  it('wrong_service when the payment belongs to another service', async () => {
+    expect(await chain.verifyPayment(query({ serviceId: otherServiceId }))).toEqual({
+      ok: false,
+      reason: 'wrong_service',
     });
-    expect(verdict).toEqual({ ok: false, reason: 'wrong_service' });
+    // an unknown service is the same answer: the payment is not for it
+    expect(await chain.verifyPayment(query({ serviceId: 999_999 }))).toEqual({ ok: false, reason: 'wrong_service' });
   });
 
-  it('amount_too_low when the paid amount is below the minimum', async () => {
-    const verdict = await chain.verifyPayment({
-      nonce,
-      serviceId,
-      minAmountYocto: (BigInt(PRICE) + 1n).toString(),
-      maxAgeMs: 60_000,
-      txHash,
+  it('amount_too_low when the paid price is below the minimum', async () => {
+    expect(await chain.verifyPayment(query({ minAmountYocto: (BigInt(PRICE) + 1n).toString() }))).toEqual({
+      ok: false,
+      reason: 'amount_too_low',
     });
-    expect(verdict).toEqual({ ok: false, reason: 'amount_too_low' });
-  });
-
-  it('tx_mismatch when the nonce does not match the tx', async () => {
-    const verdict = await chain.verifyPayment({
-      nonce: '123',
-      serviceId,
-      minAmountYocto: PRICE,
-      maxAgeMs: 60_000,
-      txHash,
-    });
-    expect(verdict).toEqual({ ok: false, reason: 'tx_mismatch' });
+    // the fee is not part of the paid amount: exactly the price is enough
+    expect((await chain.verifyPayment(query({ minAmountYocto: PRICE }))).ok).toBe(true);
   });
 
   it('expired when the payment is older than maxAgeMs', async () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
-    const verdict = await chain.verifyPayment({
-      nonce,
-      serviceId,
-      minAmountYocto: PRICE,
-      maxAgeMs: 5,
-      txHash,
+    expect(await chain.verifyPayment(query({ maxAgeMs: 5 }))).toEqual({ ok: false, reason: 'expired' });
+    expect((await chain.verifyPayment(query({ maxAgeMs: 60_000 }))).ok).toBe(true);
+  });
+
+  it('ok with selfPaid for a payment by the service owner', async () => {
+    const ownerNonce = freshNonce();
+    await chain.pay({ serviceId, nonce: ownerNonce, depositYocto: DEPOSIT }, OWNER);
+    const verdict = await chain.verifyPayment(query({ nonce: ownerNonce, txHash: undefined }));
+    expect(verdict).toMatchObject({ ok: true, payer: OWNER.accountId, amountYocto: PRICE, selfPaid: true });
+  });
+
+  it('ok with selfPaid for a payment by the payment target', async () => {
+    const targetNonce = freshNonce();
+    await faucet(SELLER_TARGET, nearToYocto('5'));
+    await chain.pay({ serviceId, nonce: targetNonce, depositYocto: DEPOSIT }, { kind: 'mock', accountId: SELLER_TARGET });
+    const verdict = await chain.verifyPayment(query({ nonce: targetNonce }));
+    expect(verdict).toMatchObject({ ok: true, payer: SELLER_TARGET, selfPaid: true });
+  });
+
+  it('ignores txHash and payer: tx_mismatch is a live-only check', async () => {
+    const verdict = await chain.verifyPayment(query({ txHash: 'F'.repeat(44), payer: 'someone-else.mock' }));
+    expect(verdict).toMatchObject({ ok: true, payer: BUYER.accountId, selfPaid: false });
+    expect((await chain.verifyPayment(query({ txHash: undefined }))).ok).toBe(true);
+  });
+
+  it('already_attested after the payment is attested', async () => {
+    const attestedNonce = freshNonce();
+    const tx = (await chain.pay({ serviceId, nonce: attestedNonce, depositYocto: DEPOSIT }, BUYER)).txHash;
+    expect((await chain.verifyPayment(query({ nonce: attestedNonce }))).ok).toBe(true);
+    await chain.recordAttestation({ serviceId, nonce: attestedNonce, paymentTxHash: tx, success: true }, ATTESTOR);
+    expect(await chain.verifyPayment(query({ nonce: attestedNonce }))).toEqual({
+      ok: false,
+      reason: 'already_attested',
     });
-    expect(verdict).toEqual({ ok: false, reason: 'expired' });
+  });
+
+  it('checks wrong_service, then amount_too_low, then expired, then already_attested', async () => {
+    const attestedNonce = freshNonce();
+    const tx = (await chain.pay({ serviceId, nonce: attestedNonce, depositYocto: DEPOSIT }, BUYER)).txHash;
+    await chain.recordAttestation({ serviceId, nonce: attestedNonce, paymentTxHash: tx, success: true }, ATTESTOR);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const stale = { nonce: attestedNonce, maxAgeMs: 1 };
+    const tooLow = (BigInt(PRICE) + 1n).toString();
+
+    // attested + expired + too low + wrong service: wrong_service wins
+    expect(await chain.verifyPayment(query({ ...stale, serviceId: otherServiceId, minAmountYocto: tooLow }))).toEqual({
+      ok: false,
+      reason: 'wrong_service',
+    });
+    // attested + expired + too low: amount_too_low wins
+    expect(await chain.verifyPayment(query({ ...stale, minAmountYocto: tooLow }))).toEqual({
+      ok: false,
+      reason: 'amount_too_low',
+    });
+    // attested + expired: expired wins
+    expect(await chain.verifyPayment(query(stale))).toEqual({ ok: false, reason: 'expired' });
+    // attested only
+    expect(await chain.verifyPayment(query({ nonce: attestedNonce }))).toEqual({
+      ok: false,
+      reason: 'already_attested',
+    });
   });
 
   it('throws invalid_query on malformed queries instead of guessing', async () => {
-    await expectAgentGateError(
-      chain.verifyPayment({
-        nonce,
-        serviceId,
-        minAmountYocto: '1.5',
-        maxAgeMs: 60_000,
-        txHash,
-      }),
-      'invalid_query',
-      400,
-    );
+    await expectAgentGateError(chain.verifyPayment(query({ minAmountYocto: '1.5' })), 'invalid_query', 400);
+    await expectAgentGateError(chain.verifyPayment(query({ nonce: 'abc' })), 'invalid_query', 400);
+    await expectAgentGateError(chain.verifyPayment(query({ serviceId: 0 })), 'invalid_query', 400);
+    await expectAgentGateError(chain.verifyPayment(query({ maxAgeMs: -1 })), 'invalid_query', 400);
+    await expectAgentGateError(chain.verifyPayment(query({ maxAgeMs: Number.NaN })), 'invalid_query', 400);
   });
 });

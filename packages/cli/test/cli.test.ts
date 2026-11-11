@@ -7,7 +7,7 @@ import type {
   ServiceRecord,
   ServiceScore,
 } from '@agentgate/shared';
-import { AgentGateError, nativeNearOption } from '@agentgate/shared';
+import { AgentGateError, base58Encode, nativeNearOption } from '@agentgate/shared';
 import {
   createDemoAccounts,
   listServices,
@@ -51,7 +51,7 @@ function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceReco
 function makeFakeChain(hooks: { onRegister?: () => void } = {}): FakeChain {
   const registered: FakeChain['registered'] = [];
   const chain: FakeChain = {
-    network: 'mock',
+    network: 'near-mock',
     registryId: 'registry.mock',
     registered,
     async getService() {
@@ -366,9 +366,15 @@ describe('wrapService', () => {
 // ---------------------------------------------------------------------------
 
 describe('createDemoAccounts', () => {
-  it('faucets 1000 NEAR to two fresh mock accounts and returns export lines', async () => {
-    const THOUSAND_NEAR = `1000${'0'.repeat(24)}`;
-    const { impl, calls } = makeFakeFetch(() => Response.json({ balanceYocto: THOUSAND_NEAR }));
+  const THOUSAND_NEAR = `1000${'0'.repeat(24)}`;
+  // Placeholder key strings of the right shape (32 and 64 filler bytes), not real keys.
+  const PUBLIC_KEY = `ed25519:${base58Encode(new Uint8Array(32).fill(1))}`;
+  const SECRET_KEY = `ed25519:${base58Encode(new Uint8Array(64).fill(2))}`;
+
+  it('faucets 1000 NEAR to two fresh mock accounts and returns export lines and their keys', async () => {
+    const { impl, calls } = makeFakeFetch(() =>
+      Response.json({ balanceYocto: THOUSAND_NEAR, publicKey: PUBLIC_KEY, secretKey: SECRET_KEY }),
+    );
 
     const result = await createDemoAccounts({
       devnetUrl: 'http://localhost:4030/',
@@ -382,23 +388,37 @@ describe('createDemoAccounts', () => {
       expect(call.init?.method).toBe('POST');
       expect(bodyOf(call)['amountYocto']).toBe(THOUSAND_NEAR); // 1000 NEAR in yocto
     }
-    expect(bodyOf(calls[0]!)['account']).toBe(result.buyer.accountId);
-    expect(bodyOf(calls[1]!)['account']).toBe(result.seller.accountId);
+    expect(bodyOf(calls[0]!)['accountId']).toBe(result.buyer.accountId);
+    expect(bodyOf(calls[1]!)['accountId']).toBe(result.seller.accountId);
 
     // account shape: "<role>-<8 random hex>.mock", distinct per account
     expect(result.buyer.accountId).toMatch(/^buyer-[0-9a-f]{8}\.mock$/);
     expect(result.seller.accountId).toMatch(/^seller-[0-9a-f]{8}\.mock$/);
     expect(result.seller.accountId).not.toBe(result.buyer.accountId);
 
-    // balances + roles surfaced
-    expect(result.buyer).toMatchObject({ role: 'buyer', balanceYocto: THOUSAND_NEAR });
-    expect(result.seller).toMatchObject({ role: 'seller', balanceYocto: THOUSAND_NEAR });
+    // balances, roles and the devnet keys surfaced
+    for (const role of ['buyer', 'seller'] as const) {
+      expect(result[role]).toMatchObject({
+        role,
+        balanceYocto: THOUSAND_NEAR,
+        publicKey: PUBLIC_KEY,
+        secretKey: SECRET_KEY,
+      });
+    }
 
     // export lines, exact shape
     expect(result.exportLines).toEqual([
       `export MOCK_BUYER_ACCOUNT=${result.buyer.accountId}`,
       `export MOCK_SELLER_ACCOUNT=${result.seller.accountId}`,
     ]);
+    // one public-key comment per role; a secret key never reaches a printed line
+    expect(result.publicKeyLines).toEqual([
+      `# buyer public key: ${PUBLIC_KEY}`,
+      `# seller public key: ${PUBLIC_KEY}`,
+    ]);
+    for (const line of [...result.exportLines, ...result.publicKeyLines]) {
+      expect(line).not.toContain(SECRET_KEY);
+    }
   });
 
   it('rejects when the faucet answers with an error status', async () => {
@@ -410,6 +430,19 @@ describe('createDemoAccounts', () => {
 
   it('rejects when the faucet returns a malformed body', async () => {
     const { impl } = makeFakeFetch(() => Response.json({ balanceYocto: 12345 }));
+    await expect(
+      createDemoAccounts({ devnetUrl: 'http://localhost:4030', fetchImpl: impl }),
+    ).rejects.toMatchObject({ code: 'FAUCET_FAILED' });
+  });
+
+  it('rejects a faucet answer without a usable key pair', async () => {
+    for (const keys of [{}, { publicKey: PUBLIC_KEY }, { publicKey: 'nope', secretKey: SECRET_KEY }]) {
+      const { impl } = makeFakeFetch(() => Response.json({ balanceYocto: THOUSAND_NEAR, ...keys }));
+      await expect(
+        createDemoAccounts({ devnetUrl: 'http://localhost:4030', fetchImpl: impl }),
+      ).rejects.toMatchObject({ code: 'FAUCET_FAILED' });
+    }
+    const { impl } = makeFakeFetch(() => Response.json(null));
     await expect(
       createDemoAccounts({ devnetUrl: 'http://localhost:4030', fetchImpl: impl }),
     ).rejects.toMatchObject({ code: 'FAUCET_FAILED' });

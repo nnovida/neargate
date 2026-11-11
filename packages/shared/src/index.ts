@@ -3,6 +3,7 @@ export * from './base58';
 export * from './money';
 export * from './nonce';
 export * from './config';
+export * from './network';
 export * from './self-map';
 export * from './logger';
 export * from './trust';

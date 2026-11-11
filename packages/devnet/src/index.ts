@@ -1,17 +1,12 @@
 import type { Server } from 'node:http';
-import { AgentGateError, createLogger, loadConfig } from '@agentgate/shared';
+import { AgentGateError, MOCK_NETWORK, createLogger, loadConfig } from '@agentgate/shared';
 import { createApp } from './app';
 import type { DevnetDeps } from './app';
 
 export { createApp } from './app';
 export type { DevnetDeps } from './app';
-export {
-  ACTIVITY_LOG_CAP,
-  ATTESTATIONS_PER_SERVICE_CAP,
-  TRANSFER_LOG_CAP,
-  MAX_SERVICES,
-} from './state';
-export type { TransferRecord } from './state';
+export { ACTIVITY_CAP, MAX_ATTESTATIONS, MAX_SERVICES, deriveDevnetKey } from './state';
+export type { DevnetKey } from './state';
 
 export interface DevnetStartOpts extends DevnetDeps {
   /** Port to listen on (0 = ephemeral, for in-process e2e). Defaults to config.devnetPort (4030). */
@@ -51,7 +46,7 @@ export async function startServer(opts: DevnetStartOpts = {}): Promise<RunningSe
     throw new Error('devnet failed to bind a TCP port');
   }
   const port = address.port;
-  logger.info('devnet listening', { port, network: 'mock' });
+  logger.info('devnet listening', { port, network: MOCK_NETWORK });
 
   return {
     port,
