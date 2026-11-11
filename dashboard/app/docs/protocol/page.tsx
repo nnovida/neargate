@@ -260,7 +260,7 @@ export default function Page() {
           [<M key="9">amount_too_low</M>, 'The price the registry forwarded is below the service price.'],
           [<M key="10">expired</M>, 'The registry payment is older than the invoice time to live.'],
           [<M key="11">already_attested</M>, 'The payment was already attested, which only follows a served call.'],
-          [<M key="12">tx_mismatch</M>, 'Live: the transaction is not a successful pay of this nonce and service on this registry, signed by the named payer.'],
+          [<M key="12">tx_mismatch</M>, 'Live: the transaction is not a successful pay or pay_from_escrow of this nonce and service on this registry, signed by the named payer.'],
           [<M key="13">settlement_pending</M>, 'Live: the payment is not yet visible. The same invoice stays valid: retry the identical proof after the Retry-After seconds (2).'],
         ]}
       />
@@ -277,6 +277,13 @@ export default function Page() {
         refunds the excess to the payer and stores the payment, flagging it <M>self_paid</M> when
         the payer is the service owner or payment target.
       </P>
+      <P>
+        A buyer with a prepaid escrow can call <M>pay_from_escrow</M> with the same{' '}
+        <M>serviceId</M> and <M>nonce</M> instead: it attaches nothing and the registry debits{' '}
+        <M>price + 0.002 NEAR</M> from the buyer’s escrow, then writes the identical payment record
+        and event. The invoice and the proof are the same for both rails (see{' '}
+        <DocLink href="/docs/contract#escrow">escrow</DocLink>).
+      </P>
       <H3 id="payment-header">The X-PAYMENT header</H3>
       <P>
         The proof is the base64 encoding of this JSON, sent on the retried request:
@@ -290,7 +297,7 @@ export default function Page() {
             network: 'near-testnet',
             payload: {
               kind: 'tx',
-              transaction: '<base58 tx hash of the pay call>',
+              transaction: '<base58 tx hash of the pay or pay_from_escrow call>',
               nonce: '3673826824572287',
               payer: '<buyer account id>',
             },
@@ -300,7 +307,8 @@ export default function Page() {
         )}
       />
       <P>
-        <M>transaction</M> is the base58 hash of the <M>pay</M> transaction; <M>payer</M> is the
+        <M>transaction</M> is the base58 hash of the <M>pay</M> (or <M>pay_from_escrow</M>)
+        transaction; <M>payer</M> is the
         account that signed it. A <M>kind: &quot;delegate&quot;</M> payload (a NEP-366 signed delegate
         action the gateway would relay) is reserved for a gasless rail that is not enabled; the
         gateway answers it <M>relayer_disabled</M>.
@@ -337,7 +345,7 @@ export default function Page() {
             '4',
             <span key="4">
               Live only: the transaction itself. Via the RPC, it must be signed by the named payer,
-              received by the registry, hold a <M>pay</M> action with the same service id and nonce,
+              received by the registry, hold a <M>pay</M> or <M>pay_from_escrow</M> action with the same service id and nonce,
               and have succeeded. While it cannot yet be shown the answer is pending.
             </span>,
             'tx_mismatch, settlement_pending',

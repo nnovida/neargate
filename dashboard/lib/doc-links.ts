@@ -48,7 +48,7 @@ export const DOC_GROUPS: DocGroup[] = [
       {
         href: '/docs/cli',
         label: 'CLI & MCP',
-        keywords: ['neargate', 'wrap', 'map', 'buy', 'list', 'status', 'pause', 'resume', 'demo-accounts', 'mcp', 'claude desktop', '--account', '--key-file', '--max', '--price', '--registry', '--rpc', '--mode', 'neargate_buy', 'neargate_list_services', 'error codes', 'BUDGET_EXCEEDED', 'PAID_NOT_SERVED', 'TX_TIMEOUT', 'RPC_TIMEOUT', 'SIGNER_KEY_NOT_FOUND', 'REGISTRY_MISMATCH', 'SERVICE_MISMATCH', 'troubleshooting'],
+        keywords: ['neargate', 'wrap', 'map', 'buy', 'list', 'status', 'pause', 'resume', 'demo-accounts', 'escrow', 'agent-key', '--from-escrow', '--allowance', 'neargate_escrow_balance', 'fromEscrow', 'ERR_ESCROW_INSUFFICIENT', 'mcp', 'claude desktop', '--account', '--key-file', '--max', '--price', '--registry', '--rpc', '--mode', 'neargate_buy', 'neargate_list_services', 'error codes', 'BUDGET_EXCEEDED', 'PAID_NOT_SERVED', 'TX_TIMEOUT', 'RPC_TIMEOUT', 'SIGNER_KEY_NOT_FOUND', 'REGISTRY_MISMATCH', 'SERVICE_MISMATCH', 'troubleshooting'],
       },
     ],
   },
@@ -63,7 +63,7 @@ export const DOC_GROUPS: DocGroup[] = [
       {
         href: '/docs/security',
         label: 'Security model',
-        keywords: ['trust model', 'ssrf', 'replay', 'self-payment', 'wash trading', 'self-map', 'owner signature', 'full access key', 'admin token', 'rate limit', 'keys', 'TRUST_PROXY', 'redirect', 'budget cap', 'attestor', 'guards'],
+        keywords: ['trust model', 'ssrf', 'replay', 'self-payment', 'wash trading', 'self-map', 'owner signature', 'full access key', 'admin token', 'rate limit', 'keys', 'TRUST_PROXY', 'redirect', 'budget cap', 'attestor', 'guards', 'agent key', 'function-call key', 'spending limit', 'blast radius', 'escrow'],
       },
     ],
   },
@@ -73,7 +73,7 @@ export const DOC_GROUPS: DocGroup[] = [
       {
         href: '/docs/contract',
         label: 'Registry contract',
-        keywords: ['neargate-registry', 'near-sdk', 'rust', 'register_service', 'pay', 'record_attestation', 'set_active', 'set_attestor', 'get_service', 'list_services', 'services_count', 'get_score', 'get_attestations', 'get_payment', 'get_recent_activity', 'views', 'events', 'NEP-297', 'storage', 'yocto', 'ERR_', 'ERR_NONCE_USED', 'ERR_SELF_PAYMENT', 'ERR_DEPOSIT_TOO_LOW', 'ABI'],
+        keywords: ['neargate-registry', 'near-sdk', 'rust', 'register_service', 'pay', 'record_attestation', 'set_active', 'set_attestor', 'get_service', 'list_services', 'services_count', 'get_score', 'get_attestations', 'get_payment', 'get_recent_activity', 'deposit_escrow', 'withdraw_escrow', 'pay_from_escrow', 'escrow_of', 'ESCROW_STORAGE_FEE_YOCTO', 'ERR_ONE_YOCTO_REQUIRED', 'ERR_DEPOSIT_NOT_ALLOWED', 'views', 'events', 'NEP-297', 'storage', 'yocto', 'ERR_', 'ERR_NONCE_USED', 'ERR_SELF_PAYMENT', 'ERR_DEPOSIT_TOO_LOW', 'ABI'],
       },
     ],
   },

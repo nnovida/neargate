@@ -180,6 +180,23 @@ export class FakeChainClient implements ChainClient {
     });
   }
 
+  // The gateway only reads payments: the escrow surface is not part of what it does.
+  escrowOf(): Promise<string> {
+    return Promise.resolve('0');
+  }
+
+  depositEscrow(): Promise<{ txHash: string }> {
+    return Promise.reject(new Error('FakeChainClient: the gateway never deposits to an escrow'));
+  }
+
+  withdrawEscrow(): Promise<{ txHash: string }> {
+    return Promise.reject(new Error('FakeChainClient: the gateway never withdraws from an escrow'));
+  }
+
+  payFromEscrow(): Promise<{ txHash: string }> {
+    return Promise.reject(new Error('FakeChainClient: the gateway never pays'));
+  }
+
   isFullAccessKey(accountId: string, publicKey: string): Promise<boolean> {
     if (this.keyLookupFailure) return Promise.reject(this.keyLookupFailure);
     return Promise.resolve(this.fullAccessKeys.get(accountId)?.has(publicKey) ?? false);

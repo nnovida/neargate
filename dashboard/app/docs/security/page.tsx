@@ -17,7 +17,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/docs/security' },
   title: 'Security model',
   description:
-    'What the registry enforces and what the gateway reports: payment-backed scores, the owner-signed self-map request, single-use nonces, the SSRF and redirect guards, budget caps, keys and a go-live checklist.',
+    'What the registry enforces and what the gateway reports: payment-backed scores, the owner-signed self-map request, single-use nonces, the SSRF and redirect guards, budget caps, restricted agent keys and their blast radius, keys and a go-live checklist.',
 };
 
 export default function Page() {
@@ -115,7 +115,9 @@ export default function Page() {
         <strong>total attached</strong>, price plus the storage fee, and are checked before the
         payment (<M>BUDGET_EXCEEDED</M>). The buyer agent checks price plus fee against its budget
         minus what it has already spent in the run, and then hands the client exactly that approved
-        total as its cap, so an invoice that grew after the check is refused.
+        total as its cap, so an invoice that grew after the check is refused. The cap covers a{' '}
+        <M>--from-escrow</M> payment the same way, and the client also reads the escrow first and
+        refuses (<M>ERR_ESCROW_INSUFFICIENT</M>) before sending anything it cannot pay.
       </P>
       <H3 id="payment-self">Self-payment guard</H3>
       <P>
@@ -229,6 +231,63 @@ export default function Page() {
         shell word.
       </P>
 
+      <H2 id="agent-keys">Agent keys and the escrow</H2>
+      <P>
+        An AI agent that pays for calls needs a key, and a full-access key can drain its owner’s
+        account. NearGate gives the agent a different kind of key instead: a NEAR{' '}
+        <strong>function-call access key</strong> that the account’s owner adds with{' '}
+        <DocLink href="/docs/cli#agent-key">neargate agent-key add</DocLink>. It is restricted, by
+        NEAR itself, to one receiver (the registry) and one method (<M>pay_from_escrow</M>), and it
+        can attach no deposit.
+      </P>
+      <Callout tone="warn" title="BLAST RADIUS">
+        An agent key restricted to <M>pay_from_escrow</M> can spend the escrow and nothing else.
+        Withdrawing needs a full-access key (<M>withdraw_escrow</M> attaches 1 yocto, which a
+        function-call key cannot). The escrow is the spending limit: a leaked agent key can spend all
+        of it, on any active service, and no more. It cannot touch the rest of the account, change a
+        service or move NEAR anywhere else.
+      </Callout>
+      <DocTable
+        head={['What', 'How it is handled']}
+        rows={[
+          [
+            'The spending limit',
+            <span key="1">
+              The escrow balance, funded from the full-access key (<M>neargate escrow deposit</M>).
+              Keep in it what the agent may spend. <M>--max</M> and <M>maxNear</M> still cap each
+              call’s total; they are per call, the escrow is the total.
+            </span>,
+          ],
+          [
+            'The key’s allowance',
+            'Pays only the key’s gas, a small amount per call. Set it low; it is not the spending limit.',
+          ],
+          [
+            'The key file',
+            <span key="3">
+              <M>agent-key add</M> writes the secret to{' '}
+              <M>~/.near-credentials/&lt;network&gt;/&lt;account&gt;.neargate-agent.json</M> with mode{' '}
+              <M>0600</M>, refuses to overwrite an existing file and prints only the public key and
+              the path, never the secret. Treat it like any key file: it is what the agent uses
+              as <M>--key-file</M>.
+            </span>,
+          ],
+          [
+            'Revoking',
+            'Delete the key from the account with its full-access key (for example with the near CLI). The escrow stays; take it back with neargate escrow withdraw.',
+          ],
+          [
+            'What it does not limit',
+            'The agent chooses the service: it can pay any active service for any price the escrow covers, including one that is not worth it. Choose the escrow size accordingly, and use maxNear / --max to bound a single call.',
+          ],
+        ]}
+      />
+      <P>
+        Mock mode has no keys, so the restriction itself is a live-chain property (agent keys need
+        live mode). The registry’s own rules around it are in the{' '}
+        <DocLink href="/docs/contract#escrow">contract reference</DocLink>.
+      </P>
+
       <H2 id="keys">Keys, secrets and the admin token</H2>
       <DocTable
         head={['Topic', 'Behaviour']}
@@ -240,6 +299,10 @@ export default function Page() {
           [
             'Never printed',
             'Error messages name the source of a bad key, never its content, and no RPC URL or key reaches an error text. The CLI warns when a key file is readable by group or others.',
+          ],
+          [
+            'Agent key file',
+            'A restricted function-call key (see Agent keys and the escrow): mode 0600, never overwritten, secret never printed or logged. It can spend the escrow and nothing else.',
           ],
           [
             'Never committed',

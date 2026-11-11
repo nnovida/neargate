@@ -204,7 +204,7 @@ export default function Page() {
           {
             href: '/docs/cli',
             title: 'CLI & MCP',
-            desc: 'neargate wrap, map, list, buy, status, pause, resume, demo-accounts and the MCP server: every flag, the four MCP tools, and the error codes you can meet.',
+            desc: 'neargate wrap, map, list, buy, status, pause, resume, demo-accounts, escrow, agent-key and the MCP server: every flag, the five MCP tools, and the error codes you can meet.',
           },
           {
             href: '/docs/protocol',

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { createChainClient } from '@agentgate/chain';
+import { LiveNearClient, createChainClient } from '@agentgate/chain';
 import {
   AgentGateError,
   DEFAULT_DASHBOARD_URL,
@@ -11,9 +11,17 @@ import {
   loadConfig,
   type AgentGateConfig,
 } from '@agentgate/shared';
+import { addAgentKey, assertAgentKeysAvailable, formatAgentKeyAdded } from './agent-key';
 import { buyService, formatBuyBody, formatBuyReceipt } from './buy';
 import { createDemoAccounts } from './demo-accounts';
-import { cliSigner, type SignerFlags } from './identity';
+import {
+  depositToEscrow,
+  escrowBalance,
+  formatEscrowBalance,
+  formatEscrowChange,
+  withdrawFromEscrow,
+} from './escrow';
+import { cliAccountId, cliSigner, type SignerFlags } from './identity';
 import { formatServiceTable, listServices } from './list';
 import { adminRetryCurl, mapLiveOnlyError, mapService } from './map';
 import { setServiceActive } from './pause';
@@ -186,6 +194,7 @@ interface BuyCmdOpts extends CliConfigFlags, SignerFlags {
   method: string;
   body?: string;
   gateway?: string;
+  fromEscrow?: boolean;
 }
 
 withConfigFlags(
@@ -199,7 +208,11 @@ withConfigFlags(
       .option('--max <near>', 'budget cap in NEAR on the total attached (price + 0.002 NEAR storage)')
       .option('--method <method>', 'HTTP method for the paid request', 'GET')
       .option('--body <json>', 'JSON request body to send with the paid request')
-      .option('--gateway <url>', "gateway base URL (default: the service's on-chain endpoint)"),
+      .option('--gateway <url>', "gateway base URL (default: the service's on-chain endpoint)")
+      .option(
+        '--from-escrow',
+        'pay out of the prepaid escrow (`pay_from_escrow`, nothing attached) instead of attaching a deposit; the escrow must hold price + 0.002 NEAR',
+      ),
     'buyer',
   ),
 ).action(async (idRaw: string, opts: BuyCmdOpts) => {
@@ -215,6 +228,7 @@ withConfigFlags(
     ...(opts.max !== undefined ? { maxNear: opts.max } : {}),
     ...(opts.body !== undefined ? { body: opts.body } : {}),
     ...(opts.gateway !== undefined ? { gateway: opts.gateway } : {}),
+    ...(opts.fromEscrow === true ? { fromEscrow: true } : {}),
   });
 
   // The receipt → stderr so the response body on stdout stays pipeable.
@@ -283,6 +297,90 @@ withConfigFlags(
     'seller',
   ),
 ).action(async (idRaw: string, opts: CliConfigFlags & SignerFlags) => toggleActive(idRaw, true, opts));
+
+const escrowCommand = program
+  .command('escrow')
+  .description(
+    'Prepaid escrow in the registry: fund it, read it, take it back; `buy --from-escrow` and restricted agent keys spend it',
+  );
+
+withConfigFlags(
+  withSignerFlags(
+    escrowCommand
+      .command('deposit')
+      .description(
+        'Deposit NEAR into your escrow (`deposit_escrow`). The first deposit must be more than 0.002 NEAR, which the registry keeps as the escrow entry\'s storage fee',
+      )
+      .argument('<near>', 'amount in NEAR (e.g. 1)'),
+    'buyer',
+  ),
+).action(async (amountNear: string, opts: CliConfigFlags & SignerFlags) => {
+  const config = cliConfig(opts);
+  const chain = createChainClient(config);
+  const signer = await cliSigner(config, 'buyer', signerFlags(opts));
+  const result = await depositToEscrow({ chain, signer, amountNear });
+  const explorer = config.mode === 'live' ? { explorerUrl: config.nearExplorerUrl } : {};
+  for (const line of formatEscrowChange('deposit', result, explorer)) console.log(line);
+});
+
+withConfigFlags(
+  withSignerFlags(
+    escrowCommand
+      .command('withdraw')
+      .description(
+        'Withdraw NEAR from your escrow back to your account (`withdraw_escrow`, 1 yocto attached: needs the account\'s full-access key, not an agent key)',
+      )
+      .argument('<near>', 'amount in NEAR (at most the escrow balance)'),
+    'buyer',
+  ),
+).action(async (amountNear: string, opts: CliConfigFlags & SignerFlags) => {
+  const config = cliConfig(opts);
+  const chain = createChainClient(config);
+  const signer = await cliSigner(config, 'buyer', signerFlags(opts));
+  const result = await withdrawFromEscrow({ chain, signer, amountNear });
+  const explorer = config.mode === 'live' ? { explorerUrl: config.nearExplorerUrl } : {};
+  for (const line of formatEscrowChange('withdraw', result, explorer)) console.log(line);
+});
+
+withConfigFlags(
+  escrowCommand
+    .command('balance')
+    .description('Show an account\'s escrow balance (no key needed)')
+    .argument('[account]', 'NEAR account id (default: the buyer account)')
+    .option('--account <id>', 'same as [account] (env BUYER_ACCOUNT_ID; mock: MOCK_BUYER_ACCOUNT)'),
+).action(async (account: string | undefined, opts: CliConfigFlags & SignerFlags) => {
+  const config = cliConfig(opts);
+  const chain = createChainClient(config);
+  const result = await escrowBalance({
+    chain,
+    account: account ?? cliAccountId(config, 'buyer', signerFlags(opts)),
+  });
+  for (const line of formatEscrowBalance(result)) console.log(line);
+});
+
+const agentKeyCommand = program
+  .command('agent-key')
+  .description('Restricted keys for AI agents: a NEAR function-call key that can only spend your escrow (live mode only)');
+
+withConfigFlags(
+  withSignerFlags(
+    agentKeyCommand
+      .command('add')
+      .description(
+        'Add a new function-call key to your account that may call only `pay_from_escrow` on the registry. The secret is written to ~/.near-credentials/<network>/<account>.neargate-agent.json (mode 0600, never overwritten); only the public key and the path are printed',
+      )
+      .requiredOption('--allowance <near>', 'gas the agent key may spend, in NEAR (e.g. 0.25); the escrow is its spending limit'),
+    'buyer',
+  ),
+).action(async (opts: CliConfigFlags & SignerFlags & { allowance: string }) => {
+  const config = cliConfig(opts);
+  assertAgentKeysAvailable(config.mode);
+  const client = new LiveNearClient(config);
+  // The account's own full-access key signs the AddKey: --key-file here is that key, not the agent's.
+  const signer = await cliSigner(config, 'buyer', signerFlags(opts));
+  const added = await addAgentKey({ client, signer, allowanceNear: opts.allowance, network: config.nearNetwork });
+  for (const line of formatAgentKeyAdded(added, { explorerUrl: config.nearExplorerUrl })) console.log(line);
+});
 
 withConfigFlags(
   program

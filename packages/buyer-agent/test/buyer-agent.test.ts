@@ -86,6 +86,10 @@ function makeChain(opts: FakeChainOpts = {}): ChainClient {
     pay: vi.fn(async () => ({ txHash: PAYMENT_TX })),
     recordAttestation: vi.fn(async () => ({ txHash: 'tx' })),
     setActive: vi.fn(async () => ({ txHash: 'tx' })),
+    escrowOf: vi.fn(async () => '0'),
+    depositEscrow: vi.fn(async () => ({ txHash: 'tx' })),
+    withdrawEscrow: vi.fn(async () => ({ txHash: 'tx' })),
+    payFromEscrow: vi.fn(async () => ({ txHash: PAYMENT_TX })),
   };
 }
 

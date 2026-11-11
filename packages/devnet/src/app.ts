@@ -208,6 +208,48 @@ export function createApp(deps: DevnetDeps = {}): Express {
     }),
   );
 
+  // POST /registry/deposit-escrow {signer, depositYocto} → {txHash}
+  app.post(
+    '/registry/deposit-escrow',
+    wrap((req, res) => {
+      const body = asObject(req.body, 'request body');
+      res.json(state.depositEscrow(reqAccountId(body, 'signer'), reqYocto(body, 'depositYocto')));
+    }),
+  );
+
+  // POST /registry/withdraw-escrow {signer, amountYocto, depositYocto} → {txHash}
+  // (`depositYocto` is what the call attaches: the contract wants exactly 1 yocto)
+  app.post(
+    '/registry/withdraw-escrow',
+    wrap((req, res) => {
+      const body = asObject(req.body, 'request body');
+      res.json(
+        state.withdrawEscrow(
+          reqAccountId(body, 'signer'),
+          reqYocto(body, 'amountYocto'),
+          reqYocto(body, 'depositYocto'),
+        ),
+      );
+    }),
+  );
+
+  // POST /registry/pay-from-escrow {signer, serviceId, nonce, depositYocto} → {txHash}
+  // (`depositYocto` is what the call attaches: the contract wants none)
+  app.post(
+    '/registry/pay-from-escrow',
+    wrap((req, res) => {
+      const body = asObject(req.body, 'request body');
+      res.json(
+        state.payFromEscrow(
+          reqAccountId(body, 'signer'),
+          reqServiceIdBody(body),
+          reqString(body, 'nonce', true), // the shape is the contract's ERR_INVALID_NONCE
+          reqYocto(body, 'depositYocto'),
+        ),
+      );
+    }),
+  );
+
   // POST /registry/attest {signer, serviceId, nonce, paymentTxHash, success} → {txHash}
   app.post(
     '/registry/attest',
@@ -273,6 +315,15 @@ export function createApp(deps: DevnetDeps = {}): Express {
     '/registry/payments/:nonce',
     wrap((req, res) => {
       res.json(state.getPayment(req.params['nonce'] ?? ''));
+    }),
+  );
+
+  // GET /registry/escrow/:accountId → {accountId, escrowYocto} ("0" for an account without an escrow)
+  app.get(
+    '/registry/escrow/:accountId',
+    wrap((req, res) => {
+      const accountId = req.params['accountId'] ?? '';
+      res.json({ accountId, escrowYocto: state.escrowOf(accountId) });
     }),
   );
 

@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/docs/cli' },
   title: 'CLI & MCP',
   description:
-    'Reference for the neargate CLI — wrap, map, list, buy, status, pause, resume, demo-accounts and mcp — with every flag, the four MCP tools, the Claude Desktop setup and the error codes you can meet.',
+    'Reference for the neargate CLI — wrap, map, list, buy, status, pause, resume, demo-accounts, escrow, agent-key and mcp — with every flag, the five MCP tools, the Claude Desktop setup and the error codes you can meet.',
 };
 
 export default function Page() {
@@ -30,7 +30,7 @@ export default function Page() {
       <DocHeader
         kicker="USE NEARGATE"
         title="CLI & MCP"
-        lede="The neargate CLI publishes services, buys one paid call to any of them, inspects the on-chain catalog, toggles a service you own, mints demo accounts on the offline devnet, and serves NearGate to agent frameworks as an MCP server."
+        lede="The neargate CLI publishes services, buys one paid call to any of them (from a deposit or from a prepaid escrow), inspects the on-chain catalog, toggles a service you own, funds an escrow and mints restricted agent keys that can spend only that escrow, mints demo accounts on the offline devnet, and serves NearGate to agent frameworks as an MCP server."
       />
 
       {/* ───────────────────────────── invocation ───────────────────────────── */}
@@ -44,12 +44,13 @@ export default function Page() {
         The entry point is <M>packages/cli/src/bin.ts</M> (a <M>commander</M> program named{' '}
         <M>neargate</M>). <M>npm run build -w @neargate/cli</M> bundles it to{' '}
         <M>packages/cli/dist/bin.js</M>, which you can run with <M>node</M> directly — the form the{' '}
-        <DocLink href="#mcp-claude-desktop">Claude Desktop</DocLink> config uses. There are nine
+        <DocLink href="#mcp-claude-desktop">Claude Desktop</DocLink> config uses. There are eleven
         commands: <DocLink href="#wrap">wrap</DocLink>, <DocLink href="#map">map</DocLink>,{' '}
         <DocLink href="#list">list</DocLink>, <DocLink href="#buy">buy</DocLink>,{' '}
         <DocLink href="#status">status</DocLink>, <DocLink href="#pause">pause</DocLink>,{' '}
         <DocLink href="#resume">resume</DocLink>,{' '}
-        <DocLink href="#demo-accounts">demo-accounts</DocLink> and <DocLink href="#mcp">mcp</DocLink>.
+        <DocLink href="#demo-accounts">demo-accounts</DocLink>, <DocLink href="#escrow">escrow</DocLink>,{' '}
+        <DocLink href="#agent-key">agent-key</DocLink> and <DocLink href="#mcp">mcp</DocLink>.
         Every command exits <M>0</M> on success and <M>1</M> on error; failures print one line to
         stderr, <M>error: &lt;CODE&gt;: &lt;message&gt;</M> (see{' '}
         <DocLink href="#error-codes">Error codes</DocLink>); a usage mistake is reported by the
@@ -101,7 +102,7 @@ export default function Page() {
       <P>
         Commands that write to the chain take the account to act as. The same two flags mean the{' '}
         <strong>seller</strong> on <M>wrap</M>, <M>map</M>, <M>pause</M> and <M>resume</M>, and the{' '}
-        <strong>buyer</strong> on <M>buy</M> and <M>mcp</M>.
+        <strong>buyer</strong> on <M>buy</M>, <M>escrow</M>, <M>agent-key</M> and <M>mcp</M>.
       </P>
       <DocTable
         head={['Flag', 'Seller env', 'Buyer env']}
@@ -364,7 +365,7 @@ export default function Page() {
         response body goes to <strong className="text-white">stdout</strong> (pipeable); the receipt
         goes to <strong className="text-white">stderr</strong>.
       </P>
-      <CommandBlock wrap text="npm run neargate -- buy <id> --account <buyer> --max <near>" />
+      <CommandBlock wrap text="npm run neargate -- buy <id> --account <buyer> --max <near> [--from-escrow]" />
       <PropList
         items={[
           { name: '<id>', type: 'positive integer', required: true, desc: 'The service id (see list).' },
@@ -376,6 +377,21 @@ export default function Page() {
               <>
                 Budget cap on the <strong>total</strong> attached — price + <M>0.002 NEAR</M> —
                 checked before anything is paid (<M>BUDGET_EXCEEDED</M>). Without it there is no cap.
+              </>
+            ),
+          },
+          {
+            name: '--from-escrow',
+            type: 'flag',
+            required: false,
+            desc: (
+              <>
+                Pay out of your prepaid <DocLink href="#escrow">escrow</DocLink> with{' '}
+                <M>pay_from_escrow</M> instead of attaching a deposit to <M>pay</M>: nothing is
+                attached and the escrow is debited the same total, price + <M>0.002 NEAR</M>. If the
+                escrow holds less, <M>buy</M> fails with <M>ERR_ESCROW_INSUFFICIENT</M> before
+                sending anything. <M>--max</M> still caps the total. This is the call a restricted{' '}
+                <DocLink href="#agent-key">agent key</DocLink> can sign.
               </>
             ),
           },
@@ -397,6 +413,7 @@ export default function Page() {
           'service:  #1 RWA FX & Gold Oracle',
           'url:      http://localhost:4021/svc/1',
           'paid:     0.5 NEAR + 0.002 NEAR storage',
+          'from:     escrow (nothing attached; the escrow was debited)      (with --from-escrow only)',
           'payment:  <tx hash>',
           'explorer: <NEAR_EXPLORER_URL>/txns/<tx hash>      (live mode only)',
           'settled:  ok  (payer buyer-1abba006.mock)',
@@ -435,6 +452,112 @@ export default function Page() {
         Signing as anyone but the owner is rejected by the registry with{' '}
         <M>ERR_NOT_AUTHORIZED</M>, which the CLI rewords into an owner-only message.
       </P>
+
+      {/* ───────────────────────────── escrow ───────────────────────────── */}
+      <H2 id="escrow">escrow</H2>
+      <P>
+        A prepaid balance held in the registry under your account. <M>buy --from-escrow</M> and the
+        MCP tool pay each call out of it, attaching nothing, which is what lets a restricted{' '}
+        <DocLink href="#agent-key">agent key</DocLink> pay: the escrow is the agent’s spending
+        limit. Three subcommands, all taking the config flags; <M>deposit</M> and <M>withdraw</M> take
+        the buyer <DocLink href="#signer-flags">signer flags</DocLink>.
+      </P>
+      <H3 id="escrow-deposit">escrow deposit</H3>
+      <CommandBlock text="npm run neargate -- escrow deposit <near> --account <buyer>" />
+      <P>
+        Calls <M>deposit_escrow</M> with the amount attached. The first deposit of an account must
+        be <strong className="text-white">more than</strong> <M>0.002 NEAR</M>: the registry keeps
+        that as the escrow entry’s storage fee and credits the rest (otherwise{' '}
+        <M>ERR_DEPOSIT_TOO_LOW</M>); later deposits are credited in full. The amount must be above
+        zero.
+      </P>
+      <CodeBlock
+        label="output"
+        code={[
+          'account:    buyer.testnet',
+          'deposited:  1 NEAR',
+          'escrow:     0.998 NEAR',
+          'tx:         <tx hash>',
+          'explorer:   <NEAR_EXPLORER_URL>/txns/<tx hash>      (live mode only)',
+          "note:       the first deposit keeps 0.002 NEAR as the escrow's storage fee      (first deposit only)",
+        ].join('\n')}
+      />
+      <H3 id="escrow-withdraw">escrow withdraw</H3>
+      <CommandBlock text="npm run neargate -- escrow withdraw <near> --account <buyer>" />
+      <P>
+        Calls <M>withdraw_escrow</M>, which sends the amount back to your account. It attaches
+        exactly 1 yocto, so{' '}
+        <strong className="text-white">only the account’s full-access key can sign it</strong>: from
+        an agent key NEAR rejects the call (<M>TX_FAILED</M>, “Deposit is not allowed with function
+        call”). An amount above the escrow is refused with <M>ERR_ESCROW_INSUFFICIENT</M> before
+        anything is sent. Prints <M>account</M>, <M>withdrawn</M>, <M>escrow</M> (what is left) and{' '}
+        <M>tx</M>.
+      </P>
+      <H3 id="escrow-balance">escrow balance</H3>
+      <CommandBlock text="npm run neargate -- escrow balance [account]" />
+      <P>
+        Reads an account’s escrow; no key. Without the argument (or <M>--account</M>) it reads the
+        buyer account. An account that never deposited holds <M>0 NEAR</M>.
+      </P>
+      <CodeBlock
+        label="output"
+        code={['account:  buyer.testnet', 'escrow:   0.498 NEAR'].join('\n')}
+      />
+
+      {/* ───────────────────────────── agent-key ───────────────────────────── */}
+      <H2 id="agent-key">agent-key</H2>
+      <P>
+        Live mode only (<M>LIVE_ONLY</M> otherwise: an agent key is a NEAR access key, which the
+        offline devnet does not model). Gives an AI agent a key that can spend your escrow and
+        nothing else.
+      </P>
+      <CommandBlock wrap text="npm run neargate -- agent-key add --allowance <near> --account <owner> --key-file <owner key>" />
+      <PropList
+        items={[
+          {
+            name: '--allowance <near>',
+            type: 'NEAR decimal',
+            required: true,
+            desc: (
+              <>
+                The gas the key may spend, above zero (for example <M>0.25</M>). It is not the
+                spending limit: the escrow is.
+              </>
+            ),
+          },
+        ]}
+      />
+      <P>
+        It takes the buyer <DocLink href="#signer-flags">signer flags</DocLink> for the account’s{' '}
+        <strong>full-access</strong> key, which signs the AddKey. It then generates a fresh ed25519
+        key, writes <M>{'{account_id, public_key, private_key}'}</M> to{' '}
+        <M>~/.near-credentials/&lt;network&gt;/&lt;account&gt;.neargate-agent.json</M> (mode{' '}
+        <M>0600</M>; it refuses to overwrite an existing file, <M>AGENT_KEY_EXISTS</M>) and adds the
+        public key to the account as a function-call key whose receiver is the registry and whose
+        only method is <M>pay_from_escrow</M>. It prints the public key, the path and the agent’s
+        next command, never the secret.
+      </P>
+      <CodeBlock
+        label="output"
+        code={[
+          'account:     buyer.testnet',
+          'public key:  ed25519:…',
+          'key file:    ~/.near-credentials/testnet/buyer.testnet.neargate-agent.json',
+          "allowance:   0.25 NEAR (the key's gas; it can call pay_from_escrow on the registry and nothing else)",
+          'add_key tx:  <tx hash>',
+          'explorer:    <NEAR_EXPLORER_URL>/txns/<tx hash>',
+          '',
+          'the agent spends the escrow with:',
+          '  neargate buy <id> --from-escrow --account buyer.testnet --key-file <key file>',
+        ].join('\n')}
+      />
+      <Callout tone="warn" title="WHAT THE KEY CAN DO">
+        It can spend the escrow and nothing else: it cannot withdraw, deposit, register, pause or
+        move any other balance, and NEAR rejects any other call from it. A leaked agent key can spend
+        all of the escrow on any active service, and no more. Keep in the escrow only what the agent
+        may spend; see the{' '}
+        <DocLink href="/docs/security#agent-keys">security model</DocLink>.
+      </Callout>
 
       {/* ───────────────────────────── demo-accounts ───────────────────────────── */}
       <H2 id="demo-accounts">demo-accounts</H2>
@@ -499,18 +622,29 @@ export default function Page() {
           [
             <span key="t4">
               <M>neargate_buy</M>
-              <Sub>{'{ id, maxNear?, method?, body? }'}</Sub>
+              <Sub>{'{ id, maxNear?, fromEscrow?, method?, body? }'}</Sub>
             </span>,
-            'Pays the invoice with a registry pay call and returns the response body. maxNear caps the total attached.',
+            'Pays the invoice with a registry pay call and returns the response body. maxNear caps the total. With fromEscrow it calls pay_from_escrow instead, debiting the prepaid escrow (ERR_ESCROW_INSUFFICIENT, before sending, if it holds less).',
             <strong key="y" className="text-white">
               yes
             </strong>,
           ],
+          [
+            <span key="t5">
+              <M>neargate_escrow_balance</M>
+              <Sub>{'{ account? }'}</Sub>
+            </span>,
+            'The NEAR still prepaid in an escrow (default: the buyer account), so an agent can see its remaining budget before buying. Read-only.',
+            'no',
+          ],
         ]}
       />
       <P>
-        The buyer key is resolved only when <M>neargate_buy</M> runs, so the three read tools work
-        with no key configured. A failing tool returns an error result that leads with the stable
+        The buyer key is resolved only when <M>neargate_buy</M> runs (and by{' '}
+        <M>neargate_escrow_balance</M> when it is given no account), so the three catalog tools work
+        with no key configured. Point an agent at a restricted{' '}
+        <DocLink href="#agent-key">agent key</DocLink> (<M>--key-file</M>) and it can call{' '}
+        <M>neargate_buy</M> with <M>fromEscrow: true</M> and nothing more. A failing tool returns an error result that leads with the stable
         code (<M>BUDGET_EXCEEDED</M>, <M>SERVICE_INACTIVE</M>, <M>PAID_NOT_SERVED</M>…), so an agent
         can branch on it; the codes are the ones in <DocLink href="#error-codes">Error codes</DocLink>.
       </P>
@@ -560,7 +694,7 @@ export default function Page() {
           [<M key="3">INSECURE_URL</M>, 'Live wrap with a plain http:// gateway that is not localhost: the mapping request would travel in cleartext.'],
           [<M key="4">INVALID_SERVICE_ID</M>, 'The <id> argument is not a positive integer.'],
           [<M key="5">INVALID_ACCOUNT_ID</M>, 'An account flag is not a NEAR account id.'],
-          [<M key="6">INVALID_AMOUNT</M>, 'A NEAR amount (--price, --max, maxNear) is not a plain non-negative decimal of at most 24 places, or is above the u128 maximum.'],
+          [<M key="6">INVALID_AMOUNT</M>, 'A NEAR amount (--price, --max, maxNear, an escrow amount, --allowance) is not a plain non-negative decimal of at most 24 places, or is above the u128 maximum; an escrow amount or an agent key allowance of zero is refused too.'],
           [<M key="7">INVALID_PRICE</M>, '--price is below the registry minimum of 0.000001 NEAR.'],
           [<M key="8">CONFIG_INVALID</M>, 'A flag or environment variable is invalid — for example live mode with no REGISTRY_CONTRACT_ID.'],
           [<M key="9">SIGNER_MISSING</M>, 'No account for the command’s role: pass --account or set the role’s *_ACCOUNT_ID (mock: MOCK_*_ACCOUNT).'],
@@ -568,13 +702,65 @@ export default function Page() {
           [<M key="11">SIGNER_KEY_UNREADABLE</M>, 'The key file cannot be read.'],
           [<M key="12">SIGNER_KEY_MISMATCH</M>, 'The key file is for a different account than the one you are signing as.'],
           [<M key="13">ACCOUNT_NOT_FOUND</M>, 'wrap: the payment target does not exist on the network. Create it or pass --payment-target <existing account>; a missing one would strand every payment.'],
-          [<M key="14">LIVE_ONLY</M>, 'map in mock mode. The mock gateway maps through its admin route, which wrap does for you.'],
+          [<M key="14">LIVE_ONLY</M>, 'map or agent-key in mock mode. The mock gateway maps through its admin route, which wrap does for you; agent keys are NEAR access keys, which the devnet does not model.'],
           [<M key="15">MOCK_ONLY</M>, 'demo-accounts outside mock mode.'],
           [<M key="16">NOT_SERVICE_OWNER</M>, 'map: your key’s account is not the service owner.'],
           [<M key="17">MAPPING_FAILED</M>, 'The gateway did not map the upstream (non-2xx, a redirect, a network error or a timeout). The registration stays; retry with map.'],
           [<M key="18">SERVICE_NOT_FOUND</M>, 'No service with that id on this registry.'],
           [<M key="19">SERVICE_INACTIVE</M>, 'buy / neargate_get_invoice: the owner paused the service. Nothing is paid.'],
           [<M key="20">FAUCET_UNREACHABLE</M>, 'demo-accounts cannot reach the devnet faucet. Start it with npm run dev. FAUCET_FAILED means the faucet answered an error; GATEWAY_TIMEOUT that it did not answer in time.'],
+        ]}
+      />
+
+      <H3 id="codes-escrow">Escrow and agent keys</H3>
+      <P>
+        The three ERR_* codes below are the registry’s own (see the{' '}
+        <DocLink href="/docs/contract#errors">contract page</DocLink>); the CLI and the client
+        raise <M>ERR_ESCROW_INSUFFICIENT</M> themselves, before sending, when they can see it
+        coming.
+      </P>
+      <DocTable
+        head={['Code', 'Meaning, and what to do']}
+        rows={[
+          [
+            <M key="1">ERR_ESCROW_INSUFFICIENT</M>,
+            <span key="1m">
+              <M>buy --from-escrow</M> / <M>neargate_buy</M> with <M>fromEscrow</M>: the escrow
+              holds less than price + 0.002 NEAR. <M>escrow withdraw</M>: the amount is above the
+              escrow. The message states the balance, and ends “nothing was sent” when the CLI or
+              client refused before sending.
+              <Sub>Top up with escrow deposit, or ask for less.</Sub>
+            </span>,
+          ],
+          [
+            <M key="2">ERR_ONE_YOCTO_REQUIRED</M>,
+            <span key="2m">
+              <M>withdraw_escrow</M> without exactly 1 yocto attached. The CLI always attaches it;
+              you only meet this calling the contract by hand.
+            </span>,
+          ],
+          [
+            <M key="3">ERR_DEPOSIT_NOT_ALLOWED</M>,
+            <span key="3m">
+              <M>pay_from_escrow</M> with a deposit attached. The CLI and the client attach none;
+              you only meet this calling the contract by hand.
+            </span>,
+          ],
+          [
+            <M key="4">AGENT_KEY_EXISTS</M>,
+            <span key="4m">
+              <M>agent-key add</M>: the key file for this account and network already exists, and is
+              never overwritten.
+              <Sub>Delete it first if you mean to replace that key.</Sub>
+            </span>,
+          ],
+          [
+            <M key="5">AGENT_KEY_UNWRITABLE</M>,
+            <span key="5m">
+              <M>agent-key add</M> cannot create the key file (permissions, disk). Nothing was added
+              to the account.
+            </span>,
+          ],
         ]}
       />
 

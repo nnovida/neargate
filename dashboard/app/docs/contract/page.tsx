@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/docs/contract' },
   title: 'Registry contract',
   description:
-    'Reference for the neargate-registry NEAR contract (Rust, near-sdk): constants and limits, change methods, views and their JSON shapes, NEP-297 events and every ERR_* code.',
+    'Reference for the neargate-registry NEAR contract (Rust, near-sdk): constants and limits, change methods including the prepaid escrow, views and their JSON shapes, NEP-297 events, every ERR_* code, and what an agent key restricted to pay_from_escrow can and cannot do.',
 };
 
 /** A field list that may wrap (unlike M, which never breaks). */
@@ -45,6 +45,12 @@ export default function Page() {
         payment target — so a score can only come from real transfers between distinct parties (see
         the <DocLink href="/docs/security#trust-model">trust model</DocLink>, including what it does
         not prove).
+      </P>
+      <P>
+        A buyer can also <em>prepay</em>: <M>deposit_escrow</M> puts NEAR into a per-account escrow,
+        and <M>pay_from_escrow(service_id, nonce)</M> settles a payment out of it exactly like{' '}
+        <M>pay</M> but attaches nothing, so a NEAR function-call access key restricted to that one
+        method can sign it (see <DocLink href="#escrow">escrow and agent keys</DocLink>).
       </P>
       <P>
         The contract has <strong className="text-white">no owner and no admin</strong>. The only
@@ -90,6 +96,10 @@ export default function Page() {
           [
             <span key="3"><M>REGISTRATION_DEPOSIT_YOCTO</M><Sub>1.2 × 10^23 yocto · 0.12 NEAR</Sub></span>,
             'Kept on every register_service (anything above is refunded). It prepays the service record and the storage for a full attestation list.',
+          ],
+          [
+            <span key="3b"><M>ESCROW_STORAGE_FEE_YOCTO</M><Sub>2 × 10^21 yocto · 0.002 NEAR</Sub></span>,
+            'Kept from an account’s first deposit_escrow, which creates its escrow entry (the fee prepays that entry’s storage, about 125 bytes at most). The first deposit must be more than this; later deposits are credited in full.',
           ],
           [<span key="4"><M>MAX_ATTESTATIONS</M><Sub>100</Sub></span>, 'Attestations kept per service, newest first.'],
           [<span key="5"><M>ACTIVITY_CAP</M><Sub>200</Sub></span>, 'Events kept in the activity ring buffer.'],
@@ -137,6 +147,36 @@ export default function Page() {
         the payment with <M>self_paid = payer is the owner or the payment target</M>. The
         measured storage cost must fit inside the fee.
       </P>
+      <H3 id="m-pay-escrow">pay_from_escrow — takes no deposit</H3>
+      <CodeBlock code="pay_from_escrow(service_id: u64, nonce: String)" />
+      <P>
+        <M>pay</M>, funded by the caller’s escrow. It is marked <M>payable</M> in the ABI but rejects any
+        attached deposit (<M>ERR_DEPOSIT_NOT_ALLOWED</M>). The same checks, in the same
+        order, then the escrow must hold at least <M>price + 0.002 NEAR</M>. It debits exactly that
+        from the escrow, sends the price to the payment target, keeps the fee and refunds nothing.
+        The payment record, activity entry and <M>payment</M> event are the ones{' '}
+        <M>pay</M> writes: the payer is the caller, so a score built on escrow payments is
+        built on the same real transfers, and the same self-payment rule applies.
+      </P>
+      <H3 id="m-deposit-escrow">deposit_escrow — payable</H3>
+      <CodeBlock code="deposit_escrow()" />
+      <P>
+        Credits the attached deposit to the caller’s escrow. The first deposit creates the entry:
+        it must be <strong className="text-white">more than</strong>{' '}
+        <M>0.002 NEAR</M>, the registry keeps that as <M>ESCROW_STORAGE_FEE_YOCTO</M> and credits
+        the rest. Later deposits are credited in full and must attach something. Entries are never
+        deleted, so an emptied escrow takes top-ups without a second fee.
+      </P>
+      <H3 id="m-withdraw-escrow">withdraw_escrow — payable, exactly 1 yocto</H3>
+      <CodeBlock code="withdraw_escrow(amount: U128)" />
+      <P>
+        Sends <M>amount</M> of the caller’s escrow back to the caller. It needs exactly{' '}
+        <M>1 yocto</M> attached, which a function-call key cannot attach, so{' '}
+        <strong className="text-white">only a full-access key can withdraw</strong>. The amount must
+        be between 1 and the balance. The escrow is debited before the transfer; the private callback{' '}
+        <M>on_escrow_withdraw(account_id, amount)</M> puts the amount back, once, if the transfer
+        fails (a direct call to it from anyone else panics). The 1 yocto stays in the registry.
+      </P>
       <H3 id="m-attest">record_attestation</H3>
       <CodeBlock code="record_attestation(service_id: u64, nonce: String, payment_tx_hash: String, success: bool)" />
       <P>
@@ -166,6 +206,7 @@ export default function Page() {
           [<M key="5">get_attestations(service_id)</M>, <span key="5d"><M>AttestationView[]</M>, newest first, at most 100; empty for an unknown id.</span>],
           [<M key="6">get_payment(nonce)</M>, <span key="6d"><M>PaymentView</M> or <M>null</M>. This is what the gateway verifies a proof against.</span>],
           [<M key="7">get_recent_activity(limit)</M>, <span key="7d"><M>ActivityView[]</M>, newest first; <M>limit</M> is clamped to 200.</span>],
+          [<M key="8">escrow_of(account_id)</M>, <span key="8d">The account’s escrow as a <M>U128</M> decimal string; <M>"0"</M> for an account that never deposited.</span>],
         ]}
       />
       <H3 id="shapes">JSON shapes</H3>
@@ -226,8 +267,55 @@ export default function Page() {
           [<M key="3">attestation</M>, <M key="3d">{'{ service_id, nonce, payment_tx_hash, success, caller }'}</M>],
           [<M key="4">service_status</M>, <M key="4d">{'{ service_id, active }'}</M>],
           [<M key="5">attestor_changed</M>, <M key="5d">{'{ service_id, attestor }'}</M>],
+          [
+            <M key="6">escrow_deposit</M>,
+            <span key="6d">
+              <M>{'{ account_id, amount, balance }'}</M>: <M>amount</M> is what was credited (net of
+              the storage fee on a first deposit, or a failed withdrawal put back) and{' '}
+              <M>balance</M> the escrow after it.
+            </span>,
+          ],
+          [
+            <M key="7">escrow_withdraw</M>,
+            <span key="7d">
+              <M>{'{ account_id, amount, balance }'}</M>: the amount debited and the escrow after the
+              debit.
+            </span>,
+          ],
         ]}
       />
+      <P>
+        The activity ring has no escrow entries: an escrow payment is a <M>payment</M> entry like any
+        other, and deposits and withdrawals appear in the events only.
+      </P>
+
+      <H2 id="escrow">Escrow and agent keys</H2>
+      <P>
+        An AI agent should not hold a key that can empty its owner’s account. NEAR offers a
+        function-call access key, restricted to one receiver and a list of methods, that can attach
+        no deposit. The registry’s escrow is built around that:
+      </P>
+      <DocTable
+        head={['Call', 'Attaches', 'Who can sign it']}
+        rows={[
+          [<M key="1">deposit_escrow</M>, 'the amount to prepay', 'a full-access key'],
+          [<M key="2">withdraw_escrow</M>, 'exactly 1 yocto', 'a full-access key only'],
+          [<M key="3">pay_from_escrow</M>, 'nothing', 'a full-access key, or a function-call key restricted to pay_from_escrow on the registry'],
+        ]}
+      />
+      <Callout tone="warn" title="THE SECURITY PROPERTY">
+        An agent key restricted to <M>pay_from_escrow</M> on the registry can spend the escrow and
+        nothing else. It cannot withdraw (that attaches 1 yocto), deposit, register or pause a
+        service, or move any other balance, and NEAR rejects any other call from it. Withdrawing
+        needs a full-access key. <strong className="text-white">The escrow is the spending
+        limit</strong>: a leaked agent key can spend all of it, on any active service, and no more.
+        Keep in it only what the agent may spend; top it up from the full-access key.
+      </Callout>
+      <P>
+        Create such a key with <DocLink href="/docs/cli#agent-key">neargate agent-key add</DocLink>{' '}
+        and fund the escrow with <DocLink href="/docs/cli#escrow">neargate escrow deposit</DocLink>.
+        The key’s <M>allowance</M> only pays its gas.
+      </P>
 
       <H2 id="errors">Error codes</H2>
       <P>
@@ -242,23 +330,30 @@ export default function Page() {
           [<span key="1"><M>ERR_EMPTY_NAME</M><Sub>register_service</Sub></span>, 'The trimmed name is empty.'],
           [<span key="2"><M>ERR_FIELD_TOO_LONG</M><Sub>register_service, record_attestation</Sub></span>, 'A field is over its byte limit: name, description, gateway_base_url, accepts.asset, accepts.symbol, payment_tx_hash.'],
           [<span key="3"><M>ERR_INVALID_PRICE</M><Sub>register_service</Sub></span>, 'accepts has fewer than 1 or more than 4 options, a "near" amount is below 10^18 yocto, another amount is zero, or more than one option is "near".'],
-          [<span key="4"><M>ERR_DEPOSIT_TOO_LOW</M><Sub>register_service, pay</Sub></span>, 'Attached below 0.12 NEAR (registration) or below price + 0.002 NEAR (pay). The message states the required yocto for pay.'],
-          [<span key="5"><M>ERR_STORAGE_EXCEEDED</M><Sub>register_service, pay</Sub></span>, 'The call’s measured storage cost is above its budget (the deposit, or the fee).'],
-          [<span key="6"><M>ERR_SERVICE_NOT_FOUND</M><Sub>pay, record_attestation, set_active, set_attestor</Sub></span>, 'No service with that id.'],
-          [<span key="7"><M>ERR_SERVICE_INACTIVE</M><Sub>pay, record_attestation</Sub></span>, 'The owner switched the service off.'],
-          [<span key="8"><M>ERR_NO_NATIVE_PRICE</M><Sub>pay</Sub></span>, 'The service has no "near" price option to settle.'],
-          [<span key="9"><M>ERR_INVALID_NONCE</M><Sub>pay</Sub></span>, 'The nonce is not 1 to 20 decimal digits.'],
-          [<span key="10"><M>ERR_NONCE_USED</M><Sub>pay</Sub></span>, 'The nonce was already paid. Nonces are single-use across the registry.'],
+          [<span key="4"><M>ERR_DEPOSIT_TOO_LOW</M><Sub>register_service, pay, deposit_escrow</Sub></span>, 'Attached below 0.12 NEAR (registration) or below price + 0.002 NEAR (pay; the message states the required yocto). deposit_escrow: a first deposit that is not more than 0.002 NEAR, or a top-up that attaches nothing.'],
+          [<span key="5"><M>ERR_STORAGE_EXCEEDED</M><Sub>register_service, pay, pay_from_escrow</Sub></span>, 'The call’s measured storage cost is above its budget (the deposit, or the fee).'],
+          [<span key="6"><M>ERR_SERVICE_NOT_FOUND</M><Sub>pay, pay_from_escrow, record_attestation, set_active, set_attestor</Sub></span>, 'No service with that id.'],
+          [<span key="7"><M>ERR_SERVICE_INACTIVE</M><Sub>pay, pay_from_escrow, record_attestation</Sub></span>, 'The owner switched the service off.'],
+          [<span key="8"><M>ERR_NO_NATIVE_PRICE</M><Sub>pay, pay_from_escrow</Sub></span>, 'The service has no "near" price option to settle.'],
+          [<span key="9"><M>ERR_INVALID_NONCE</M><Sub>pay, pay_from_escrow</Sub></span>, 'The nonce is not 1 to 20 decimal digits.'],
+          [<span key="10"><M>ERR_NONCE_USED</M><Sub>pay, pay_from_escrow</Sub></span>, 'The nonce was already paid. Nonces are single-use across the registry.'],
           [<span key="11"><M>ERR_NOT_AUTHORIZED</M><Sub>record_attestation, set_active, set_attestor</Sub></span>, 'The caller is not the service owner (set_active, set_attestor) or the attestor or owner (record_attestation).'],
           [<span key="12"><M>ERR_PAYMENT_NOT_FOUND</M><Sub>record_attestation</Sub></span>, 'The registry holds no payment with that nonce.'],
           [<span key="13"><M>ERR_PAYMENT_WRONG_SERVICE</M><Sub>record_attestation</Sub></span>, 'The payment belongs to another service.'],
           [<span key="14"><M>ERR_ALREADY_ATTESTED</M><Sub>record_attestation</Sub></span>, 'That payment was already attested. The gateway treats this as done, not failed.'],
           [<span key="15"><M>ERR_SELF_PAYMENT</M><Sub>record_attestation</Sub></span>, 'The owner or the payment target paid; it cannot be attested.'],
+          [<span key="16"><M>ERR_ESCROW_INSUFFICIENT</M><Sub>pay_from_escrow, withdraw_escrow</Sub></span>, 'pay_from_escrow: the escrow holds less than price + 0.002 NEAR (an account that never deposited holds 0). withdraw_escrow: the amount is 0 or above the balance. The message states the balance.'],
+          [<span key="17"><M>ERR_ONE_YOCTO_REQUIRED</M><Sub>withdraw_escrow</Sub></span>, 'Not exactly 1 yocto attached. It is the first check, and the reason a function-call key cannot withdraw.'],
+          [<span key="18"><M>ERR_DEPOSIT_NOT_ALLOWED</M><Sub>pay_from_escrow</Sub></span>, 'Any deposit attached. pay_from_escrow spends the escrow and takes none; it is the first check.'],
         ]}
       />
       <P>
         One more code is NEAR’s, not the contract’s: <M>ERR_INSUFFICIENT_BALANCE</M> means the signer
-        cannot fund the deposit plus gas.
+        cannot fund the deposit plus gas. <M>pay_from_escrow</M> checks, in this order:{' '}
+        <M>ERR_DEPOSIT_NOT_ALLOWED</M>, <M>ERR_SERVICE_NOT_FOUND</M>, <M>ERR_SERVICE_INACTIVE</M>,{' '}
+        <M>ERR_NO_NATIVE_PRICE</M>, <M>ERR_ESCROW_INSUFFICIENT</M>, <M>ERR_INVALID_NONCE</M>,{' '}
+        <M>ERR_NONCE_USED</M>; <M>withdraw_escrow</M>: <M>ERR_ONE_YOCTO_REQUIRED</M>, then{' '}
+        <M>ERR_ESCROW_INSUFFICIENT</M>.
       </P>
 
       <H2 id="build">Build, test and deploy</H2>

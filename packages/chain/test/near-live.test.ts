@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { KeyPair, PublicKey, baseEncode, decodeSignedTransaction, encodeTransaction } from 'near-api-js';
 import type { Transaction } from 'near-api-js';
 import { ContractExecutionError, HostGuestPanicError, RpcError } from 'near-api-js/rpc-errors';
@@ -13,7 +16,7 @@ import {
   nearToYocto,
 } from '@agentgate/shared';
 import type { AgentGateConfig, NearKeySigner, VerifyPaymentQuery } from '@agentgate/shared';
-import { LiveNearClient, TxTimeoutError, createChainClient, mapContractPanic } from '../src/index';
+import { LiveNearClient, TxTimeoutError, createChainClient, loadNearSigner, mapContractPanic, provisionAgentKey } from '../src/index';
 import { CALL_TIMEOUT_MS } from '../src/near-live';
 import { RPC_READ_TIMEOUT_MS } from '../src/near-rpc';
 
@@ -480,6 +483,29 @@ describe('LiveNearClient registry views', () => {
     expect(await client.getBalance('ghost.testnet')).toBe('0');
   });
 
+  it('escrowOf reads the escrow_of view with optimistic finality and returns the yocto string', async () => {
+    rpc.view('escrow_of', fixture('view-escrow-of.json'));
+    expect(await client.escrowOf(BUYER)).toBe('498000000000000000000000');
+    const [call] = rpc.viewCalls('escrow_of');
+    // optimistic, like get_payment: a deposit counts as soon as its tx executes
+    expect(call?.params).toMatchObject({ account_id: REGISTRY, finality: 'optimistic' });
+    expect(decodeArgs(call!)).toEqual({ account_id: BUYER });
+    rpc.view('escrow_of', callResult('0')); // an account that never deposited
+    expect(await client.escrowOf('ghost.testnet')).toBe('0');
+  });
+
+  it('escrowOf rejects a view off the ABI (a number, a negative, a leading zero) and a malformed id before any RPC', async () => {
+    for (const odd of [498, '-1', '007', '1.5', null, { escrow: '1' }]) {
+      rpc.view('escrow_of', callResult(odd));
+      await expect(client.escrowOf(BUYER)).rejects.toMatchObject({ code: 'RPC_BAD_RESPONSE', httpStatus: 502 });
+    }
+    const calls = rpc.calls.length;
+    const err = await rejection(client.escrowOf('Not An Account'));
+    expect(err).toMatchObject({ code: 'ERR_INVALID_ACCOUNT_ID', httpStatus: 400 });
+    expect(err.message).toMatch(/^ERR_INVALID_ACCOUNT_ID: accountId is not a valid NEAR account id/);
+    expect(rpc.calls).toHaveLength(calls);
+  });
+
   it('accountExists: true via view_account, false on UNKNOWN_ACCOUNT, other RPC errors throw', async () => {
     rpc.query('view_account', fixture('view-account.json'));
     expect(await client.accountExists(PAYOUT)).toBe(true);
@@ -643,6 +669,55 @@ describe('LiveNearClient.verifyPayment', () => {
       const pay = tx.actions[0];
       tx.actions = [transfer, { FunctionCall: { ...pay.FunctionCall, args: encodeArgs({ service_id: 1, nonce: '9999' }) } }];
     }));
+    expect(await client.verifyPayment(query())).toEqual({ ok: false, reason: 'tx_mismatch' });
+  });
+
+  it('a successful pay_from_escrow tx verifies exactly like a pay tx (same receiver, signer, args rule)', async () => {
+    rpc.view('get_payment', fixture('view-get-payment.json'));
+    rpc.method('tx', fixture('tx-pay-from-escrow-final.json'));
+    expect(await client.verifyPayment(query())).toStrictEqual({
+      ok: true,
+      amountYocto: PRICE,
+      payer: BUYER,
+      timestamp: PAID_AT,
+      selfPaid: false,
+    });
+    // still in flight → pending; not yet visible to the view → pending; failed → tx_mismatch
+    rpc.method('tx', fixture('tx-pay-started.json'));
+    expect(await client.verifyPayment(query())).toEqual({ ok: false, reason: 'pending' });
+    rpc.view('get_payment', fixture('view-null.json'));
+    rpc.method('tx', fixture('tx-pay-from-escrow-final.json'));
+    expect(await client.verifyPayment(query())).toEqual({ ok: false, reason: 'pending' });
+  });
+
+  it('pay_from_escrow keeps the args rule: another nonce or service, the wrong signer or receiver is tx_mismatch', async () => {
+    rpc.view('get_payment', fixture('view-get-payment.json'));
+    const variants: Array<(tx: Json) => void> = [
+      (tx) => {
+        tx.actions[0].FunctionCall.args = encodeArgs({ service_id: 1, nonce: '9999' });
+      },
+      (tx) => {
+        tx.actions[0].FunctionCall.args = encodeArgs({ service_id: 2, nonce: NONCE });
+      },
+      (tx) => {
+        tx.signer_id = 'mallory.testnet';
+      },
+      (tx) => {
+        tx.receiver_id = 'other-registry.testnet';
+      },
+    ];
+    for (const edit of variants) {
+      rpc.method('tx', txWith('tx-pay-from-escrow-final.json', edit));
+      expect(await client.verifyPayment(query())).toEqual({ ok: false, reason: 'tx_mismatch' });
+    }
+    // and no other registry method passes for a payment, however its args look
+    for (const method of ['deposit_escrow', 'withdraw_escrow', 'pay_from_escrows', 'Pay', 'record_attestation']) {
+      rpc.method('tx', txWith('tx-pay-from-escrow-final.json', (tx) => {
+        tx.actions[0].FunctionCall.method_name = method;
+      }));
+      expect(await client.verifyPayment(query()), method).toEqual({ ok: false, reason: 'tx_mismatch' });
+    }
+    rpc.method('tx', fixture('tx-pay-failed.json')); // a failed pay_from_escrow is no payment
     expect(await client.verifyPayment(query())).toEqual({ ok: false, reason: 'tx_mismatch' });
   });
 
@@ -1101,6 +1176,273 @@ describe('LiveNearClient change calls', () => {
     expect(second!.tx.nonce).toBe(first!.tx.nonce + 1n);
     expect(rpc.callsTo('query').filter((c) => c.params.request_type === 'view_access_key')).toHaveLength(1);
     expect(rpc.callsTo('status')).toHaveLength(1);
+  });
+});
+
+describe('LiveNearClient escrow change calls', () => {
+  const ESCROW_DEPOSIT = nearToYocto('1');
+
+  it('depositEscrow signs deposit_escrow() with the amount attached and 30 TGas, and returns the tx hash', async () => {
+    rpc.sendTx();
+    const buyer = nearSigner(BUYER);
+    const result = await client.depositEscrow(ESCROW_DEPOSIT, buyer.signer);
+    const sent = rpc.sent[0]!;
+    expect(result).toEqual({ txHash: sent.hash });
+    expect(sent.signatureValid).toBe(true);
+    expect(sent.waitUntil).toBe('EXECUTED_OPTIMISTIC');
+    expect(sent.tx.signerId).toBe(BUYER);
+    expect(sent.tx.receiverId).toBe(REGISTRY);
+    expect(onlyFunctionCall(sent)).toEqual({
+      methodName: 'deposit_escrow',
+      args: {},
+      gas: GAS_30_TGAS,
+      deposit: BigInt(ESCROW_DEPOSIT),
+    });
+  });
+
+  it('withdrawEscrow signs withdraw_escrow(amount) with exactly 1 yocto attached and 30 TGas', async () => {
+    rpc.sendTx();
+    const buyer = nearSigner(BUYER);
+    const amount = nearToYocto('0.25');
+    const result = await client.withdrawEscrow(amount, buyer.signer);
+    const sent = rpc.sent[0]!;
+    expect(result).toEqual({ txHash: sent.hash });
+    expect(sent.waitUntil).toBe('EXECUTED_OPTIMISTIC');
+    expect(onlyFunctionCall(sent)).toEqual({
+      methodName: 'withdraw_escrow',
+      args: { amount }, // a U128: a decimal string
+      gas: GAS_30_TGAS,
+      deposit: 1n,
+    });
+  });
+
+  it('payFromEscrow signs pay_from_escrow(service_id, nonce) with 0 attached and 30 TGas, as a function-call key', async () => {
+    rpc.query('view_access_key', fixture('view-access-key-agent.json'));
+    rpc.sendTx();
+    const agent = nearSigner(BUYER);
+    const result = await client.payFromEscrow({ serviceId: 1, nonce: NONCE }, agent.signer);
+    const sent = rpc.sent[0]!;
+    expect(result).toEqual({ txHash: sent.hash });
+    expect(sent.signatureValid).toBe(true);
+    expect(sent.waitUntil).toBe('EXECUTED_OPTIMISTIC');
+    expect(sent.tx.signerId).toBe(BUYER);
+    expect(sent.tx.receiverId).toBe(REGISTRY); // the one receiver a restricted key may call
+    expect(sent.tx.publicKey.toString()).toBe(agent.publicKey);
+    expect(sent.tx.nonce).toBe(BigInt(fixture('view-access-key-agent.json').result.nonce) + 1n);
+    expect(onlyFunctionCall(sent)).toEqual({
+      methodName: 'pay_from_escrow',
+      args: { service_id: 1, nonce: NONCE },
+      gas: GAS_30_TGAS,
+      deposit: 0n, // a function-call key cannot attach a deposit
+    });
+  });
+
+  it('the escrow panics keep their ERR_* code and text verbatim (Task 10a ABI)', async () => {
+    const buyer = nearSigner(BUYER).signer;
+    const cases: Array<[() => Promise<unknown>, string, string]> = [
+      [
+        () => client.depositEscrow('2000000000000000000000', buyer),
+        'ERR_DEPOSIT_TOO_LOW',
+        'ERR_DEPOSIT_TOO_LOW: the first deposit must be more than 2000000000000000000000 yocto (0.002 NEAR escrow storage fee)',
+      ],
+      [() => client.depositEscrow('1', buyer), 'ERR_DEPOSIT_TOO_LOW', 'ERR_DEPOSIT_TOO_LOW: attach a deposit'],
+      [
+        () => client.withdrawEscrow('5', buyer),
+        'ERR_ESCROW_INSUFFICIENT',
+        'ERR_ESCROW_INSUFFICIENT: the amount must be between 1 and the escrow balance, 3 yocto',
+      ],
+      [
+        () => client.payFromEscrow({ serviceId: 1, nonce: NONCE }, buyer),
+        'ERR_ESCROW_INSUFFICIENT',
+        'ERR_ESCROW_INSUFFICIENT: the escrow holds 7 yocto, the payment needs 502000000000000000000000 (price + storage fee)',
+      ],
+      [
+        () => client.withdrawEscrow('1', buyer),
+        'ERR_ONE_YOCTO_REQUIRED',
+        'ERR_ONE_YOCTO_REQUIRED: attach exactly 1 yocto (only a full-access key can withdraw)',
+      ],
+      [
+        () => client.payFromEscrow({ serviceId: 1, nonce: NONCE }, buyer),
+        'ERR_DEPOSIT_NOT_ALLOWED',
+        'ERR_DEPOSIT_NOT_ALLOWED: pay_from_escrow takes no deposit, it spends the escrow',
+      ],
+    ];
+    for (const [run, code, text] of cases) {
+      rpc.sendTx(sendTxPanic(text));
+      const err = await rejection(run());
+      expect(err).toMatchObject({ code, httpStatus: 400 });
+      expect(err.message.startsWith(text)).toBe(true);
+      expect(chainErrorCode(err)).toBe(code);
+    }
+  });
+
+  it('an agent key asked to withdraw is rejected by NEAR before execution: TX_FAILED with NEAR\'s reason, nothing else', async () => {
+    rpc.query('view_access_key', fixture('view-access-key-agent.json'));
+    rpc.sendTx('error-deposit-with-function-call.json');
+    const err = await rejection(client.withdrawEscrow('1', nearSigner(BUYER).signer));
+    expect(err).toMatchObject({ code: 'TX_FAILED', httpStatus: 502 });
+    expect(err.message).toBe('NEAR rejected the withdraw_escrow call: Deposit is not allowed with function call');
+    expect(rpc.sent).toHaveLength(1);
+  });
+
+  it('once signed, an unknown outcome is TX_TIMEOUT naming the tx for each escrow call (R45)', async () => {
+    const buyer = nearSigner(BUYER).signer;
+    const runs: Array<[string, () => Promise<unknown>]> = [
+      ['deposit_escrow', () => client.depositEscrow(ESCROW_DEPOSIT, buyer)],
+      ['withdraw_escrow', () => client.withdrawEscrow('1', buyer)],
+      ['pay_from_escrow', () => client.payFromEscrow({ serviceId: 1, nonce: NONCE }, buyer)],
+    ];
+    for (const [method, run] of runs) {
+      rpc.sendTx('error-timeout.json');
+      const err = await rejection(run());
+      const hash = rpc.sent.at(-1)!.hash;
+      expect(err).toBeInstanceOf(TxTimeoutError);
+      expect(err).toMatchObject({ code: 'TX_TIMEOUT', httpStatus: 504, txHash: hash });
+      expect(err.message).toContain(`the ${method} call`);
+    }
+    expect(rpc.sent).toHaveLength(runs.length);
+  });
+
+  it('rejects bad signers and arguments before any RPC', async () => {
+    const buyer = nearSigner(BUYER).signer;
+    const cases: Array<[Promise<unknown>, string, RegExp?]> = [
+      [client.depositEscrow('1.5', buyer), 'invalid_query'],
+      [client.depositEscrow('-1', buyer), 'invalid_query'],
+      [client.withdrawEscrow('0.5', buyer), 'invalid_query'],
+      [client.withdrawEscrow('abc', buyer), 'invalid_query'],
+      [client.payFromEscrow({ serviceId: 0, nonce: NONCE }, buyer), 'invalid_query'],
+      [client.depositEscrow(ESCROW_DEPOSIT, { kind: 'mock', accountId: 'buyer.mock' }), 'invalid_signer'],
+      [client.withdrawEscrow('1', { kind: 'mock', accountId: 'buyer.mock' }), 'invalid_signer'],
+      [client.payFromEscrow({ serviceId: 1, nonce: NONCE }, { kind: 'mock', accountId: 'buyer.mock' }), 'invalid_signer'],
+      [client.depositEscrow(ESCROW_DEPOSIT, { ...buyer, accountId: 'Buyer' }), 'ERR_INVALID_ACCOUNT_ID', /^ERR_INVALID_ACCOUNT_ID: signer /],
+    ];
+    for (const [promise, code, message] of cases) {
+      const err = await rejection(promise);
+      expect(err.code).toBe(code);
+      expect(err.httpStatus).toBe(400);
+      if (message !== undefined) expect(err.message).toMatch(message);
+    }
+    expect(rpc.fetch).not.toHaveBeenCalled();
+  });
+
+  it('never puts the secret key in an escrow error', async () => {
+    const paying = nearSigner(BUYER);
+    rpc.sendTx(sendTxPanic('ERR_ESCROW_INSUFFICIENT: the escrow holds 0 yocto, the payment needs 502000000000000000000000 (price + storage fee)'));
+    const err = await rejection(client.payFromEscrow({ serviceId: 1, nonce: NONCE }, paying.signer));
+    const secret = paying.secretKey.slice('ed25519:'.length);
+    expect(err.code).toBe('ERR_ESCROW_INSUFFICIENT');
+    for (const text of [err.message, String(err.stack), JSON.stringify(err)]) expect(text).not.toContain(secret);
+  });
+});
+
+describe('LiveNearClient.addAgentKey and provisionAgentKey (restricted agent keys, R48)', () => {
+  const ALLOWANCE = nearToYocto('0.25');
+  let home: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'neargate-agent-live-'));
+    vi.stubEnv('HOME', home);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(home, { recursive: true, force: true });
+  });
+
+  function onlyAddKey(sent: SentTx) {
+    expect(sent.tx.actions).toHaveLength(1);
+    const add = sent.tx.actions[0]?.addKey;
+    if (add === undefined) throw new Error('expected an AddKey action');
+    // a decoded tx carries its public key as a plain {ed25519Key} object
+    return { publicKey: PublicKey.from(add.publicKey as never).toString(), accessKey: add.accessKey };
+  }
+
+  it('addAgentKey sends one AddKey to the signer\'s own account: a function-call key for pay_from_escrow only, waits FINAL', async () => {
+    rpc.sendTx();
+    const buyer = nearSigner(BUYER);
+    const agentKey = KeyPair.fromRandom('ed25519').getPublicKey().toString();
+    const result = await client.addAgentKey({ publicKey: agentKey, allowanceYocto: ALLOWANCE }, buyer.signer);
+
+    const sent = rpc.sent[0]!;
+    expect(result).toEqual({ txHash: sent.hash });
+    expect(sent.signatureValid).toBe(true);
+    expect(sent.waitUntil).toBe('FINAL'); // the agent reads its key with `final` finality at once
+    expect(sent.tx.signerId).toBe(BUYER);
+    expect(sent.tx.receiverId).toBe(BUYER); // an AddKey goes to the account that gains the key
+    expect(sent.tx.publicKey.toString()).toBe(buyer.publicKey); // signed by the account's own full-access key
+    const add = onlyAddKey(sent);
+    expect(add.publicKey).toBe(agentKey);
+    expect(add.accessKey.permission.fullAccess).toBeUndefined();
+    expect(add.accessKey.permission.functionCall).toEqual({
+      receiverId: REGISTRY,
+      methodNames: ['pay_from_escrow'],
+      allowance: BigInt(ALLOWANCE),
+    });
+  });
+
+  it('addAgentKey checks the signer, the key and the allowance before any RPC', async () => {
+    const buyer = nearSigner(BUYER).signer;
+    const key = KeyPair.fromRandom('ed25519').getPublicKey().toString();
+    const cases: Array<[Promise<unknown>, string]> = [
+      [client.addAgentKey({ publicKey: key, allowanceYocto: ALLOWANCE }, { kind: 'mock', accountId: 'buyer.mock' }), 'invalid_signer'],
+      [client.addAgentKey({ publicKey: key, allowanceYocto: ALLOWANCE }, { ...buyer, accountId: 'Buyer' }), 'ERR_INVALID_ACCOUNT_ID'],
+      [client.addAgentKey({ publicKey: key, allowanceYocto: '0' }, buyer), 'INVALID_AMOUNT'],
+      [client.addAgentKey({ publicKey: 'ed25519:nope', allowanceYocto: ALLOWANCE }, buyer), 'INVALID_INPUT'],
+    ];
+    for (const [promise, code] of cases) expect((await rejection(promise)).code).toBe(code);
+    expect(rpc.fetch).not.toHaveBeenCalled();
+  });
+
+  it('the whole flow offline: the key file\'s public key is added on chain, then that file signs a pay_from_escrow as a function-call key', async () => {
+    rpc.sendTx();
+    const buyer = nearSigner(BUYER);
+    const provisioned = await provisionAgentKey({
+      client,
+      signer: buyer.signer,
+      allowanceYocto: ALLOWANCE,
+      network: 'testnet',
+    });
+    expect(provisioned.keyPath).toBe(join(home, '.near-credentials', 'testnet', 'buyer.testnet.neargate-agent.json'));
+    const file = JSON.parse(await readFile(provisioned.keyPath, 'utf8')) as Record<string, string>;
+    const secret = file['private_key']!.slice('ed25519:'.length);
+    const [addSent] = rpc.sent;
+    expect(onlyAddKey(addSent!).publicKey).toBe(file['public_key']);
+    expect(provisioned).toEqual({ accountId: BUYER, publicKey: file['public_key'], keyPath: provisioned.keyPath, txHash: addSent!.hash });
+    // the secret is nowhere on the wire: not in the signed tx, not in any RPC request
+    expect(JSON.stringify(rpc.calls)).not.toContain(secret);
+
+    // the agent: the same file as `--key-file`, its access key a function-call key on the registry
+    rpc.query('view_access_key', fixture('view-access-key-agent.json'));
+    const agent = await loadNearSigner({ accountId: BUYER, keyPath: provisioned.keyPath, network: 'testnet' });
+    await client.payFromEscrow({ serviceId: 1, nonce: NONCE }, agent.signer);
+    const paySent = rpc.sent[1]!;
+    expect(paySent.tx.publicKey.toString()).toBe(file['public_key']);
+    expect(paySent.signatureValid).toBe(true);
+    expect(onlyFunctionCall(paySent)).toMatchObject({ methodName: 'pay_from_escrow', deposit: 0n });
+  });
+
+  it('a NEAR failure of the AddKey keeps its code and leaves no key file behind', async () => {
+    rpc.sendTx('error-not-enough-balance.json');
+    const err = await rejection(
+      provisionAgentKey({ client, signer: nearSigner(BUYER).signer, allowanceYocto: ALLOWANCE, network: 'testnet' }),
+    );
+    expect(err.code).toBe('ERR_INSUFFICIENT_BALANCE');
+    await expect(stat(join(home, '.near-credentials', 'testnet', 'buyer.testnet.neargate-agent.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('an unknown outcome is TX_TIMEOUT naming the AddKey tx (R45); the key file goes, the error never carries the secret', async () => {
+    rpc.sendTx('error-timeout.json');
+    const err = await rejection(
+      provisionAgentKey({ client, signer: nearSigner(BUYER).signer, allowanceYocto: ALLOWANCE, network: 'testnet' }),
+    );
+    expect(err).toBeInstanceOf(TxTimeoutError);
+    expect(err).toMatchObject({ code: 'TX_TIMEOUT', txHash: rpc.sent[0]!.hash });
+    expect(err.message).toContain('the add_agent_key call');
+    await expect(stat(join(home, '.near-credentials', 'testnet', 'buyer.testnet.neargate-agent.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 });
 

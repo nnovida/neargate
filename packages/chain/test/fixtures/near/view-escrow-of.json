@@ -1,0 +1,10 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "result": {
+    "block_hash": "DwXQ7kyxTEupb1t6QmxetC9hzRzYAvzbM1mFFHUZ2U1b",
+    "block_height": 221004517,
+    "logs": [],
+    "result": [34,52,57,56,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,48,34]
+  }
+}

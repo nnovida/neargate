@@ -55,6 +55,40 @@ export function signerAccountId(signer: AnySigner): string {
 }
 
 /**
+ * The account a command acts as for `role`, without touching any key: `--account`, else the
+ * role's configured account (live: SELLER_ACCOUNT_ID / BUYER_ACCOUNT_ID; mock: MOCK_SELLER_ACCOUNT /
+ * MOCK_BUYER_ACCOUNT). Read-only commands (`escrow balance`) use it, as `cliSigner` does.
+ * Throws INVALID_ACCOUNT_ID for a malformed `--account` and SIGNER_MISSING when there is none.
+ */
+export function cliAccountId(config: AgentGateConfig, role: SignerRole, flags: SignerFlags = {}): string {
+  const vars = ROLE_VARS[role];
+  const flagAccount = isSet(flags.account) ? requireAccountId(flags.account, '--account') : undefined;
+
+  if (config.mode === 'mock') {
+    const accountId = flagAccount ?? (role === 'seller' ? config.mockSellerAccount : config.mockBuyerAccount);
+    if (accountId === '') {
+      throw new AgentGateError(
+        'SIGNER_MISSING',
+        `mock mode needs ${vars.mockAccount} (or --account <id>) — run \`neargate demo-accounts\` and paste the printed export lines first`,
+        400,
+      );
+    }
+    return accountId;
+  }
+
+  const accountId = flagAccount ?? (role === 'seller' ? config.sellerAccountId : config.buyerAccountId);
+  if (accountId === '') {
+    throw new AgentGateError(
+      'SIGNER_MISSING',
+      `live mode needs a ${role} account — pass --account <id> or set ${vars.account} ` +
+        `(key: ${vars.secretKey}, --key-file <path> / ${vars.keyPath}, or ~/.near-credentials/${config.nearNetwork}/<account>.json)`,
+      400,
+    );
+  }
+  return accountId;
+}
+
+/**
  * The signer a command uses for `role`.
  *
  * - mock: `{kind: 'mock'}` for `--account`, else MOCK_SELLER_ACCOUNT / MOCK_BUYER_ACCOUNT.
@@ -73,32 +107,15 @@ export async function cliSigner(
   flags: SignerFlags = {},
 ): Promise<AnySigner> {
   const vars = ROLE_VARS[role];
-  const flagAccount = isSet(flags.account) ? requireAccountId(flags.account, '--account') : undefined;
+  const accountId = cliAccountId(config, role, flags);
 
   if (config.mode === 'mock') {
-    const accountId = flagAccount ?? (role === 'seller' ? config.mockSellerAccount : config.mockBuyerAccount);
-    if (accountId === '') {
-      throw new AgentGateError(
-        'SIGNER_MISSING',
-        `mock mode needs ${vars.mockAccount} (or --account <id>) — run \`neargate demo-accounts\` and paste the printed export lines first`,
-        400,
-      );
-    }
     if (isSet(flags.keyFile)) {
       noteOnce('mock mode ignores --key-file (mock signers carry no key)');
     }
     return { kind: 'mock', accountId };
   }
 
-  const accountId = flagAccount ?? (role === 'seller' ? config.sellerAccountId : config.buyerAccountId);
-  if (accountId === '') {
-    throw new AgentGateError(
-      'SIGNER_MISSING',
-      `live mode needs a ${role} account — pass --account <id> or set ${vars.account} ` +
-        `(key: ${vars.secretKey}, --key-file <path> / ${vars.keyPath}, or ~/.near-credentials/${config.nearNetwork}/<account>.json)`,
-      400,
-    );
-  }
   const secretKey = role === 'seller' ? config.sellerPrivateKey : config.buyerPrivateKey;
   const keyPath = isSet(flags.keyFile) ? flags.keyFile : role === 'seller' ? config.sellerKeyPath : config.buyerKeyPath;
   if (isSet(secretKey) && isSet(flags.keyFile)) {

@@ -7,6 +7,13 @@ export { LiveNearClient } from './near-live';
 export { TxTimeoutError, mapContractPanic } from './near-errors';
 export { verifyNearSignature } from './near-signature';
 export {
+  agentKeyAction,
+  agentKeyPath,
+  provisionAgentKey,
+  type ProvisionAgentKeyOpts,
+  type ProvisionedAgentKey,
+} from './near-agent-key';
+export {
   defaultCredentialsPath,
   loadNearSigner,
   type LoadNearSignerOpts,

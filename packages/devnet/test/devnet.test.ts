@@ -1064,6 +1064,346 @@ describe('activity feed', () => {
   });
 });
 
+describe('escrow: deposit_escrow, withdraw_escrow, pay_from_escrow, escrow_of (mirror of the contract, Task 10a)', () => {
+  const ESCROW_FEE = '2000000000000000000000'; // ESCROW_STORAGE_FEE_YOCTO, 0.002 NEAR
+  let escrowAccounts = 0;
+
+  /** A funded account no earlier test touched. */
+  async function freshBuyer(funds = NEAR('100')): Promise<string> {
+    escrowAccounts += 1;
+    const accountId = `escrow-buyer-${escrowAccounts}.mock`;
+    await fund(accountId, funds);
+    return accountId;
+  }
+
+  const depositEscrow = (signer: string, depositYocto: string): Promise<HttpResult> =>
+    post('/registry/deposit-escrow', { signer, depositYocto });
+  const withdrawEscrow = (signer: string, amountYocto: string, depositYocto = '1'): Promise<HttpResult> =>
+    post('/registry/withdraw-escrow', { signer, amountYocto, depositYocto });
+  const payFromEscrow = (
+    serviceId: number,
+    nonce: string,
+    opts: { signer?: string; depositYocto?: string } = {},
+  ): Promise<HttpResult> =>
+    post('/registry/pay-from-escrow', {
+      signer: opts.signer ?? BUYER,
+      serviceId,
+      nonce,
+      depositYocto: opts.depositYocto ?? '0',
+    });
+  async function escrowOf(accountId: string): Promise<bigint> {
+    const res = await get(`/registry/escrow/${accountId}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.accountId).toBe(accountId);
+    expect(typeof res.body.escrowYocto).toBe('string');
+    return BigInt(res.body.escrowYocto);
+  }
+  /** Opens `account`'s escrow holding exactly `balance` (the first deposit keeps the storage fee). */
+  async function fundEscrow(accountId: string, balance: bigint): Promise<void> {
+    expect((await depositEscrow(accountId, (balance + BigInt(ESCROW_FEE)).toString())).status).toBe(200);
+    expect(await escrowOf(accountId)).toBe(balance);
+  }
+
+  it('escrow_of is "0" for an account that never deposited; escrows are per account', async () => {
+    const res = await get('/registry/escrow/never-deposited.mock');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ accountId: 'never-deposited.mock', escrowYocto: '0' });
+  });
+
+  it('the first deposit keeps the 0.002 NEAR storage fee, later deposits are credited in full', async () => {
+    const buyer = await freshBuyer();
+    const registryBefore = await balanceOf(REGISTRY);
+
+    const first = await depositEscrow(buyer, NEAR('1'));
+    expect(first.status).toBe(200);
+    expect(isNearTxHash(first.body.txHash)).toBe(true);
+    expect(await escrowOf(buyer)).toBe(BigInt(NEAR('1')) - BigInt(ESCROW_FEE)); // 0.998 NEAR
+    expect(await balanceOf(buyer)).toBe(BigInt(NEAR('99')));
+    expect((await balanceOf(REGISTRY)) - registryBefore).toBe(BigInt(NEAR('1'))); // the registry holds it all
+
+    expect((await depositEscrow(buyer, NEAR('1'))).status).toBe(200);
+    expect(await escrowOf(buyer)).toBe(BigInt(NEAR('2')) - BigInt(ESCROW_FEE)); // 1.998 NEAR
+    expect(await escrowOf(await freshBuyer())).toBe(0n);
+  });
+
+  it('the first deposit must be more than the fee (ERR_DEPOSIT_TOO_LOW); a top-up must attach something', async () => {
+    const buyer = await freshBuyer();
+    const registryBefore = await balanceOf(REGISTRY);
+    const first = await depositEscrow(buyer, ESCROW_FEE);
+    expectErr(first, 'ERR_DEPOSIT_TOO_LOW');
+    expect(first.body.message).toBe(
+      'the first deposit must be more than 2000000000000000000000 yocto (0.002 NEAR escrow storage fee)',
+    );
+    expectErr(await depositEscrow(buyer, '0'), 'ERR_DEPOSIT_TOO_LOW');
+    expect(await escrowOf(buyer)).toBe(0n);
+    expect(await balanceOf(buyer)).toBe(BigInt(NEAR('100'))); // a rejected call moves nothing
+    expect(await balanceOf(REGISTRY)).toBe(registryBefore);
+
+    // one yocto above the fee opens the escrow with a one-yocto balance
+    expect((await depositEscrow(buyer, (BigInt(ESCROW_FEE) + 1n).toString())).status).toBe(200);
+    expect(await escrowOf(buyer)).toBe(1n);
+    // from then on any deposit above zero is credited in full, and zero is refused
+    const topUp = await depositEscrow(buyer, '0');
+    expectErr(topUp, 'ERR_DEPOSIT_TOO_LOW');
+    expect(topUp.body.message).toBe('attach a deposit');
+    expect((await depositEscrow(buyer, '1')).status).toBe(200);
+    expect(await escrowOf(buyer)).toBe(2n);
+  });
+
+  it('an emptied escrow keeps its entry: the next deposit pays no second storage fee', async () => {
+    const buyer = await freshBuyer();
+    await fundEscrow(buyer, 5n);
+    expect((await withdrawEscrow(buyer, '5')).status).toBe(200);
+    expect(await escrowOf(buyer)).toBe(0n);
+    expectErr(await depositEscrow(buyer, '0'), 'ERR_DEPOSIT_TOO_LOW'); // "attach a deposit", not the first-deposit rule
+    expect((await depositEscrow(buyer, '7')).status).toBe(200); // below the fee, credited in full
+    expect(await escrowOf(buyer)).toBe(7n);
+  });
+
+  it('withdraw_escrow needs exactly 1 yocto attached, as the first check (ERR_ONE_YOCTO_REQUIRED)', async () => {
+    const buyer = await freshBuyer();
+    await fundEscrow(buyer, BigInt(NEAR('1')));
+    for (const attached of ['0', '2']) {
+      const res = await withdrawEscrow(buyer, NEAR('0.5'), attached);
+      expectErr(res, 'ERR_ONE_YOCTO_REQUIRED');
+      expect(res.body.message).toBe('attach exactly 1 yocto (only a full-access key can withdraw)');
+    }
+    expect(await escrowOf(buyer)).toBe(BigInt(NEAR('1')));
+    // it is the first check: an account without an escrow, and an amount over the balance, get it too
+    expectErr(await withdrawEscrow('stranger.mock', '1', '0'), 'ERR_ONE_YOCTO_REQUIRED');
+    expectErr(await withdrawEscrow(buyer, NEAR('999'), '0'), 'ERR_ONE_YOCTO_REQUIRED');
+  });
+
+  it('withdraw_escrow: 1 <= amount <= balance (ERR_ESCROW_INSUFFICIENT), unknown accounts and zero included', async () => {
+    const buyer = await freshBuyer();
+    await fundEscrow(buyer, BigInt(NEAR('1')));
+    const over = await withdrawEscrow(buyer, (BigInt(NEAR('1')) + 1n).toString());
+    expectErr(over, 'ERR_ESCROW_INSUFFICIENT');
+    expect(over.body.message).toBe(
+      `the amount must be between 1 and the escrow balance, ${NEAR('1')} yocto`,
+    );
+    expectErr(await withdrawEscrow(buyer, '0'), 'ERR_ESCROW_INSUFFICIENT'); // zero is not a withdrawal
+    expect(await escrowOf(buyer)).toBe(BigInt(NEAR('1')));
+    const stranger = await freshBuyer();
+    const none = await withdrawEscrow(stranger, '1');
+    expectErr(none, 'ERR_ESCROW_INSUFFICIENT');
+    expect(none.body.message).toContain(', 0 yocto');
+  });
+
+  it('withdraw_escrow debits the escrow and sends the amount to the caller; the 1 yocto stays in the registry', async () => {
+    const buyer = await freshBuyer();
+    await fundEscrow(buyer, BigInt(NEAR('1')));
+    const accountBefore = await balanceOf(buyer);
+    const registryBefore = await balanceOf(REGISTRY);
+
+    const quarter = BigInt(NEAR('0.25'));
+    const res = await withdrawEscrow(buyer, quarter.toString());
+    expect(res.status).toBe(200);
+    expect(isNearTxHash(res.body.txHash)).toBe(true);
+    expect(await escrowOf(buyer)).toBe(BigInt(NEAR('0.75')));
+    expect(await balanceOf(buyer)).toBe(accountBefore + quarter - 1n);
+    expect(await balanceOf(REGISTRY)).toBe(registryBefore - quarter + 1n);
+
+    // the rest can be withdrawn too, which leaves nothing
+    expect((await withdrawEscrow(buyer, NEAR('0.75'))).status).toBe(200);
+    expect(await escrowOf(buyer)).toBe(0n);
+    expectErr(await withdrawEscrow(buyer, '1'), 'ERR_ESCROW_INSUFFICIENT');
+  });
+
+  it('pay_from_escrow debits price + fee, pays the target, refunds nothing and leaves the account balance alone', async () => {
+    const target = 'escrow-payout-a.mock';
+    const buyer = await freshBuyer();
+    const serviceId = await newService({ paymentTarget: target });
+    await fundEscrow(buyer, BigInt(NEAR('1')));
+    const accountBefore = await balanceOf(buyer);
+    const registryBefore = await balanceOf(REGISTRY);
+    const nonce = freshNonce();
+
+    const res = await payFromEscrow(serviceId, nonce, { signer: buyer });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(isNearTxHash(res.body.txHash)).toBe(true);
+    expect(await escrowOf(buyer)).toBe(BigInt(NEAR('0.498'))); // 1 - 0.5 - 0.002
+    expect(await balanceOf(target)).toBe(BigInt(PRICE));
+    expect(await balanceOf(buyer)).toBe(accountBefore); // the account itself paid nothing
+    expect(await balanceOf(REGISTRY)).toBe(registryBefore - BigInt(PRICE)); // the fee stays in the registry
+
+    // the same record and activity entry as pay: the payer is the caller, the amount the price
+    expect((await get(`/registry/payments/${nonce}`)).body).toMatchObject({
+      nonce,
+      serviceId,
+      payer: buyer,
+      amountYocto: PRICE,
+      selfPaid: false,
+      attested: false,
+    });
+    const [latest] = (await get('/registry/activity?limit=1')).body;
+    expect(latest).toMatchObject({
+      kind: 'payment',
+      serviceId,
+      account: buyer,
+      txHash: res.body.txHash,
+      amountYocto: PRICE,
+      nonce,
+    });
+    // and it is attested like any other payment
+    expect((await attest(serviceId, nonce, { paymentTxHash: res.body.txHash })).status).toBe(200);
+  });
+
+  it('pay_from_escrow takes no deposit (ERR_DEPOSIT_NOT_ALLOWED) and checks that before the service', async () => {
+    const buyer = await freshBuyer();
+    const serviceId = await newService();
+    await fundEscrow(buyer, BigInt(NEAR('1')));
+    for (const attached of ['1', (BigInt(PRICE) + BigInt(FEE)).toString()]) {
+      const res = await payFromEscrow(serviceId, '77', { signer: buyer, depositYocto: attached });
+      expectErr(res, 'ERR_DEPOSIT_NOT_ALLOWED');
+      expect(res.body.message).toBe('pay_from_escrow takes no deposit, it spends the escrow');
+    }
+    expectErr(await payFromEscrow(999_999, '77', { signer: buyer, depositYocto: '1' }), 'ERR_DEPOSIT_NOT_ALLOWED');
+    expect(await escrowOf(buyer)).toBe(BigInt(NEAR('1')));
+    expect((await get('/registry/payments/77')).status).toBe(404);
+  });
+
+  it('pay_from_escrow: ERR_ESCROW_INSUFFICIENT for no escrow or one yocto short, checked before the nonce', async () => {
+    const serviceId = await newService();
+    const required = BigInt(PRICE) + BigInt(FEE);
+
+    const noEscrow = await freshBuyer();
+    const none = await payFromEscrow(serviceId, freshNonce(), { signer: noEscrow });
+    expectErr(none, 'ERR_ESCROW_INSUFFICIENT');
+    expect(none.body.message).toBe(
+      `the escrow holds 0 yocto, the payment needs ${required} (price + storage fee)`,
+    );
+
+    const short = await freshBuyer();
+    await fundEscrow(short, required - 1n);
+    const nonce = freshNonce();
+    expectErr(await payFromEscrow(serviceId, nonce, { signer: short }), 'ERR_ESCROW_INSUFFICIENT');
+    // where `pay` checks its deposit: before the nonce shape
+    expectErr(await payFromEscrow(serviceId, '1x', { signer: short }), 'ERR_ESCROW_INSUFFICIENT');
+    // a rejected call changes nothing
+    expect(await escrowOf(short)).toBe(required - 1n);
+    expect((await get(`/registry/payments/${nonce}`)).status).toBe(404);
+
+    // exactly price + fee is enough, and leaves nothing
+    expect((await depositEscrow(short, '1')).status).toBe(200);
+    expect((await payFromEscrow(serviceId, nonce, { signer: short })).status).toBe(200);
+    expect(await escrowOf(short)).toBe(0n);
+  });
+
+  it('a price near u128::MAX is an escrow error, not an overflow: the required amount saturates at u128::MAX', async () => {
+    const u128Max = ((1n << 128n) - 1n).toString();
+    const huge = await newService({ priceYocto: (BigInt(u128Max) - 5n).toString() });
+    const buyer = await freshBuyer();
+    await fundEscrow(buyer, BigInt(NEAR('1')));
+    const res = await payFromEscrow(huge, freshNonce(), { signer: buyer });
+    expectErr(res, 'ERR_ESCROW_INSUFFICIENT');
+    expect(res.body.message).toContain(`the payment needs ${u128Max} (price + storage fee)`);
+  });
+
+  it('a nonce is single-use across pay and pay_from_escrow, in both directions', async () => {
+    const serviceId = await newService();
+    const buyer = await freshBuyer();
+    await fundEscrow(buyer, BigInt(NEAR('3')));
+    const viaEscrow = freshNonce();
+    expect((await payFromEscrow(serviceId, viaEscrow, { signer: buyer })).status).toBe(200);
+    const left = await escrowOf(buyer);
+
+    expectErr(await payFromEscrow(serviceId, viaEscrow, { signer: buyer }), 'ERR_NONCE_USED');
+    expectErr(await pay(serviceId, viaEscrow), 'ERR_NONCE_USED');
+    const viaDeposit = freshNonce();
+    expect((await pay(serviceId, viaDeposit)).status).toBe(200);
+    expectErr(await payFromEscrow(serviceId, viaDeposit, { signer: buyer }), 'ERR_NONCE_USED');
+    expectErr(await payFromEscrow(serviceId, '4x', { signer: buyer }), 'ERR_INVALID_NONCE');
+    expect(await escrowOf(buyer)).toBe(left); // no rejected call debited the escrow
+    expect((await get(`/registry/payments/${viaEscrow}`)).body.payer).toBe(buyer);
+    expect((await get(`/registry/payments/${viaDeposit}`)).body.payer).toBe(BUYER);
+  });
+
+  it('pay_from_escrow: ERR_SERVICE_NOT_FOUND and ERR_SERVICE_INACTIVE come before the escrow check', async () => {
+    const serviceId = await newService();
+    const buyer = await freshBuyer();
+    await fundEscrow(buyer, BigInt(NEAR('1')));
+    expect((await setActive(serviceId, false)).status).toBe(200);
+
+    expectErr(await payFromEscrow(serviceId, freshNonce(), { signer: buyer }), 'ERR_SERVICE_INACTIVE');
+    expectErr(await payFromEscrow(999_999, freshNonce(), { signer: buyer }), 'ERR_SERVICE_NOT_FOUND');
+    // the service is checked before the escrow: an account without one gets the same error
+    expectErr(await payFromEscrow(serviceId, freshNonce(), { signer: await freshBuyer() }), 'ERR_SERVICE_INACTIVE');
+    expect(await escrowOf(buyer)).toBe(BigInt(NEAR('1')));
+
+    // switched back on, it takes escrow payments again
+    expect((await setActive(serviceId, true)).status).toBe(200);
+    expect((await payFromEscrow(serviceId, freshNonce(), { signer: buyer })).status).toBe(200);
+  });
+
+  it('pay_from_escrow marks the owner and the payment target selfPaid, and a self-paid payment cannot be attested', async () => {
+    const target = 'escrow-self-target.mock';
+    await fund(target, NEAR('10'));
+    const serviceId = await newService({ paymentTarget: target });
+    const buyer = await freshBuyer();
+    const flags: Array<[string, boolean]> = [
+      [OWNER, true],
+      [target, true],
+      [ATTESTOR, false],
+      [buyer, false],
+    ];
+    for (const [payer, selfPaid] of flags) {
+      const nonce = freshNonce();
+      await fundEscrow(payer, BigInt(NEAR('1')));
+      expect((await payFromEscrow(serviceId, nonce, { signer: payer })).status).toBe(200);
+      expect((await get(`/registry/payments/${nonce}`)).body, payer).toMatchObject({ payer, selfPaid });
+      if (selfPaid) expectErr(await attest(serviceId, nonce), 'ERR_SELF_PAYMENT');
+    }
+  });
+
+  it('ERR_INSUFFICIENT_BALANCE (mock-only) when the signer cannot fund the attached deposit, before any contract check', async () => {
+    const poor = await freshBuyer(NEAR('0.1'));
+    expectErr(await depositEscrow(poor, NEAR('1')), 'ERR_INSUFFICIENT_BALANCE');
+    expectErr(await depositEscrow('never-funded-escrow.mock', NEAR('1')), 'ERR_INSUFFICIENT_BALANCE');
+    expect(await escrowOf(poor)).toBe(0n);
+    expect(await balanceOf(poor)).toBe(BigInt(NEAR('0.1')));
+  });
+
+  it('only successful escrow calls take a block; a rejected one changes no state', async () => {
+    const buyer = await freshBuyer();
+    const serviceId = await newService();
+    /** The block height a probe `pay` lands in. */
+    const probeHeight = async (): Promise<number> => {
+      const nonce = freshNonce();
+      expect((await pay(serviceId, nonce)).status).toBe(200);
+      return (await get(`/registry/payments/${nonce}`)).body.blockHeight as number;
+    };
+    const before = await probeHeight();
+    expectErr(await depositEscrow(buyer, '0'), 'ERR_DEPOSIT_TOO_LOW');
+    expectErr(await withdrawEscrow(buyer, '1'), 'ERR_ESCROW_INSUFFICIENT');
+    expectErr(await payFromEscrow(serviceId, freshNonce(), { signer: buyer }), 'ERR_ESCROW_INSUFFICIENT');
+    expect(await probeHeight()).toBe(before + 1); // none of the three rejected calls took a block
+    await fundEscrow(buyer, 1n); // a successful deposit does
+    expect(await probeHeight()).toBe(before + 3);
+  });
+
+  it('validates every account id with ERR_INVALID_ACCOUNT_ID', async () => {
+    expectErr(await depositEscrow('Bad Account', NEAR('1')), 'ERR_INVALID_ACCOUNT_ID');
+    expectErr(await depositEscrow('', NEAR('1')), 'ERR_INVALID_ACCOUNT_ID');
+    expectErr(await withdrawEscrow('Bad Account', '1'), 'ERR_INVALID_ACCOUNT_ID');
+    expectErr(await payFromEscrow(1, '1', { signer: 'Bad Account' }), 'ERR_INVALID_ACCOUNT_ID');
+    expectErr(await get('/registry/escrow/Bad%20Account'), 'ERR_INVALID_ACCOUNT_ID');
+  });
+
+  it('400s malformed request shapes', async () => {
+    const buyer = await freshBuyer();
+    expect((await post('/registry/deposit-escrow', { signer: buyer })).status).toBe(400);
+    expect((await post('/registry/deposit-escrow', { signer: buyer, depositYocto: '1.5' })).status).toBe(400);
+    expect((await post('/registry/deposit-escrow', { signer: buyer, depositYocto: 1000 })).status).toBe(400);
+    expect((await post('/registry/withdraw-escrow', { signer: buyer, depositYocto: '1' })).status).toBe(400);
+    expect((await post('/registry/withdraw-escrow', { signer: buyer, amountYocto: '-1', depositYocto: '1' })).status).toBe(400);
+    expect((await post('/registry/pay-from-escrow', { signer: buyer, serviceId: '1', nonce: '1', depositYocto: '0' })).status).toBe(400);
+    expect((await post('/registry/pay-from-escrow', { signer: buyer, serviceId: 1, nonce: 5, depositYocto: '0' })).status).toBe(400);
+    expect((await post('/registry/pay-from-escrow', { signer: buyer, serviceId: 1, nonce: '5' })).status).toBe(400);
+    expect((await post('/registry/pay-from-escrow', [])).status).toBe(400);
+  });
+});
+
 describe('DevnetState payments memory guard', () => {
   it(`caps stored payments at ${MAX_PAYMENTS} by default and never evicts to make room`, () => {
     expect(MAX_PAYMENTS).toBe(100_000);

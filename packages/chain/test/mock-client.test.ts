@@ -5,6 +5,7 @@ import { startServer } from '@agentgate/devnet';
 import type { RunningServer } from '@agentgate/devnet';
 import {
   AgentGateError,
+  ESCROW_STORAGE_FEE_YOCTO,
   MOCK_NETWORK,
   MOCK_REGISTRY_ID,
   PAYMENT_STORAGE_FEE_YOCTO,
@@ -421,6 +422,109 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
   });
 });
 
+describe('MockChainHttpClient — escrow (deposit_escrow, withdraw_escrow, pay_from_escrow, escrow_of)', () => {
+  const ESCROW_FEE = BigInt(ESCROW_STORAGE_FEE_YOCTO);
+  let serviceId: number;
+  let accountCounter = 0;
+
+  /** A funded account no earlier test touched, as a mock signer. */
+  async function freshSigner(): Promise<MockSigner> {
+    accountCounter += 1;
+    const accountId = `escrow-client-${accountCounter}.mock`;
+    await faucet(accountId, nearToYocto('100'));
+    return { kind: 'mock', accountId };
+  }
+
+  beforeAll(async () => {
+    serviceId = (await chain.registerService(registerInput(), OWNER)).serviceId;
+  });
+
+  it('escrowOf is "0" for an account that never deposited', async () => {
+    expect(await chain.escrowOf('nobody-deposited.mock')).toBe('0');
+  });
+
+  it('depositEscrow: the first deposit keeps the 0.002 NEAR fee, a top-up is credited in full, the registry holds it all', async () => {
+    const buyer = await freshSigner();
+    const registryBefore = BigInt(await chain.getBalance(MOCK_REGISTRY_ID));
+    const first = await chain.depositEscrow(nearToYocto('1'), buyer);
+    expect(isNearTxHash(first.txHash)).toBe(true);
+    expect(await chain.escrowOf(buyer.accountId)).toBe((BigInt(nearToYocto('1')) - ESCROW_FEE).toString());
+    expect(BigInt(await chain.getBalance(buyer.accountId))).toBe(BigInt(nearToYocto('99')));
+    expect(BigInt(await chain.getBalance(MOCK_REGISTRY_ID)) - registryBefore).toBe(BigInt(nearToYocto('1')));
+
+    await chain.depositEscrow(nearToYocto('1'), buyer);
+    expect(await chain.escrowOf(buyer.accountId)).toBe((BigInt(nearToYocto('2')) - ESCROW_FEE).toString());
+  });
+
+  it('depositEscrow surfaces ERR_DEPOSIT_TOO_LOW (first deposit not above the fee; empty top-up)', async () => {
+    const buyer = await freshSigner();
+    await expectContractError(chain.depositEscrow(ESCROW_STORAGE_FEE_YOCTO, buyer), 'ERR_DEPOSIT_TOO_LOW');
+    await expectContractError(chain.depositEscrow('0', buyer), 'ERR_DEPOSIT_TOO_LOW');
+    await chain.depositEscrow((ESCROW_FEE + 1n).toString(), buyer);
+    await expectContractError(chain.depositEscrow('0', buyer), 'ERR_DEPOSIT_TOO_LOW');
+    expect(await chain.escrowOf(buyer.accountId)).toBe('1');
+  });
+
+  it('withdrawEscrow attaches exactly 1 yocto: the amount returns to the account, the escrow shrinks', async () => {
+    const buyer = await freshSigner();
+    await chain.depositEscrow(nearToYocto('1'), buyer);
+    const accountBefore = BigInt(await chain.getBalance(buyer.accountId));
+    const quarter = BigInt(nearToYocto('0.25'));
+    const result = await chain.withdrawEscrow(quarter.toString(), buyer);
+    expect(isNearTxHash(result.txHash)).toBe(true);
+    expect(await chain.escrowOf(buyer.accountId)).toBe((BigInt(nearToYocto('1')) - ESCROW_FEE - quarter).toString());
+    expect(BigInt(await chain.getBalance(buyer.accountId))).toBe(accountBefore + quarter - 1n); // the 1 yocto stays in the registry
+    await expectContractError(chain.withdrawEscrow('0', buyer), 'ERR_ESCROW_INSUFFICIENT');
+    await expectContractError(chain.withdrawEscrow(nearToYocto('5'), buyer), 'ERR_ESCROW_INSUFFICIENT');
+  });
+
+  it('payFromEscrow pays the price to the target out of the escrow, attaching nothing; the account balance is untouched', async () => {
+    const buyer = await freshSigner();
+    const target = `escrow-target-${accountCounter}.mock`;
+    const sid = (await chain.registerService(registerInput({ paymentTarget: target }), OWNER)).serviceId;
+    await chain.depositEscrow(nearToYocto('1'), buyer);
+    const accountBefore = await chain.getBalance(buyer.accountId);
+    const escrowBefore = BigInt(await chain.escrowOf(buyer.accountId));
+    const paidNonce = freshNonce();
+
+    const { txHash } = await chain.payFromEscrow({ serviceId: sid, nonce: paidNonce }, buyer);
+    expect(isNearTxHash(txHash)).toBe(true);
+    expect(BigInt(await chain.escrowOf(buyer.accountId))).toBe(escrowBefore - BigInt(DEPOSIT)); // price + 0.002 NEAR
+    expect(await chain.getBalance(buyer.accountId)).toBe(accountBefore);
+    expect(BigInt(await chain.getBalance(target))).toBe(BigInt(PRICE));
+    expect(await chain.getPayment(paidNonce)).toMatchObject({ payer: buyer.accountId, serviceId: sid, amountYocto: PRICE });
+    expect(
+      await chain.verifyPayment({ nonce: paidNonce, serviceId: sid, minAmountYocto: PRICE, maxAgeMs: 60_000, txHash }),
+    ).toMatchObject({ ok: true, payer: buyer.accountId, amountYocto: PRICE });
+  });
+
+  it('payFromEscrow surfaces the contract codes in the contract order', async () => {
+    const buyer = await freshSigner();
+    await expectContractError(chain.payFromEscrow({ serviceId: 999_999, nonce: freshNonce() }, buyer), 'ERR_SERVICE_NOT_FOUND');
+    await expectContractError(chain.payFromEscrow({ serviceId, nonce: freshNonce() }, buyer), 'ERR_ESCROW_INSUFFICIENT');
+    await chain.depositEscrow(nearToYocto('3'), buyer);
+    const used = freshNonce();
+    await chain.payFromEscrow({ serviceId, nonce: used }, buyer);
+    await expectContractError(chain.payFromEscrow({ serviceId, nonce: used }, buyer), 'ERR_NONCE_USED');
+    await expectContractError(chain.payFromEscrow({ serviceId, nonce: 'abc' }, buyer), 'ERR_INVALID_NONCE');
+    await chain.setActive(serviceId, false, OWNER);
+    await expectContractError(chain.payFromEscrow({ serviceId, nonce: freshNonce() }, buyer), 'ERR_SERVICE_INACTIVE');
+    await chain.setActive(serviceId, true, OWNER);
+  });
+
+  it('rejects non-mock signers, bad amounts and empty arguments before touching the devnet', async () => {
+    const near = { kind: 'near', accountId: 'buyer.testnet', keyPath: '/tmp/nope.json' } as const;
+    await expectAgentGateError(chain.depositEscrow(nearToYocto('1'), near), 'invalid_signer', 400);
+    await expectAgentGateError(chain.withdrawEscrow('1', near), 'invalid_signer', 400);
+    await expectAgentGateError(chain.payFromEscrow({ serviceId, nonce: '1' }, near), 'invalid_signer', 400);
+    await expectAgentGateError(chain.depositEscrow('1.5', BUYER), 'invalid_query', 400);
+    await expectAgentGateError(chain.withdrawEscrow('-1', BUYER), 'invalid_query', 400);
+    await expectAgentGateError(chain.payFromEscrow({ serviceId: 0, nonce: '1' }, BUYER), 'invalid_query', 400);
+    await expectAgentGateError(chain.escrowOf(''), 'invalid_query', 400);
+    await expectContractError(chain.escrowOf('Bad Id'), 'ERR_INVALID_ACCOUNT_ID');
+  });
+});
+
 describe('MockChainHttpClient.verifyPayment — every failure reason, in the registry-record order', () => {
   let serviceId: number;
   let otherServiceId: number;
@@ -575,6 +679,20 @@ describe('MockChainHttpClient key and account checks fail closed on a malformed 
       });
     },
   );
+
+  it('escrowOf passes a yocto string through and fails closed on anything else (it gates the pre-check before a payment)', async () => {
+    answer = '{"accountId":"buyer.mock","escrowYocto":"498000000000000000000000"}';
+    expect(await client.escrowOf('buyer.mock')).toBe('498000000000000000000000');
+    answer = '{"accountId":"buyer.mock","escrowYocto":"0"}';
+    expect(await client.escrowOf('buyer.mock')).toBe('0');
+    for (const body of ['{"escrowYocto":498}', '{"escrowYocto":"-1"}', '{"escrowYocto":"1.5"}', '{"escrowYocto":"007"}', '{"escrowYocto":null}', '{}', 'null', '[]', 'not json', '']) {
+      answer = body;
+      await expect(client.escrowOf('buyer.mock'), body).rejects.toMatchObject({
+        code: 'devnet_bad_response',
+        httpStatus: 502,
+      });
+    }
+  });
 
   it('accountExists passes a boolean answer through and fails closed on anything else', async () => {
     answer = '{"accountId":"owner.mock","exists":true}';

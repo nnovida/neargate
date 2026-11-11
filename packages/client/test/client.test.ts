@@ -65,6 +65,10 @@ function makeChain(overrides: Partial<ChainClient> = {}): ChainClient {
     pay: vi.fn(async () => ({ txHash: TX_HASH })),
     recordAttestation: vi.fn(async () => ({ txHash: 'tx' })),
     setActive: vi.fn(async () => ({ txHash: 'tx' })),
+    escrowOf: vi.fn(async () => '0'),
+    depositEscrow: vi.fn(async () => ({ txHash: 'tx' })),
+    withdrawEscrow: vi.fn(async () => ({ txHash: 'tx' })),
+    payFromEscrow: vi.fn(async () => ({ txHash: TX_HASH })),
     ...overrides,
   };
 }
@@ -629,6 +633,156 @@ describe('createAgentGateClient · fetchPaid', () => {
     expect(isAgentGateError(err)).toBe(true);
     if (isAgentGateError(err)) expect(err.code).toBe('BAD_INVOICE');
     expect(chain.pay).not.toHaveBeenCalled();
+  });
+});
+
+describe('createAgentGateClient · fetchPaid with payFrom: "escrow"', () => {
+  const ESCROW_ENOUGH = '1000000000000000000000000'; // 1 NEAR, over price + fee
+
+  function escrowClient(chain: ChainClient, over: { maxYocto?: string; payFrom?: 'deposit' | 'escrow' } = {}, impl?: typeof fetch) {
+    return createAgentGateClient({
+      chain,
+      signer: SIGNER,
+      payFrom: 'escrow',
+      fetchImpl: impl ?? (queuedFetch([json(requirements('42', 'near-mock'), 402), json({ ok: 1 }, 200)]).impl),
+      ...over,
+    });
+  }
+
+  it('402 → payFromEscrow → retry with the proof: the escrow pays, `pay` is never called', async () => {
+    const { impl, calls } = queuedFetch([json(requirements('42', 'near-mock'), 402), json({ gold: 3310.25 }, 200)]);
+    const chain = makeChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
+    const client = escrowClient(chain, {}, impl);
+
+    const r = await client.fetchPaid('http://svc.test/svc/1');
+
+    expect(r).toMatchObject({ paid: true, status: 200, body: { gold: 3310.25 }, txHash: TX_HASH, priceYocto: PRICE, payFrom: 'escrow' });
+    // what the payment cost: price + storage fee, debited from the escrow (nothing is attached)
+    expect(r.depositYocto).toBe(MAX_AMOUNT);
+    expect(chain.payFromEscrow).toHaveBeenCalledTimes(1);
+    expect(chain.payFromEscrow).toHaveBeenCalledWith({ serviceId: 1, nonce: '42' }, SIGNER);
+    expect(chain.pay).not.toHaveBeenCalled();
+    expect(chain.escrowOf).toHaveBeenCalledWith('buyer.mock'); // the payer's own escrow
+    // the same proof as a deposit payment: the tx, the nonce, the payer
+    expect(calls).toHaveLength(2);
+    const proof = decodeXPayment(new Headers(calls[1]?.init?.headers).get('X-PAYMENT')!);
+    expect(proof.payload).toEqual({ kind: 'tx', transaction: TX_HASH, nonce: '42', payer: 'buyer.mock' });
+  });
+
+  it('the default is "deposit": `pay` is called, the escrow is never read or spent', async () => {
+    const { impl } = queuedFetch([json(requirements('42', 'near-mock'), 402), json({ ok: 1 }, 200)]);
+    const chain = makeChain();
+    const r = await createAgentGateClient({ chain, signer: SIGNER, fetchImpl: impl }).fetchPaid('http://svc.test/svc/1');
+    expect(r.payFrom).toBe('deposit');
+    expect(chain.pay).toHaveBeenCalledTimes(1);
+    expect(chain.escrowOf).not.toHaveBeenCalled();
+    expect(chain.payFromEscrow).not.toHaveBeenCalled();
+  });
+
+  it('refuses before sending when the escrow holds less than price + fee: ERR_ESCROW_INSUFFICIENT, nothing paid, no gas burned', async () => {
+    const short = (BigInt(MAX_AMOUNT) - 1n).toString();
+    const { impl, calls } = queuedFetch([json(requirements('42', 'near-mock'), 402)]);
+    const chain = makeChain({ escrowOf: vi.fn(async () => short) });
+    const err = await escrowClient(chain, {}, impl).fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(AgentGateError);
+    expect(err).toMatchObject({ code: 'ERR_ESCROW_INSUFFICIENT', httpStatus: 402 });
+    // the contract's own words, then what happened
+    expect((err as Error).message).toBe(
+      `ERR_ESCROW_INSUFFICIENT: the escrow holds ${short} yocto, the payment needs ${MAX_AMOUNT} (price + storage fee); nothing was sent`,
+    );
+    expect(chain.payFromEscrow).not.toHaveBeenCalled();
+    expect(chain.pay).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1); // the unpaid invoice request only
+  });
+
+  it('an escrow of exactly price + fee is enough', async () => {
+    const chain = makeChain({ escrowOf: vi.fn(async () => MAX_AMOUNT) });
+    const r = await escrowClient(chain).fetchPaid('http://svc.test/svc/1');
+    expect(r.paid).toBe(true);
+    expect(chain.payFromEscrow).toHaveBeenCalledTimes(1);
+  });
+
+  it('an unknown escrow ("0") is insufficient, not an error of another kind', async () => {
+    const chain = makeChain({ escrowOf: vi.fn(async () => '0') });
+    await expect(escrowClient(chain).fetchPaid('http://svc.test/svc/1')).rejects.toMatchObject({ code: 'ERR_ESCROW_INSUFFICIENT' });
+    expect(chain.payFromEscrow).not.toHaveBeenCalled();
+  });
+
+  it('the budget still compares the TOTAL (price + 0.002 NEAR): BUDGET_EXCEEDED first, the escrow is not even read', async () => {
+    const { impl } = queuedFetch([json(requirements('42', 'near-mock'), 402)]);
+    const chain = makeChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
+    const err = await escrowClient(chain, { maxYocto: PRICE }, impl).fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: 'BUDGET_EXCEEDED', httpStatus: 402 });
+    expect(chain.escrowOf).not.toHaveBeenCalled();
+    expect(chain.payFromEscrow).not.toHaveBeenCalled();
+
+    // a cap equal to the total passes
+    const ok = makeChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
+    expect((await escrowClient(ok, { maxYocto: MAX_AMOUNT }).fetchPaid('http://svc.test/svc/1')).paid).toBe(true);
+  });
+
+  it('the invoice refusals come first too: SERVICE_MISMATCH and REGISTRY_MISMATCH never touch the escrow', async () => {
+    const chain = makeChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
+    const mismatch = createAgentGateClient({
+      chain,
+      signer: SIGNER,
+      payFrom: 'escrow',
+      expectedServiceId: 2,
+      fetchImpl: queuedFetch([json(requirements('42', 'near-mock'), 402)]).impl,
+    });
+    await expect(mismatch.fetchPaid('http://svc.test/svc/2')).rejects.toMatchObject({ code: 'SERVICE_MISMATCH' });
+    const other = makeChain({ registryId: 'other-registry.mock', escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
+    await expect(escrowClient(other).fetchPaid('http://svc.test/svc/1')).rejects.toMatchObject({ code: 'REGISTRY_MISMATCH' });
+    expect(chain.escrowOf).not.toHaveBeenCalled();
+    expect(other.escrowOf).not.toHaveBeenCalled();
+    expect(chain.payFromEscrow).not.toHaveBeenCalled();
+    expect(other.payFromEscrow).not.toHaveBeenCalled();
+  });
+
+  it('a failing escrow read or payFromEscrow propagates as-is: nothing was paid, so it is not PAID_NOT_SERVED', async () => {
+    const rpcDown = new AgentGateError('RPC_ERROR', 'the NEAR RPC was unreachable for the escrow_of view', 502);
+    const readFails = makeChain({ escrowOf: vi.fn(async () => { throw rpcDown; }) });
+    await expect(escrowClient(readFails).fetchPaid('http://svc.test/svc/1')).rejects.toBe(rpcDown);
+    expect(readFails.payFromEscrow).not.toHaveBeenCalled();
+
+    const used = new AgentGateError('ERR_NONCE_USED', 'ERR_NONCE_USED: nonce already paid', 400);
+    const payFails = makeChain({
+      escrowOf: vi.fn(async () => ESCROW_ENOUGH),
+      payFromEscrow: vi.fn(async () => { throw used; }),
+    });
+    const err = await escrowClient(payFails).fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
+    expect(err).toBe(used);
+    expect(err).not.toBeInstanceOf(PaidNotServedError);
+    expect(payFails.pay).not.toHaveBeenCalled();
+  });
+
+  it('PAID_NOT_SERVED is unchanged: the escrow was debited, the gateway refused the proof, the error carries it', async () => {
+    const { impl } = queuedFetch([json(requirements('42', 'near-mock'), 402), rejected402('42', 'not_found')]);
+    const chain = makeChain({ escrowOf: vi.fn(async () => ESCROW_ENOUGH) });
+    const err = await escrowClient(chain, {}, impl).fetchPaid('http://svc.test/svc/1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PaidNotServedError);
+    expect(err).toMatchObject({ reason: 'refused', txHash: TX_HASH, nonce: '42', serviceId: 1, depositYocto: MAX_AMOUNT });
+    expect(chain.payFromEscrow).toHaveBeenCalledTimes(1);
+    expect(chain.pay).not.toHaveBeenCalled();
+  });
+
+  it('rejects a payFrom other than "deposit" or "escrow" at construction (BAD_OPTS)', () => {
+    for (const bad of ['wallet', '', 'ESCROW', 1, null]) {
+      expect(
+        () => createAgentGateClient({ chain: makeChain(), signer: SIGNER, payFrom: bad as never }),
+        String(bad),
+      ).toThrow(expect.objectContaining({ code: 'BAD_OPTS' }));
+    }
+    expect(() => createAgentGateClient({ chain: makeChain(), signer: SIGNER, payFrom: undefined })).not.toThrow();
+  });
+
+  it('rejects escrow mode on a chain client that has no escrow methods (BAD_OPTS)', () => {
+    const old = { ...makeChain(), payFromEscrow: undefined } as unknown as ChainClient;
+    expect(() => createAgentGateClient({ chain: old, signer: SIGNER, payFrom: 'escrow' })).toThrow(
+      expect.objectContaining({ code: 'BAD_OPTS' }),
+    );
+    expect(() => createAgentGateClient({ chain: old, signer: SIGNER })).not.toThrow(); // deposit mode needs only `pay`
   });
 });
 

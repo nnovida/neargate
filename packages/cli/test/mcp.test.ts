@@ -39,8 +39,10 @@ function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceReco
 }
 
 /** Two services: #1 active with a 5/5 score, #2 paused (plus any `extra` services). */
-function makeChain(extra: ServiceRecord[] = []): ChainClient & { paid: unknown[] } {
+function makeChain(extra: ServiceRecord[] = []): ChainClient & { paid: unknown[]; escrowPaid: unknown[]; escrows: Map<string, string> } {
   const paid: unknown[] = [];
+  const escrowPaid: unknown[] = [];
+  const escrows = new Map<string, string>([['buyer.mock', '498000000000000000000000']]);
   const services = new Map<number, ServiceRecord>([
     [1, makeService(1)],
     [2, makeService(2, { active: false, name: 'svc-2-paused' })],
@@ -54,6 +56,21 @@ function makeChain(extra: ServiceRecord[] = []): ChainClient & { paid: unknown[]
     network: 'near-mock',
     registryId: 'registry.mock',
     paid,
+    escrowPaid,
+    escrows,
+    async escrowOf(accountId: string) {
+      return escrows.get(accountId) ?? '0';
+    },
+    async depositEscrow() {
+      throw new Error('the MCP server never deposits');
+    },
+    async withdrawEscrow() {
+      throw new Error('the MCP server never withdraws');
+    },
+    async payFromEscrow(input: unknown) {
+      escrowPaid.push(input);
+      return { txHash: TX('E') };
+    },
     async getService(id: number) {
       return services.get(id) ?? null;
     },
@@ -97,7 +114,7 @@ function makeChain(extra: ServiceRecord[] = []): ChainClient & { paid: unknown[]
     async setActive() {
       return { txHash: TX('C') };
     },
-  } as ChainClient & { paid: unknown[] };
+  } as ChainClient & { paid: unknown[]; escrowPaid: unknown[]; escrows: Map<string, string> };
 }
 
 /** The gateway: a D3 invoice for service 1 without proof, the data once X-PAYMENT is present. */
@@ -155,18 +172,24 @@ function textOf(res: unknown): string {
 }
 
 describe('NearGate MCP server', () => {
-  it('the tool list equals the four neargate_* tools', async () => {
+  it('the tool list equals the five neargate_* tools', async () => {
     const client = await connectClient({ chain: makeChain(), signerProvider: () => BUYER });
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'neargate_buy',
+      'neargate_escrow_balance',
       'neargate_get_invoice',
       'neargate_get_service',
       'neargate_list_services',
     ]);
     expect(client.getServerVersion()?.name).toBe('neargate');
     const buy = tools.find((t) => t.name === 'neargate_buy')!;
-    expect(Object.keys((buy.inputSchema as { properties?: object }).properties ?? {})).toContain('maxNear');
+    expect(Object.keys((buy.inputSchema as { properties?: object }).properties ?? {})).toEqual(
+      expect.arrayContaining(['maxNear', 'fromEscrow']),
+    );
+    const balance = tools.find((t) => t.name === 'neargate_escrow_balance')!;
+    expect(Object.keys((balance.inputSchema as { properties?: object }).properties ?? {})).toEqual(['account']);
+    expect((balance.inputSchema as { required?: string[] }).required ?? []).toEqual([]); // account is optional
     await client.close();
   });
 
@@ -258,6 +281,96 @@ describe('NearGate MCP server', () => {
       body: { gold: 3310.25 },
     });
     expect(chain.paid).toEqual([{ serviceId: 1, nonce: NONCE, depositYocto: TOTAL }]);
+    await client.close();
+  });
+
+  it('neargate_buy fromEscrow pays out of the escrow: payFromEscrow once, `pay` never', async () => {
+    const chain = makeChain();
+    chain.escrows.set('buyer.mock', '5000000000000000000000000'); // 5 NEAR
+    const { impl } = gatewayFetch();
+    const client = await connectClient({ chain, signerProvider: async () => BUYER, fetchImpl: impl });
+    const res = await client.callTool({ name: 'neargate_buy', arguments: { id: 1, fromEscrow: true, maxNear: '2.502' } });
+    expect((res as { isError?: boolean }).isError).toBeFalsy();
+    expect(JSON.parse(textOf(res))).toMatchObject({
+      id: 1,
+      paid: true,
+      payFrom: 'escrow',
+      price: '2.5 NEAR + 0.002 NEAR storage',
+      depositYocto: TOTAL,
+      txHash: TX('E'),
+      body: { gold: 3310.25 },
+    });
+    expect(chain.escrowPaid).toEqual([{ serviceId: 1, nonce: NONCE }]);
+    expect(chain.paid).toEqual([]);
+    await client.close();
+  });
+
+  it('neargate_buy without fromEscrow keeps paying with a deposit (payFrom "deposit")', async () => {
+    const chain = makeChain();
+    const { impl } = gatewayFetch();
+    const client = await connectClient({ chain, signerProvider: async () => BUYER, fetchImpl: impl });
+    const res = await client.callTool({ name: 'neargate_buy', arguments: { id: 1 } });
+    expect(JSON.parse(textOf(res))).toMatchObject({ paid: true, payFrom: 'deposit' });
+    expect(chain.paid).toHaveLength(1);
+    expect(chain.escrowPaid).toEqual([]);
+    await client.close();
+  });
+
+  it('neargate_buy fromEscrow with too little escrow is a tool error (ERR_ESCROW_INSUFFICIENT) and sends nothing', async () => {
+    const chain = makeChain(); // buyer.mock holds 0.498 NEAR, the call needs 2.502
+    const { impl } = gatewayFetch();
+    const client = await connectClient({ chain, signerProvider: () => BUYER, fetchImpl: impl });
+    const res = await client.callTool({ name: 'neargate_buy', arguments: { id: 1, fromEscrow: true } });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(res)).toMatch(/^ERR_ESCROW_INSUFFICIENT: the escrow holds 498000000000000000000000 yocto/);
+    expect(chain.escrowPaid).toEqual([]);
+    expect(chain.paid).toEqual([]);
+    await client.close();
+  });
+
+  it('neargate_escrow_balance reads the buyer\'s own escrow by default, read-only', async () => {
+    const chain = makeChain();
+    const client = await connectClient({ chain, signerProvider: () => BUYER });
+    const res = await client.callTool({ name: 'neargate_escrow_balance', arguments: {} });
+    expect((res as { isError?: boolean }).isError).toBeFalsy();
+    expect(JSON.parse(textOf(res))).toEqual({
+      account: 'buyer.mock',
+      escrowYocto: '498000000000000000000000',
+      escrow: '0.498 NEAR',
+    });
+    expect(chain.paid).toEqual([]);
+    expect(chain.escrowPaid).toEqual([]);
+    await client.close();
+  });
+
+  it('neargate_escrow_balance {account} reads that account and needs no key; an unknown account holds 0', async () => {
+    const chain = makeChain();
+    const client = await connectClient({
+      chain,
+      signerProvider: async () => {
+        throw new Error('SIGNER_MISSING: no key');
+      },
+    });
+    const known = await client.callTool({ name: 'neargate_escrow_balance', arguments: { account: 'buyer.mock' } });
+    expect(JSON.parse(textOf(known))).toMatchObject({ account: 'buyer.mock', escrow: '0.498 NEAR' });
+    const unknown = await client.callTool({ name: 'neargate_escrow_balance', arguments: { account: 'ghost.mock' } });
+    expect(JSON.parse(textOf(unknown))).toEqual({ account: 'ghost.mock', escrowYocto: '0', escrow: '0 NEAR' });
+    await client.close();
+  });
+
+  it('neargate_escrow_balance without an account needs the signer; a missing one and a bad id are tool errors', async () => {
+    const client = await connectClient({
+      chain: makeChain(),
+      signerProvider: async () => {
+        throw new Error('SIGNER_MISSING: no key');
+      },
+    });
+    const noKey = await client.callTool({ name: 'neargate_escrow_balance', arguments: {} });
+    expect((noKey as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(noKey)).toContain('SIGNER_MISSING');
+    const bad = await client.callTool({ name: 'neargate_escrow_balance', arguments: { account: 'Not An Account' } });
+    expect((bad as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(bad)).toContain('INVALID_ACCOUNT_ID');
     await client.close();
   });
 

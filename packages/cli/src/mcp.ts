@@ -6,6 +6,7 @@ import { assertFetchableUrl, parsePaymentRequired, refuseRedirect } from '@agent
 import {
   AgentGateError,
   formatError,
+  formatNear,
   formatPriceWithStorage,
   isMockNetwork,
   trustTier,
@@ -13,6 +14,7 @@ import {
   type ChainClient,
 } from '@agentgate/shared';
 import { buyService } from './buy';
+import { escrowBalance } from './escrow';
 import { listServices } from './list';
 
 /**
@@ -21,16 +23,18 @@ import { listServices } from './list';
  * client, an MCP-aware framework) gets NearGate natively — the agentic rail is
  * the product, and this is its native binding.
  *
- * Read tools (`list`, `get_service`, `get_invoice`) need no key. Only
- * `neargate_buy` spends NEAR, and it resolves the buyer signer lazily so the
- * read tools work with zero configuration.
+ * Read tools (`list`, `get_service`, `get_invoice`, and `escrow_balance` with an explicit
+ * account) need no key. Only `neargate_buy` spends NEAR, and it resolves the buyer signer
+ * lazily so the read tools work with zero configuration. With `fromEscrow` it spends the
+ * prepaid escrow through `pay_from_escrow`, which is what a restricted agent key can sign.
  */
 export interface McpServerDeps {
   chain: ChainClient;
   /**
-   * Resolve the buyer signer. Called only by `neargate_buy`, so the read tools
-   * work even when no buyer key is configured (the provider may throw a friendly
-   * "no buyer key" error, surfaced as a tool error rather than a crash).
+   * Resolve the buyer signer. Called by `neargate_buy`, and by `neargate_escrow_balance` when
+   * it is given no account, so the other read tools work even when no buyer key is configured
+   * (the provider may throw a friendly "no buyer key" error, surfaced as a tool error rather
+   * than a crash).
    */
   signerProvider: () => AnySigner | Promise<AnySigner>;
   /** Injectable fetch (tests / get_invoice). Defaults to globalThis.fetch. */
@@ -185,18 +189,22 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
     {
       title: 'Buy one call to a service (pays in NEAR)',
       description:
-        'Autonomously pay a service’s 402 invoice with a registry `pay` call in NEAR (the invoice nonce rides the call; price + 0.002 NEAR storage fee attached) and return the response body. Spends real NEAR from the configured buyer key, capped by maxNear on the total attached. Fails fast — no spend — on unknown/paused services or when price + storage exceeds the cap (BUDGET_EXCEEDED).',
+        'Autonomously pay a service’s 402 invoice in NEAR and return the response body. By default it makes a registry `pay` call (the invoice nonce rides the call; price + 0.002 NEAR storage fee attached) from the configured buyer key. With fromEscrow it calls `pay_from_escrow` instead: nothing is attached and the same total is debited from the buyer\'s prepaid escrow (see neargate_escrow_balance), so a key restricted to that method can pay. Spending is capped by maxNear on the total. Fails fast — no spend — on unknown/paused services, when price + storage exceeds the cap (BUDGET_EXCEEDED), or when fromEscrow and the escrow holds less than the total (ERR_ESCROW_INSUFFICIENT).',
       inputSchema: {
         id: z.number().int().positive().describe('service id to buy'),
         maxNear: z
           .string()
           .optional()
           .describe('budget cap in NEAR on the total attached, price + storage fee (e.g. "3")'),
+        fromEscrow: z
+          .boolean()
+          .optional()
+          .describe('pay out of the prepaid escrow (pay_from_escrow) instead of attaching a deposit (default false)'),
         method: z.string().optional().describe('HTTP method for the paid request (default GET)'),
         body: z.string().optional().describe('JSON request body to send with the paid request'),
       },
     },
-    ({ id, maxNear, method, body }) =>
+    ({ id, maxNear, fromEscrow, method, body }) =>
       toolResult(async () => {
         const signer = await deps.signerProvider();
         const { service, url, result } = await buyService({
@@ -204,6 +212,7 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
           signer,
           id,
           ...(maxNear !== undefined ? { maxNear } : {}),
+          ...(fromEscrow === true ? { fromEscrow: true } : {}),
           ...(method !== undefined ? { method } : {}),
           ...(body !== undefined ? { body } : {}),
           ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
@@ -220,10 +229,29 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
           ),
           priceYocto: result.priceYocto,
           depositYocto: result.depositYocto,
+          payFrom: result.payFrom,
           txHash: result.txHash,
           settlement: result.settlement,
           body: result.body,
         };
+      }),
+  );
+
+  server.registerTool(
+    'neargate_escrow_balance',
+    {
+      title: 'Read an account’s prepaid escrow balance',
+      description:
+        'The NEAR still prepaid in an account’s registry escrow, which neargate_buy with fromEscrow spends (price + 0.002 NEAR storage fee per call). Defaults to the configured buyer account, so an agent can see its remaining budget before buying. Read-only — no payment.',
+      inputSchema: {
+        account: z.string().optional().describe('NEAR account id (default: the configured buyer account)'),
+      },
+    },
+    ({ account }) =>
+      toolResult(async () => {
+        const accountId = account ?? (await deps.signerProvider()).accountId;
+        const { escrowYocto } = await escrowBalance({ chain, account: accountId });
+        return { account: accountId, escrowYocto, escrow: formatNear(escrowYocto) };
       }),
   );
 
@@ -239,7 +267,7 @@ export async function startAgentGateMcpServer(deps: McpServerDeps): Promise<void
   // is in fact a stdio server waiting for an MCP client to speak on stdin.
   process.stderr.write(
     'NearGate MCP server ready on stdio — tools: neargate_list_services, ' +
-      'neargate_get_service, neargate_get_invoice, neargate_buy.\n' +
+      'neargate_get_service, neargate_get_invoice, neargate_buy, neargate_escrow_balance.\n' +
       'It speaks JSON-RPC over stdin/stdout and waits for an MCP client ' +
       '(e.g. Claude Desktop). No further output here is normal — this is not a hang.\n',
   );

@@ -31,9 +31,17 @@ export interface PayAndFetchResult {
   txHash?: string;
   /** The service price the seller receives (`extra.priceYocto`). Set when paid. */
   priceYocto?: Yocto;
-  /** What the payment attached: price + registry storage fee (`maxAmountRequired`). Set when paid. */
+  /**
+   * What the payment cost: price + registry storage fee (`maxAmountRequired`), attached to `pay` or
+   * debited from the escrow by `pay_from_escrow`. Set when paid.
+   */
   depositYocto?: Yocto;
+  /** Which rail paid: a `pay` deposit or the prepaid escrow. Set when paid. */
+  payFrom?: PayFrom;
 }
+
+/** Where a payment comes from: an attached deposit (`pay`) or the prepaid escrow (`pay_from_escrow`). */
+export type PayFrom = 'deposit' | 'escrow';
 
 export interface AgentGateClientOpts {
   chain: ChainClient;
@@ -45,6 +53,14 @@ export interface AgentGateClientOpts {
   maxYocto?: Yocto;
   /** Refuse (SERVICE_MISMATCH) an invoice for any other service id than this one. */
   expectedServiceId?: number;
+  /**
+   * Where the payment comes from. `'deposit'` (default) attaches price + storage fee to the
+   * registry's `pay`. `'escrow'` calls `pay_from_escrow` instead, which attaches nothing and debits
+   * the signer's prepaid escrow by the same total, so a function-call key restricted to that
+   * method can sign it. `maxYocto` caps the total either way; in escrow mode the client first
+   * reads the escrow and refuses (ERR_ESCROW_INSUFFICIENT) before sending when it holds less.
+   */
+  payFrom?: PayFrom;
   logger?: Logger;
   /** Wait after the on-chain payment before retrying with proof. Default: 0 (mock) / 3000 (live). */
   settleDelayMs?: number;
@@ -64,7 +80,8 @@ export interface AgentGateClient {
   /**
    * GET the URL; on 402 parse+validate the PaymentRequiredResponse (refuse if
    * maxAmountRequired > maxYocto), pay via chain.pay with the invoice's serviceId +
-   * nonce and maxAmountRequired attached, then retry with the X-PAYMENT header
+   * nonce and maxAmountRequired attached (or, with `payFrom: 'escrow'`, via
+   * chain.payFromEscrow out of the prepaid escrow), then retry with the X-PAYMENT header
    * (base64-encoded proof). While the gateway answers `settlement_pending`, waits
    * Retry-After and retries the same proof, up to 3×. Non-402 first responses pass
    * through. Exposes `requirements` (parsed entry) and `settlement` (decoded
@@ -370,6 +387,13 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
   if (expectedServiceId !== undefined && (!Number.isSafeInteger(expectedServiceId) || expectedServiceId < 1)) {
     throw new AgentGateError('BAD_OPTS', 'opts.expectedServiceId must be a positive integer', 500);
   }
+  const payFrom: PayFrom = opts.payFrom === undefined ? 'deposit' : opts.payFrom; // null is garbage, not the default
+  if (payFrom !== 'deposit' && payFrom !== 'escrow') {
+    throw new AgentGateError('BAD_OPTS', 'opts.payFrom must be "deposit" or "escrow"', 500);
+  }
+  if (payFrom === 'escrow' && (typeof chain.escrowOf !== 'function' || typeof chain.payFromEscrow !== 'function')) {
+    throw new AgentGateError('BAD_OPTS', 'opts.chain has no escrow methods (escrowOf, payFromEscrow): it cannot pay from the escrow', 500);
+  }
   const fetchImpl: typeof fetch = opts.fetchImpl ?? fetch;
   const settleDelayMs = opts.settleDelayMs ?? (isMockNetwork(chain.network) ? 0 : 3000);
   const requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
@@ -464,12 +488,29 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
       );
     }
 
-    // Pay through the registry: `pay(service_id, nonce)` with price + storage fee attached.
-    const { txHash } = await chain.pay(
-      { serviceId: req.extra.serviceId, nonce: req.extra.nonce, depositYocto: req.maxAmountRequired },
-      signer,
-    );
-    logger?.info('fetchPaid: payment sent', { txHash, amountYocto: req.maxAmountRequired });
+    // Pay through the registry: `pay(service_id, nonce)` with price + storage fee attached, or
+    // `pay_from_escrow(service_id, nonce)` with nothing attached. One rail per client, never both.
+    let txHash: string;
+    if (payFrom === 'escrow') {
+      // Refuse before sending when the escrow cannot cover the total: the contract would reject the
+      // call too, but only after the signer paid gas for it.
+      const held = await chain.escrowOf(signer.accountId);
+      if (compareYocto(held, req.maxAmountRequired) < 0) {
+        throw new AgentGateError(
+          'ERR_ESCROW_INSUFFICIENT',
+          `ERR_ESCROW_INSUFFICIENT: the escrow holds ${held} yocto, the payment needs ${req.maxAmountRequired} ` +
+            '(price + storage fee); nothing was sent',
+          402,
+        );
+      }
+      ({ txHash } = await chain.payFromEscrow({ serviceId: req.extra.serviceId, nonce: req.extra.nonce }, signer));
+    } else {
+      ({ txHash } = await chain.pay(
+        { serviceId: req.extra.serviceId, nonce: req.extra.nonce, depositYocto: req.maxAmountRequired },
+        signer,
+      ));
+    }
+    logger?.info('fetchPaid: payment sent', { txHash, amountYocto: req.maxAmountRequired, payFrom });
 
     await sleep(settleDelayMs);
 
@@ -490,6 +531,7 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
       txHash,
       priceYocto: req.extra.priceYocto,
       depositYocto: req.maxAmountRequired,
+      payFrom,
     };
     // From here on the deposit is spent: a call that is not served throws PAID_NOT_SERVED with
     // the proof, so the caller re-presents it instead of paying a fresh invoice.

@@ -15,6 +15,20 @@ export {
   type BuyServiceResult,
 } from './buy';
 export {
+  depositToEscrow,
+  withdrawFromEscrow,
+  escrowBalance,
+  formatEscrowChange,
+  formatEscrowBalance,
+  type EscrowChangeResult,
+} from './escrow';
+export {
+  addAgentKey,
+  assertAgentKeysAvailable,
+  formatAgentKeyAdded,
+  type AddedAgentKey,
+} from './agent-key';
+export {
   setServiceActive,
   type SetServiceActiveOpts,
   type SetServiceActiveResult,
@@ -33,6 +47,7 @@ export {
   type DemoAccountsResult,
 } from './demo-accounts';
 export {
+  cliAccountId,
   cliSigner,
   loadNearSigner,
   signerAccountId,

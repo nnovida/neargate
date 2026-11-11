@@ -19,7 +19,7 @@ import type {
   VerifyResult,
   Yocto,
 } from '@agentgate/shared';
-import { assertNonEmpty, assertServiceId, assertYocto, checkVerifyQuery, judgePaymentRecord } from './checks';
+import { YOCTO_RE, assertNonEmpty, assertServiceId, assertYocto, checkVerifyQuery, judgePaymentRecord } from './checks';
 
 /** Devnet is local/in-process, but never let a hung socket block a request forever. */
 const DEVNET_REQUEST_TIMEOUT_MS = 30_000;
@@ -195,6 +195,20 @@ export class MockChainHttpClient implements ChainClient {
     return result.exists;
   }
 
+  /** The account's escrow in yocto; `"0"` for an account that never deposited. */
+  async escrowOf(accountId: string): Promise<Yocto> {
+    assertNonEmpty(accountId, 'accountId');
+    const result = await this.get<{ escrowYocto?: unknown } | undefined>(
+      `/registry/escrow/${encodeURIComponent(accountId)}`,
+    );
+    // The answer gates a payment's pre-check: anything but a yocto string is a broken devnet.
+    const escrow = result?.escrowYocto;
+    if (typeof escrow !== 'string' || !YOCTO_RE.test(escrow)) {
+      throw new AgentGateError('devnet_bad_response', 'devnet escrow check did not answer { escrowYocto: yocto string }', 502);
+    }
+    return escrow;
+  }
+
   /**
    * Checks the registry's payment record for the nonce: not_found, wrong_service,
    * amount_too_low, expired, already_attested, then ok. `pending` never occurs in mock mode
@@ -238,6 +252,45 @@ export class MockChainHttpClient implements ChainClient {
       serviceId: input.serviceId,
       nonce: input.nonce, // the registry checks the shape (ERR_INVALID_NONCE)
       depositYocto: input.depositYocto,
+    });
+  }
+
+  /**
+   * `deposit_escrow` with `amountYocto` attached. The first deposit of an account must be more
+   * than the 0.002 NEAR storage fee, which the registry keeps; later ones are credited in full.
+   */
+  async depositEscrow(amountYocto: Yocto, signer: AnySigner): Promise<{ txHash: string }> {
+    const mockSigner = requireMockSigner(signer);
+    assertYocto(amountYocto, 'amountYocto');
+    return await this.post<{ txHash: string }>('/registry/deposit-escrow', {
+      signer: mockSigner.accountId,
+      depositYocto: amountYocto,
+    });
+  }
+
+  /** `withdraw_escrow(amount)` with exactly 1 yocto attached, as on NEAR (a full-access key only). */
+  async withdrawEscrow(amountYocto: Yocto, signer: AnySigner): Promise<{ txHash: string }> {
+    const mockSigner = requireMockSigner(signer);
+    assertYocto(amountYocto, 'amountYocto');
+    return await this.post<{ txHash: string }>('/registry/withdraw-escrow', {
+      signer: mockSigner.accountId,
+      amountYocto,
+      depositYocto: '1',
+    });
+  }
+
+  /** `pay_from_escrow(service_id, nonce)`: attaches nothing, the price + fee come out of the escrow. */
+  async payFromEscrow(
+    input: { serviceId: number; nonce: string },
+    signer: AnySigner,
+  ): Promise<{ txHash: string }> {
+    const mockSigner = requireMockSigner(signer);
+    assertServiceId(input.serviceId);
+    return await this.post<{ txHash: string }>('/registry/pay-from-escrow', {
+      signer: mockSigner.accountId,
+      serviceId: input.serviceId,
+      nonce: input.nonce, // the registry checks the shape (ERR_INVALID_NONCE)
+      depositYocto: '0',
     });
   }
 

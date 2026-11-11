@@ -29,6 +29,10 @@ const MAX_AMOUNT = '502000000000000000000000'; // price + storage fee
 
 interface FakeChain extends ChainClient {
   payments: Array<{ input: PayInput; signer: AnySigner }>;
+  /** `payFromEscrow` calls, in order. */
+  escrowPayments: Array<{ input: { serviceId: number; nonce: string }; signer: AnySigner }>;
+  /** What `escrowOf` answers (default: a full 1 NEAR). */
+  escrow: Yocto;
 }
 
 function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceRecord {
@@ -50,10 +54,26 @@ function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceReco
 
 function makeFakeChain(service: ServiceRecord | null): FakeChain {
   const payments: FakeChain['payments'] = [];
+  const escrowPayments: FakeChain['escrowPayments'] = [];
   return {
     network: 'near-mock',
     registryId: REGISTRY,
     payments,
+    escrowPayments,
+    escrow: '1000000000000000000000000',
+    async escrowOf() {
+      return this.escrow;
+    },
+    async depositEscrow() {
+      throw new Error('not used');
+    },
+    async withdrawEscrow() {
+      throw new Error('not used');
+    },
+    async payFromEscrow(input, signer) {
+      escrowPayments.push({ input, signer });
+      return { txHash: PAYMENT_TX };
+    },
     async getService(id) {
       return service !== null && id === service.id ? service : null;
     },
@@ -337,6 +357,63 @@ describe('buyService', () => {
     }
     expect(calls).toHaveLength(0);
     expect(chain.payments).toHaveLength(0);
+  });
+});
+
+describe('buyService --from-escrow', () => {
+  it('pays out of the escrow: payFromEscrow once, `pay` never, the same price + storage reported', async () => {
+    const chain = makeFakeChain(makeService(1));
+    const { impl, calls } = gatewayFetch(() => Response.json({ rate: 16250 }));
+
+    const bought = await buyService({ ...baseOpts(chain, impl), fromEscrow: true });
+
+    expect(bought.result).toMatchObject({ paid: true, status: 200, payFrom: 'escrow', txHash: PAYMENT_TX, priceYocto: PRICE, depositYocto: MAX_AMOUNT });
+    expect(chain.escrowPayments).toEqual([{ input: { serviceId: 1, nonce: NONCE }, signer: BUYER }]);
+    expect(chain.payments).toEqual([]);
+    expect(new Headers(calls[1]!.init?.headers).has('X-PAYMENT')).toBe(true);
+  });
+
+  it('without the flag the deposit rail pays and the escrow is not spent', async () => {
+    const chain = makeFakeChain(makeService(1));
+    const { impl } = gatewayFetch(() => Response.json({}));
+    const bought = await buyService(baseOpts(chain, impl));
+    expect(bought.result.payFrom).toBe('deposit');
+    expect(chain.payments).toHaveLength(1);
+    expect(chain.escrowPayments).toEqual([]);
+  });
+
+  it('an escrow below price + fee refuses with ERR_ESCROW_INSUFFICIENT and sends nothing', async () => {
+    const chain = makeFakeChain(makeService(1));
+    chain.escrow = (BigInt(MAX_AMOUNT) - 1n).toString();
+    const { impl } = gatewayFetch(() => Response.json({}));
+    await expect(buyService({ ...baseOpts(chain, impl), fromEscrow: true })).rejects.toMatchObject({ code: 'ERR_ESCROW_INSUFFICIENT' });
+    expect(chain.escrowPayments).toEqual([]);
+    expect(chain.payments).toEqual([]);
+  });
+
+  it('--max still caps the total (price + 0.002 NEAR), before the escrow is read', async () => {
+    const chain = makeFakeChain(makeService(1));
+    const { impl, calls } = gatewayFetch(() => Response.json({}));
+    await expect(buyService({ ...baseOpts(chain, impl), fromEscrow: true, maxNear: '0.5' })).rejects.toMatchObject({
+      code: 'BUDGET_EXCEEDED',
+    });
+    expect(calls).toHaveLength(0);
+    const ok = await buyService({ ...baseOpts(chain, impl), fromEscrow: true, maxNear: '0.502' });
+    expect(ok.result.paid).toBe(true);
+  });
+
+  it('the receipt says the escrow paid', async () => {
+    const chain = makeFakeChain(makeService(1));
+    const { impl } = gatewayFetch(() => Response.json({ rate: 16250 }));
+    const bought = await buyService({ ...baseOpts(chain, impl), fromEscrow: true });
+    expect(formatBuyReceipt(bought)).toEqual([
+      'service:  #1 svc-1',
+      'url:      http://gw.example:4021/svc/1',
+      'paid:     0.5 NEAR + 0.002 NEAR storage',
+      'from:     escrow (nothing attached; the escrow was debited)',
+      `payment:  ${PAYMENT_TX}`,
+      'status:   200',
+    ]);
   });
 });
 

@@ -10,6 +10,12 @@ export const YOCTO_PER_NEAR = 10n ** 24n;
  * payment record, on top of the service price.
  */
 export const PAYMENT_STORAGE_FEE_YOCTO: Yocto = '2000000000000000000000';
+/**
+ * Kept from an account's first `deposit_escrow`, which creates its escrow entry (0.002 NEAR): the
+ * first deposit must be more than this, and credits `attached - fee`. Later deposits are credited
+ * in full.
+ */
+export const ESCROW_STORAGE_FEE_YOCTO: Yocto = '2000000000000000000000';
 /** Deposit `register_service` requires (0.12 NEAR); any excess is refunded. */
 export const REGISTRATION_DEPOSIT_YOCTO: Yocto = '120000000000000000000000';
 /** Minimum price of the native NEAR option (10^18 yocto = 0.000001 NEAR). */

@@ -84,7 +84,7 @@ export interface VerifyPaymentQuery {
   serviceId: number;
   minAmountYocto: Yocto;
   maxAgeMs: number;
-  /** When given, live mode also checks the tx is a `pay` call on the registry with this nonce. */
+  /** When given, live mode also checks the tx is a `pay` or `pay_from_escrow` call on the registry with this nonce. */
   txHash?: string;
   payer?: string;
 }
@@ -148,4 +148,22 @@ export interface ChainClient {
     signer: AnySigner,
   ): Promise<{ txHash: string }>;
   setActive(serviceId: number, active: boolean, signer: AnySigner): Promise<{ txHash: string }>;
+  /** The account's prepaid escrow in yocto (`escrow_of`); `"0"` for an account that never deposited. */
+  escrowOf(accountId: string): Promise<Yocto>;
+  /**
+   * `deposit_escrow` with `amountYocto` attached. The first deposit of an account keeps the
+   * 0.002 NEAR escrow storage fee (it must be more than that); later ones are credited in full.
+   */
+  depositEscrow(amountYocto: Yocto, signer: AnySigner): Promise<{ txHash: string }>;
+  /**
+   * `withdraw_escrow(amount)` with exactly 1 yocto attached, so only a full-access key can sign
+   * it: a function-call key cannot attach a deposit.
+   */
+  withdrawEscrow(amountYocto: Yocto, signer: AnySigner): Promise<{ txHash: string }>;
+  /**
+   * `pay_from_escrow(service_id, nonce)`: pays the invoice out of the signer's escrow
+   * (price + 0.002 NEAR storage fee), attaching nothing, so a function-call key restricted to
+   * that method can sign it.
+   */
+  payFromEscrow(input: { serviceId: number; nonce: string }, signer: AnySigner): Promise<{ txHash: string }>;
 }

@@ -44,7 +44,7 @@ neargate buy 2 --account buyer.testnet --max 1
 neargate mcp --account buyer.testnet
 ```
 
-`mcp` serves NearGate as a Model Context Protocol **stdio server**. Tools: `neargate_list_services`, `neargate_get_service`, `neargate_get_invoice` (read-only, no key) and `neargate_buy` (pays the 402 invoice in NEAR from the buyer key, capped by `maxNear` on the total attached). The buyer key is resolved only when `neargate_buy` runs, so the read tools work without one. Claude Desktop (`claude_desktop_config.json`):
+`mcp` serves NearGate as a Model Context Protocol **stdio server**. Tools: `neargate_list_services`, `neargate_get_service`, `neargate_get_invoice` (read-only, no key), `neargate_escrow_balance` (read-only: the prepaid escrow left, for the buyer account or any `account`) and `neargate_buy` (pays the 402 invoice in NEAR from the buyer key, capped by `maxNear` on the total attached; with `fromEscrow: true` it pays out of the prepaid escrow instead, which is what a key restricted by `agent-key add` can do). The buyer key is resolved only when `neargate_buy` runs (and by `neargate_escrow_balance` without an `account`), so the catalog tools work without one. Claude Desktop (`claude_desktop_config.json`):
 
 ```json
 { "mcpServers": { "neargate": { "command": "node", "args": ["/path/to/repo/packages/cli/dist/bin.js", "mcp", "--account", "buyer.testnet"] } } }
@@ -85,8 +85,10 @@ On an invalid value the CLI fails fast with a one-line message — e.g. `error: 
 - `list` — the on-chain catalog with scores and trust tiers
 - `status <id>` — one service: record, price, trust tier, recent attestations
 - `wrap <url> --price <near> --name <name>` — register a service and put a 402 paywall in front of an API (name up to 64 bytes, description up to 280 bytes)
-- `buy <id>` — pay a service's 402 invoice and print the response (`--max` caps the total)
-- `mcp` — serve NearGate as an MCP stdio server (agent tools: list / inspect / invoice / buy)
+- `buy <id>` — pay a service's 402 invoice and print the response (`--max` caps the total; `--from-escrow` pays out of your prepaid escrow with `pay_from_escrow`, attaching nothing)
+- `escrow deposit <near>` / `escrow withdraw <near>` / `escrow balance [account]` — fund, drain and read your prepaid registry escrow (the first deposit keeps 0.002 NEAR as storage; withdrawing needs the full-access key)
+- `agent-key add --allowance <near>` — live only: add a function-call key restricted to `pay_from_escrow` on the registry, so an AI agent can spend your escrow and nothing else. The secret goes to `~/.near-credentials/<network>/<account>.neargate-agent.json` (mode 0600, never overwritten); only the public key and the path are printed. The agent then runs `neargate buy <id> --from-escrow --account <account> --key-file <that path>`
+- `mcp` — serve NearGate as an MCP stdio server (agent tools: list / inspect / invoice / buy, with `fromEscrow`, and `neargate_escrow_balance`)
 - `pause <id>` / `resume <id>` — toggle a service you own
 - `demo-accounts` — mint faucet-funded buyer/seller accounts on the mock devnet (mock mode only)
 

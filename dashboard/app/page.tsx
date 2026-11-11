@@ -36,9 +36,15 @@ const ROADMAP = [
     done: true,
   },
   {
+    tag: 'NOW',
+    title: 'Prepaid escrow · restricted agent keys',
+    body: 'An agent prepays an escrow in the registry and pays each call out of it with pay_from_escrow. Its key is a NEAR function-call key restricted to that one method: it can spend the escrow and nothing else, and the escrow is its spending limit. Withdrawing needs the account’s full-access key.',
+    done: true,
+  },
+  {
     tag: 'NEXT',
     title: 'Gasless payments (NEP-366)',
-    body: 'A buyer signs a NEP-366 delegate action and the gateway relays it, so the buyer never pays gas itself. The payment still settles through the registry’s pay.',
+    body: 'Planned: a buyer signs a NEP-366 delegate action and the gateway relays it, so the buyer never pays gas itself. The payment still settles through the registry.',
     done: false,
   },
   {

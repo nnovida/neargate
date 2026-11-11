@@ -88,6 +88,12 @@ export function parsePayment(value: unknown, method: string): PaymentRecord {
   };
 }
 
+/** `escrow_of`: a U128 as a decimal string without sign or leading zeros. */
+export function parseEscrow(value: unknown, method: string): string {
+  if (typeof value !== 'string' || !YOCTO_RE.test(value)) throw badResponse(`the ${method} view`);
+  return value;
+}
+
 export function parseScore(value: unknown, method: string): ServiceScore {
   const f = fields(value, method);
   return { totalCalls: f.int('total_calls'), successCalls: f.int('success_calls') };
@@ -155,14 +161,19 @@ export function parseActivity(value: unknown, method: string): ActivityEvent[] {
   return events;
 }
 
+/** The registry methods that settle a payment: `pay` (a deposit) and `pay_from_escrow` (the escrow). */
+const PAYMENT_METHODS: ReadonlySet<string> = new Set(['pay', 'pay_from_escrow']);
+
 /**
- * True iff `action` (as the RPC's tx view shows it) is the registry ABI's
- * `pay({service_id, nonce})` for exactly this service and nonce.
+ * True iff `action` (as the RPC's tx view shows it) is the registry ABI's `pay({service_id, nonce})`
+ * or `pay_from_escrow({service_id, nonce})` for exactly this service and nonce. Both write the
+ * same payment record, so a proof tx may be either; any other method is no payment.
  */
 export function isPayAction(action: unknown, serviceId: number, nonce: string): boolean {
   if (!isRecord(action) || !isRecord(action['FunctionCall'])) return false;
   const call = action['FunctionCall'];
-  if (call['method_name'] !== 'pay' || typeof call['args'] !== 'string') return false;
+  if (typeof call['method_name'] !== 'string' || !PAYMENT_METHODS.has(call['method_name'])) return false;
+  if (typeof call['args'] !== 'string') return false;
   let args: unknown;
   try {
     args = JSON.parse(Buffer.from(call['args'], 'base64').toString('utf8'));

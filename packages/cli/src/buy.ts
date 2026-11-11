@@ -27,6 +27,12 @@ export interface BuyServiceOpts {
   body?: string;
   /** Gateway base URL override; default: the service's on-chain endpoint. */
   gateway?: string;
+  /**
+   * Pay out of the prepaid escrow (`pay_from_escrow`, nothing attached) instead of attaching a
+   * deposit to `pay`. The budget cap still compares price + storage fee; an escrow below that
+   * refuses with ERR_ESCROW_INSUFFICIENT before anything is sent.
+   */
+  fromEscrow?: boolean;
   /** Forwarded to createAgentGateClient. */
   settleDelayMs?: number;
   fetchImpl?: typeof fetch;
@@ -51,7 +57,8 @@ export interface BuyServiceResult {
  * fee above the cap, malformed body), then run the full 402 → pay →
  * retry-with-proof exchange via the client's fetchPaid. Payment is a registry
  * `pay` call carrying the invoice nonce, with the price plus the storage fee
- * attached; the client refuses an invoice for any other service id, never follows
+ * attached (or, with `fromEscrow`, `pay_from_escrow` out of the prepaid escrow,
+ * attaching nothing); the client refuses an invoice for any other service id, never follows
  * a redirect (REDIRECT_REFUSED), and throws PAID_NOT_SERVED (with the tx hash and
  * nonce to re-present) when a paid call is not served.
  */
@@ -113,6 +120,7 @@ export async function buyService(opts: BuyServiceOpts): Promise<BuyServiceResult
     signer,
     expectedServiceId: id,
     ...(maxYocto !== undefined ? { maxYocto } : {}),
+    ...(opts.fromEscrow === true ? { payFrom: 'escrow' as const } : {}),
     ...(opts.settleDelayMs !== undefined ? { settleDelayMs: opts.settleDelayMs } : {}),
     ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
     ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
@@ -146,6 +154,7 @@ export function formatBuyReceipt(bought: BuyServiceResult, opts: { explorerUrl?:
   } else {
     const storageFee = result.requirements?.extra.storageFeeYocto ?? PAYMENT_STORAGE_FEE_YOCTO;
     lines.push(`paid:     ${formatPriceWithStorage(result.priceYocto ?? service.priceYocto, storageFee)}`);
+    if (result.payFrom === 'escrow') lines.push('from:     escrow (nothing attached; the escrow was debited)');
     lines.push(`payment:  ${result.txHash ?? '?'}`);
     if (opts.explorerUrl !== undefined && result.txHash !== undefined) {
       lines.push(`explorer: ${stripTrailingSlashes(opts.explorerUrl)}/txns/${result.txHash}`);

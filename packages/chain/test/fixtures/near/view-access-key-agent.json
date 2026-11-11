@@ -1,0 +1,18 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "result": {
+    "block_hash": "DwXQ7kyxTEupb1t6QmxetC9hzRzYAvzbM1mFFHUZ2U1b",
+    "block_height": 221004517,
+    "nonce": 186000000000012,
+    "permission": {
+      "FunctionCall": {
+        "allowance": "100000000000000000000000",
+        "method_names": [
+          "pay_from_escrow"
+        ],
+        "receiver_id": "neargate-registry.testnet"
+      }
+    }
+  }
+}

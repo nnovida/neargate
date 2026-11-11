@@ -5,7 +5,7 @@ import { KeyPair } from 'near-api-js';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { loadNearSigner as chainLoadNearSigner } from '@agentgate/chain';
 import { loadConfig, type AgentGateConfig } from '@agentgate/shared';
-import { cliSigner, loadNearSigner } from '../src/identity';
+import { cliAccountId, cliSigner, loadNearSigner } from '../src/identity';
 
 const SELLER = 'seller.testnet';
 const BUYER = 'buyer.testnet';
@@ -196,5 +196,37 @@ describe('cliSigner · live mode: --key-file resolution order (D4)', () => {
     expect(err).toMatchObject({ code: 'SIGNER_MISSING' });
     expect((err as Error).message).toContain('--account');
     expect((err as Error).message).toContain('BUYER_ACCOUNT_ID');
+  });
+});
+
+describe('cliAccountId · the account a read-only command acts as, no key touched', () => {
+  it('mock: --account, else MOCK_SELLER_ACCOUNT / MOCK_BUYER_ACCOUNT (defaults seller.mock / buyer.mock)', () => {
+    const config = loadConfig({ AGENTGATE_MODE: 'mock', MOCK_SELLER_ACCOUNT: 's.mock', MOCK_BUYER_ACCOUNT: 'b.mock' });
+    expect(cliAccountId(config, 'buyer')).toBe('b.mock');
+    expect(cliAccountId(config, 'seller')).toBe('s.mock');
+    expect(cliAccountId(config, 'buyer', { account: 'other.mock' })).toBe('other.mock');
+    expect(cliAccountId(loadConfig({ AGENTGATE_MODE: 'mock' }), 'buyer')).toBe('buyer.mock');
+  });
+
+  it('live: --account, else BUYER_ACCOUNT_ID; it reads no key file, so a missing key is no error', () => {
+    const config = liveConfig({ BUYER_ACCOUNT_ID: BUYER, BUYER_KEY_PATH: join(home, 'does-not-exist.json') });
+    expect(cliAccountId(config, 'buyer')).toBe(BUYER);
+    expect(cliAccountId(config, 'buyer', { account: 'agent.testnet' })).toBe('agent.testnet');
+    const err = (() => {
+      try {
+        cliAccountId(liveConfig(), 'buyer');
+      } catch (e) {
+        return e as Error;
+      }
+      throw new Error('expected a throw');
+    })();
+    expect(err).toMatchObject({ code: 'SIGNER_MISSING' });
+    expect(err.message).toContain('--account');
+  });
+
+  it('rejects a malformed --account with INVALID_ACCOUNT_ID', () => {
+    expect(() => cliAccountId(loadConfig({ AGENTGATE_MODE: 'mock' }), 'buyer', { account: 'Not An Account' })).toThrow(
+      expect.objectContaining({ code: 'INVALID_ACCOUNT_ID' }),
+    );
   });
 });

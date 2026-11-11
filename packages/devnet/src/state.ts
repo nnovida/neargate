@@ -1,6 +1,7 @@
 import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
 import {
   AgentGateError,
+  ESCROW_STORAGE_FEE_YOCTO,
   MIN_PRICE_YOCTO,
   MOCK_REGISTRY_ID,
   PAYMENT_STORAGE_FEE_YOCTO,
@@ -47,6 +48,9 @@ export const MAX_SERVICES = 1000;
  * 429 `devnet_capacity`; payments are never evicted, because dropping one would reopen its nonce.
  */
 export const MAX_PAYMENTS = 100_000;
+
+/** u128::MAX: the contract saturates `price + fee` here instead of overflowing. */
+const U128_MAX = (1n << 128n) - 1n;
 
 // Field limits in UTF-8 bytes, as lib.rs counts them (NAME_MAX, DESC_MAX, URL_MAX, TX_HASH_MAX).
 const NAME_MAX = 64;
@@ -140,6 +144,12 @@ export class DevnetState {
   private readonly attestations = new Map<number, AttestationRecord[]>();
   /** Keyed by nonce. Never deleted: that is what makes a nonce single-use. */
   private readonly payments = new Map<string, PaymentRecord>();
+  /**
+   * Prepaid escrow per account (lib.rs `escrow`). An account's first `deposit_escrow` creates its
+   * entry and entries are never deleted, so a drained escrow still counts as "has an entry".
+   * The registry account's balance holds every escrowed yocto.
+   */
+  private readonly escrow = new Map<string, bigint>();
   /** Newest first, capped at ACTIVITY_CAP. */
   private readonly activity: ActivityEvent[] = [];
   private txCounter = 0;
@@ -308,17 +318,68 @@ export class DevnetState {
     assertAccountId(signer, 'signer');
     const attached = parseYocto(depositYocto);
     this.assertCanFund(signer, attached);
+    return this.settlePayment(signer, serviceId, nonce, { kind: 'deposit', attached });
+  }
 
+  /**
+   * lib.rs `pay_from_escrow`: `pay` funded by the signer's escrow instead of an attached deposit.
+   * It takes no deposit (checked first, after the mock-only funding check), then runs the same
+   * checks and settlement as `pay`; the escrow is debited price + fee, the price goes to the
+   * payment target and nothing is refunded.
+   */
+  payFromEscrow(
+    signer: string,
+    serviceId: number,
+    nonce: string,
+    depositYocto: Yocto,
+  ): { txHash: string } {
+    assertAccountId(signer, 'signer');
+    const attached = parseYocto(depositYocto);
+    this.assertCanFund(signer, attached);
+    if (attached !== 0n) {
+      throw contractError(
+        'ERR_DEPOSIT_NOT_ALLOWED',
+        'pay_from_escrow takes no deposit, it spends the escrow',
+      );
+    }
+    return this.settlePayment(signer, serviceId, nonce, { kind: 'escrow' });
+  }
+
+  /**
+   * lib.rs `settle_payment`, shared by `pay` and `pay_from_escrow`, in the contract's order: the
+   * service exists and is active; the funding covers price + fee; the nonce is valid and unused.
+   * Then the escrow debit (if any), the payment record, its activity entry and the price to the
+   * payment target. (ERR_NO_NATIVE_PRICE cannot happen: the devnet registers only a native price.)
+   */
+  private settlePayment(
+    signer: string,
+    serviceId: number,
+    nonce: string,
+    funding: { kind: 'deposit'; attached: bigint } | { kind: 'escrow' },
+  ): { txHash: string } {
     const service = this.service(serviceId);
     if (!service.active) throw contractError('ERR_SERVICE_INACTIVE', 'the service is switched off');
     const price = parseYocto(service.priceYocto);
     const fee = parseYocto(PAYMENT_STORAGE_FEE_YOCTO);
-    const required = price + fee;
-    if (attached < required) {
-      throw contractError(
-        'ERR_DEPOSIT_TOO_LOW',
-        `attach at least ${required} yocto (price + storage fee)`,
-      );
+    const sum = price + fee;
+    const required = sum > U128_MAX ? U128_MAX : sum; // saturating, as in lib.rs
+    let escrowAfter: bigint | undefined;
+    if (funding.kind === 'deposit') {
+      if (funding.attached < required) {
+        throw contractError(
+          'ERR_DEPOSIT_TOO_LOW',
+          `attach at least ${required} yocto (price + storage fee)`,
+        );
+      }
+    } else {
+      const balance = this.escrow.get(signer) ?? 0n;
+      if (balance < required) {
+        throw contractError(
+          'ERR_ESCROW_INSUFFICIENT',
+          `the escrow holds ${balance} yocto, the payment needs ${required} (price + storage fee)`,
+        );
+      }
+      escrowAfter = balance - required;
     }
     if (!isValidNonce(nonce)) {
       throw contractError('ERR_INVALID_NONCE', 'the nonce must be 1 to 20 decimal digits');
@@ -332,9 +393,20 @@ export class DevnetState {
       );
     }
 
-    const { txHash, blockHeight, timestamp } = this.nextTx({ kind: 'pay', serviceId, nonce, payer: signer });
-    this.move(signer, service.paymentTarget, price);
-    this.move(signer, MOCK_REGISTRY_ID, fee);
+    const { txHash, blockHeight, timestamp } = this.nextTx({
+      kind: funding.kind === 'escrow' ? 'pay_from_escrow' : 'pay',
+      serviceId,
+      nonce,
+      payer: signer,
+    });
+    if (escrowAfter !== undefined) {
+      // The escrow sits in the registry's balance: the price leaves it, the fee stays.
+      this.escrow.set(signer, escrowAfter);
+      this.move(MOCK_REGISTRY_ID, service.paymentTarget, price);
+    } else {
+      this.move(signer, service.paymentTarget, price);
+      this.move(signer, MOCK_REGISTRY_ID, fee);
+    }
     this.payments.set(nonce, {
       nonce,
       serviceId,
@@ -356,6 +428,66 @@ export class DevnetState {
       timestamp,
       detail: `${signer} paid ${formatNear(price.toString())} to service #${serviceId}`,
     });
+    return { txHash };
+  }
+
+  /**
+   * lib.rs `deposit_escrow`. The attached deposit moves to the registry. An account without an
+   * escrow entry must attach more than ESCROW_STORAGE_FEE_YOCTO, which the registry keeps; the
+   * rest opens the escrow. An existing entry (even a drained one) takes any deposit above zero,
+   * credited in full.
+   */
+  depositEscrow(signer: string, depositYocto: Yocto): { txHash: string } {
+    assertAccountId(signer, 'signer');
+    const attached = parseYocto(depositYocto);
+    this.assertCanFund(signer, attached);
+    const existing = this.escrow.get(signer);
+    let fee = 0n;
+    if (existing !== undefined) {
+      if (attached === 0n) throw contractError('ERR_DEPOSIT_TOO_LOW', 'attach a deposit');
+    } else {
+      fee = parseYocto(ESCROW_STORAGE_FEE_YOCTO);
+      if (attached <= fee) {
+        throw contractError(
+          'ERR_DEPOSIT_TOO_LOW',
+          `the first deposit must be more than ${ESCROW_STORAGE_FEE_YOCTO} yocto (${formatNear(ESCROW_STORAGE_FEE_YOCTO)} escrow storage fee)`,
+        );
+      }
+    }
+    const { txHash } = this.nextTx({ kind: 'deposit_escrow', payer: signer });
+    this.move(signer, MOCK_REGISTRY_ID, attached);
+    this.escrow.set(signer, (existing ?? 0n) + attached - fee);
+    return { txHash };
+  }
+
+  /**
+   * lib.rs `withdraw_escrow`: exactly 1 yocto attached (only a full-access key can do that on
+   * NEAR), then 1 <= amount <= balance. The escrow is debited and `amount` goes back to the
+   * signer; the 1 yocto stays in the registry. The contract's re-credit callback for a failed
+   * transfer has no mock counterpart: a devnet transfer cannot fail.
+   */
+  withdrawEscrow(signer: string, amountYocto: Yocto, depositYocto: Yocto): { txHash: string } {
+    assertAccountId(signer, 'signer');
+    const attached = parseYocto(depositYocto);
+    this.assertCanFund(signer, attached);
+    if (attached !== 1n) {
+      throw contractError(
+        'ERR_ONE_YOCTO_REQUIRED',
+        'attach exactly 1 yocto (only a full-access key can withdraw)',
+      );
+    }
+    const amount = parseYocto(amountYocto);
+    const balance = this.escrow.get(signer) ?? 0n;
+    if (amount === 0n || amount > balance) {
+      throw contractError(
+        'ERR_ESCROW_INSUFFICIENT',
+        `the amount must be between 1 and the escrow balance, ${balance} yocto`,
+      );
+    }
+    const { txHash } = this.nextTx({ kind: 'withdraw_escrow', payer: signer, amount: amount.toString() });
+    this.escrow.set(signer, balance - amount);
+    this.move(signer, MOCK_REGISTRY_ID, attached);
+    this.move(MOCK_REGISTRY_ID, signer, amount);
     return { txHash };
   }
 
@@ -478,6 +610,12 @@ export class DevnetState {
     const payment = this.payments.get(nonce);
     if (!payment) throw new AgentGateError('ERR_PAYMENT_NOT_FOUND', 'no payment with this nonce', 404);
     return payment;
+  }
+
+  /** lib.rs `escrow_of`: `"0"` for an account that never deposited. */
+  escrowOf(accountId: string): Yocto {
+    assertAccountId(accountId, 'accountId');
+    return (this.escrow.get(accountId) ?? 0n).toString();
   }
 
   listActivity(limit: number): ActivityEvent[] {
