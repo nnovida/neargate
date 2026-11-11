@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AgentGateError, type GatewayReceipt } from '@agentgate/shared';
-import { fetchReceipt, receiptUrl, waitForReceipt } from '@agentgate/client';
+import { MAX_GATEWAY_BODY_BYTES, fetchReceipt, readCappedText, receiptUrl, waitForReceipt } from '@agentgate/client';
 
 const PAYMENT_TX = 'D'.repeat(44);
 const ATTEST_TX = 'E'.repeat(44);
@@ -108,6 +108,61 @@ describe('fetchReceipt', () => {
     }) as unknown as typeof fetch;
     await fetchReceipt(ENDPOINT, NONCE, { fetchImpl: impl, ...LOCAL });
     expect(seen[0]?.redirect).toBe('manual');
+  });
+});
+
+/** A 200 whose body is an endless stream of 16 KiB chunks; `pulled()` says how many were asked for. */
+function endlessBody(): { response: Response; pulled: () => number } {
+  let pulls = 0;
+  const chunk = new Uint8Array(16 * 1024).fill(0x61);
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls += 1;
+      controller.enqueue(chunk);
+      if (pulls >= 10_000) controller.close();
+    },
+  });
+  return { response: new Response(stream, { status: 200 }), pulled: () => pulls };
+}
+
+describe('readCappedText', () => {
+  it('reads a body within the cap whole, multi-byte characters included', async () => {
+    expect(await readCappedText(new Response('{"é":"✓"}'))).toBe('{"é":"✓"}');
+    expect(await readCappedText(new Response(null, { status: 204 }))).toBe('');
+  });
+
+  it('refuses a body over the cap and stops reading it (BODY_TOO_LARGE)', async () => {
+    const { response, pulled } = endlessBody();
+    expect(await codeOf(readCappedText(response))).toBe('BODY_TOO_LARGE');
+    // 64 KiB of 16 KiB chunks, plus what the stream queues ahead: nowhere near the 160 MB on offer.
+    expect(pulled()).toBeLessThan(40);
+    expect(MAX_GATEWAY_BODY_BYTES).toBe(64 * 1024);
+  });
+
+  it('refuses a declared content-length over the cap before reading anything', async () => {
+    const response = new Response('x', { headers: { 'content-length': String(MAX_GATEWAY_BODY_BYTES + 1) } });
+    expect(await codeOf(readCappedText(response))).toBe('BODY_TOO_LARGE');
+  });
+});
+
+describe('fetchReceipt · oversized answers', () => {
+  it('does not read an endless body (BODY_TOO_LARGE)', async () => {
+    const { response, pulled } = endlessBody();
+    const impl = (async () => response) as unknown as typeof fetch;
+    expect(await codeOf(fetchReceipt(ENDPOINT, NONCE, { fetchImpl: impl, ...LOCAL }))).toBe('BODY_TOO_LARGE');
+    expect(pulled()).toBeLessThan(40);
+  });
+
+  it('waitForReceipt stops at once on it: a gateway that misbehaves is not retried', async () => {
+    let asked = 0;
+    const impl = (async () => {
+      asked += 1;
+      return endlessBody().response;
+    }) as unknown as typeof fetch;
+    expect(
+      await codeOf(waitForReceipt(ENDPOINT, NONCE, { fetchImpl: impl, ...LOCAL, pollIntervalMs: 1, timeoutMs: 2_000 })),
+    ).toBe('BODY_TOO_LARGE');
+    expect(asked).toBe(1);
   });
 });
 

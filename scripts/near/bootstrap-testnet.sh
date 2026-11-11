@@ -26,44 +26,9 @@ DRY_RUN="${DRY_RUN:-0}"
 NETWORK=testnet
 ROLES=(registry seller gateway buyer)
 
-say() { printf '%s\n' "$*"; }
-die() { printf 'bootstrap-testnet: %s\n' "$*" >&2; exit 1; }
-
-# show ARG...: the arguments as a shell-pasteable command line.
-show() {
-  local a
-  for a in "$@"; do
-    if [[ $a =~ ^[A-Za-z0-9_@%+=:,./-]+$ ]]; then
-      printf '%s ' "$a"
-    elif [[ $a != *\'* ]]; then
-      printf "'%s' " "$a"
-    else
-      printf '%q ' "$a"
-    fi
-  done
-}
-
-# run CMD...: print the command; run it unless DRY_RUN=1.
-run() {
-  local line
-  line=$(show "$@")
-  if [ "$DRY_RUN" = 1 ]; then printf '[dry-run] %s\n' "${line% }"; else printf '+ %s\n' "${line% }"; fi
-  [ "$DRY_RUN" = 1 ] || "$@"
-}
-
-# account_exists ID: read-only JSON-RPC view_account. 0 = exists, 1 = does not; dies when the
-# RPC cannot be reached or answers something unexpected.
-account_exists() {
-  local id=$1 reply
-  reply=$(curl -fsS --max-time 20 -H 'content-type: application/json' \
-    -d "{\"jsonrpc\":\"2.0\",\"id\":\"neargate\",\"method\":\"query\",\"params\":{\"request_type\":\"view_account\",\"finality\":\"final\",\"account_id\":\"$id\"}}" \
-    "$RPC_URL") || die "could not reach $RPC_URL to check $id"
-  case $reply in
-    *'"code_hash"'*) return 0 ;;
-    *UNKNOWN_ACCOUNT* | *'does not exist'*) return 1 ;;
-    *) die "unexpected answer from $RPC_URL for $id: ${reply:0:200}" ;;
-  esac
-}
+SCRIPT_NAME=bootstrap-testnet
+# shellcheck source=scripts/near/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # A new account takes a block or two to show up at the RPC.
 wait_for_account() {

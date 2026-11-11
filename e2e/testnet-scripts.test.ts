@@ -7,7 +7,8 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { KeyPair } from 'near-api-js';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MockChainHttpClient, TxTimeoutError } from '@agentgate/chain';
 import { PaidNotServedError } from '@agentgate/client';
 import { createDemoAccounts } from '@neargate/cli';
@@ -17,12 +18,20 @@ import { startServer as startOracle } from '@agentgate/oracle';
 import {
   isNearTxHash,
   loadConfig,
+  nativeNearOption,
   type AgentGateConfig,
   type AnySigner,
   type ChainClient,
   type Logger,
+  type ServiceRecord,
 } from '@agentgate/shared';
-import { describeSeedFailure, resolveGatewayGuard, runSeed } from '../scripts/near/seed-testnet';
+import {
+  describeSeedFailure,
+  resolveGatewayGuard,
+  runSeed,
+  type SeedOptions,
+  type SeedProgress,
+} from '../scripts/near/seed-testnet';
 import { loadDotenv } from '../scripts/near/dotenv';
 import { runSmoke } from '../scripts/near/smoke-live';
 
@@ -251,6 +260,34 @@ describe('seed-testnet + smoke-live against the mock stack', () => {
     expect(failed.message).toContain('503');
   });
 
+  it('smoke: does not read an endless answer from the gateway (BODY_TOO_LARGE)', async () => {
+    let pulls = 0;
+    const chunk = new Uint8Array(16 * 1024).fill(0x61);
+    const fetchImpl = (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            pulls += 1;
+            controller.enqueue(chunk);
+            if (pulls >= 10_000) controller.close();
+          },
+        }),
+        { status: 402 },
+      )) as unknown as typeof fetch;
+    const refused = await rejection(
+      runSmoke({
+        chain: stack.chain,
+        serviceId: 1,
+        allowEmptyRegistry: false,
+        rejectPrivateHosts: false,
+        fetchImpl,
+        log: () => undefined,
+      }),
+    );
+    expect(refused.code).toBe('BODY_TOO_LARGE');
+    expect(pulls).toBeLessThan(40);
+  });
+
   it('smoke: keeps the private-host guard on unless told otherwise', async () => {
     const refused = await rejection(
       runSmoke({
@@ -392,6 +429,301 @@ describe('loadDotenv', () => {
       for (const key of ['PLAIN', 'QUOTED', 'SINGLE', 'EMPTY', 'SHELL']) delete process.env[`NEARGATE_TEST_${key}`];
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * runSeed against a live-shaped STUB: a testnet chain client and a gateway whose HTTP is a fetch
+ * stub (public IP-literal gateway, so no DNS and no socket). Reaches the paths the mock stack
+ * cannot: the mapping retry (a near signer), a paid call that is not served, and the unknown
+ * outcome of a sent transaction.
+ */
+describe('seed on a live-shaped stub', () => {
+  const REGISTER_TX = 'F'.repeat(44);
+  const PAY_TX = 'D'.repeat(44);
+  const ATTEST_TX = 'E'.repeat(44);
+  const NONCE = '424242';
+  const GATEWAY = 'https://1.1.1.1';
+  const PRICE = '10000000000000000000000'; // 0.01 NEAR
+  const FEE = '2000000000000000000000'; // 0.002 NEAR
+
+  interface Script {
+    /** HTTP status of each POST /services/1/map, in order (default 204 once they run out). */
+    mapStatuses?: number[];
+    /** The unpaid GET answers 200 instead of a 402 invoice. */
+    free?: boolean;
+    /** Status of the GET that carries the payment proof. */
+    paidStatus?: number;
+    /** Receipt body (null = 404). */
+    receipt?: unknown;
+    registerError?: Error;
+    payError?: Error;
+  }
+
+  function stub(script: Script = {}) {
+    const sent: string[] = [];
+    const posts: string[] = [];
+    const service: ServiceRecord = {
+      id: 1,
+      name: 'USD exchange rates',
+      description: 'seed',
+      endpointUrl: `${GATEWAY}/svc/1`,
+      priceYocto: PRICE,
+      paymentTarget: 'seller.testnet',
+      owner: 'seller.testnet',
+      attestor: 'gateway.testnet',
+      active: true,
+      createdAt: 1,
+      accepts: [nativeNearOption(PRICE)],
+    };
+    const chain = {
+      network: 'near-testnet',
+      registryId: 'registry.testnet',
+      accountExists: async () => true,
+      getService: async () => service,
+      getScore: async () => ({ totalCalls: 1, successCalls: 1 }),
+      registerService: async () => {
+        sent.push('registerService');
+        if (script.registerError) throw script.registerError;
+        return { serviceId: 1, txHash: REGISTER_TX };
+      },
+      pay: async () => {
+        sent.push('pay');
+        if (script.payError) throw script.payError;
+        return { txHash: PAY_TX };
+      },
+    } as unknown as ChainClient;
+    const mapStatuses = [...(script.mapStatuses ?? [])];
+    const invoice = Response.json(
+      {
+        x402Version: 1,
+        error: 'X-PAYMENT header is required',
+        accepts: [
+          {
+            scheme: 'exact',
+            network: 'near-testnet',
+            maxAmountRequired: '12000000000000000000000',
+            asset: 'NEAR',
+            payTo: 'registry.testnet',
+            resource: `${GATEWAY}/svc/1`,
+            description: 'seed',
+            maxTimeoutSeconds: 300,
+            extra: {
+              nonce: NONCE,
+              serviceId: 1,
+              expiresAtMs: Date.now() + 300_000,
+              settlement: 'neargate-registry-pay',
+              contractId: 'registry.testnet',
+              method: 'pay',
+              priceYocto: PRICE,
+              storageFeeYocto: FEE,
+              seller: 'seller.testnet',
+              caip2: 'near:testnet',
+            },
+          },
+        ],
+      },
+      { status: 402 },
+    );
+    const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `${GATEWAY}/services/1/map`) {
+        posts.push(url);
+        const status = mapStatuses.shift() ?? 204;
+        return new Response(status === 204 ? null : 'gateway down', { status });
+      }
+      if (url === `${GATEWAY}/svc/1`) {
+        if (script.free) return Response.json({ free: true });
+        if (!new Headers(init?.headers).has('X-PAYMENT')) return invoice.clone();
+        return Response.json({ rates: {} }, { status: script.paidStatus ?? 200 });
+      }
+      if (url === `${GATEWAY}/receipts/${NONCE}`) {
+        if (script.receipt === null) return Response.json({ error: 'receipt_not_found' }, { status: 404 });
+        return Response.json(
+          script.receipt ?? {
+            nonce: NONCE,
+            serviceId: 1,
+            paymentTxHash: PAY_TX,
+            attestation: { status: 'recorded', txHash: ATTEST_TX },
+          },
+        );
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }) as unknown as typeof fetch;
+    return { chain, fetchImpl, sent, posts };
+  }
+
+  function seedOptions(
+    s: ReturnType<typeof stub>,
+    progress: SeedProgress,
+    log: string[],
+  ): SeedOptions {
+    return {
+      chain: s.chain,
+      seller: { kind: 'near', accountId: 'seller.testnet', secretKey: KeyPair.fromRandom('ed25519').toString() },
+      buyer: { kind: 'near', accountId: 'buyer.testnet' },
+      attestor: 'gateway.testnet',
+      gatewayUrl: GATEWAY,
+      upstreamUrl: 'https://open.er-api.com/v6/latest/USD',
+      priceNear: '0.01',
+      mode: 'live',
+      nearNetwork: 'testnet',
+      explorerUrl: EXPLORER,
+      allowLocalGateway: false,
+      fetchImpl: s.fetchImpl,
+      settleDelayMs: 0,
+      mappingRetryDelayMs: 1,
+      attestationTimeoutMs: 300,
+      pollIntervalMs: 5,
+      progress,
+      log: (line) => log.push(line),
+    };
+  }
+
+  /** wrapService prints its own mapping warning to stderr; keep the test output clean. */
+  async function quietly<T>(run: () => Promise<T>): Promise<T> {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      return await run();
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it('the happy path on the stub prints the whole triple (the harness itself works)', async () => {
+    const s = stub();
+    const log: string[] = [];
+    const progress: SeedProgress = {};
+    const result = await runSeed(seedOptions(s, progress, log));
+    expect(result).toMatchObject({ serviceId: 1, registerTxHash: REGISTER_TX, paymentTxHash: PAY_TX, attestationTxHash: ATTEST_TX });
+    expect(log).toContain('registered service #1');
+    expect(log).toContain(`paid: tx ${PAY_TX}`);
+    expect(log).toContain(`attested: tx ${ATTEST_TX}`);
+    expect(progress).toEqual({ serviceId: 1, registerTxHash: REGISTER_TX, paymentTxHash: PAY_TX });
+    expect(s.sent).toEqual(['registerService', 'pay']);
+  });
+
+  it('retryMapping: a mapping that failed after registration is retried (and only the mapping), then the run goes on', async () => {
+    const s = stub({ mapStatuses: [503, 503, 204] }); // wrap's own POST, then retry 1 fails, retry 2 maps it
+    const log: string[] = [];
+    const result = await quietly(() => runSeed(seedOptions(s, {}, log)));
+    expect(result.serviceId).toBe(1);
+    expect(s.posts).toHaveLength(3);
+    expect(s.sent).toEqual(['registerService', 'pay']); // registered once
+    expect(log.filter((l) => l.startsWith('mapping failed'))).toHaveLength(2);
+  });
+
+  it('retryMapping: after 3 failed retries it stops with SEED_MAPPING_FAILED, never pays, never registers again', async () => {
+    const s = stub({ mapStatuses: [503, 503, 503, 503, 503] });
+    const progress: SeedProgress = {};
+    const refused = await quietly(() => rejection(runSeed(seedOptions(s, progress, []))));
+    expect(refused.code).toBe('SEED_MAPPING_FAILED');
+    expect(refused.message).toContain('service #1 is registered but the gateway has not mapped it');
+    expect(s.posts).toHaveLength(4); // wrap's POST + 3 retries
+    expect(s.sent).toEqual(['registerService']);
+    const report = describeSeedFailure(Object.assign(new Error(refused.message), { code: refused.code }), EXPLORER, progress);
+    expect(report.lines.join('\n')).toMatch(/service #1 is registered/);
+  });
+
+  it('SEED_NOT_PAID: a gateway that answers without asking for payment stops the run before any pay', async () => {
+    const s = stub({ free: true });
+    const progress: SeedProgress = {};
+    const refused = await rejection(runSeed(seedOptions(s, progress, [])));
+    expect(refused.code).toBe('SEED_NOT_PAID');
+    expect(s.sent).toEqual(['registerService']);
+    expect(progress).toEqual({ serviceId: 1, registerTxHash: REGISTER_TX });
+  });
+
+  it('SEED_NOT_SERVED: a paid call whose upstream failed stops after the pay, with the payment named', async () => {
+    const s = stub({ paidStatus: 500 });
+    const log: string[] = [];
+    const progress: SeedProgress = {};
+    const refused = await rejection(runSeed(seedOptions(s, progress, log)));
+    expect(refused.code).toBe('SEED_NOT_SERVED');
+    expect(refused.message).toContain(PAY_TX);
+    expect(log).toContain(`paid: tx ${PAY_TX}`);
+    expect(s.sent).toEqual(['registerService', 'pay']);
+    expect(progress.paymentTxHash).toBe(PAY_TX);
+  });
+
+  it('a TxTimeoutError from registerService stops at once: explorer link, exit 2, nothing retried, nothing else sent', async () => {
+    const timeout = new TxTimeoutError('the NEAR RPC timed out after the register_service tx was sent', REGISTER_TX, EXPLORER);
+    const s = stub({ registerError: timeout });
+    const progress: SeedProgress = {};
+    const err = await runSeed(seedOptions(s, progress, [])).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBe(timeout);
+    expect(s.sent).toEqual(['registerService']); // one attempt, no retry, no pay
+    const report = describeSeedFailure(err, EXPLORER, progress);
+    expect(report.exitCode).toBe(2);
+    const text = report.lines.join('\n');
+    expect(text).toContain(`${EXPLORER}/txns/${REGISTER_TX}`);
+    expect(text).toMatch(/do not retry register_service or pay/i);
+    expect(text).not.toMatch(/is registered/); // whether it was registered is exactly what is unknown
+  });
+
+  it('a TxTimeoutError from pay stops at once: link, exit 2, the service is named as registered, no second pay', async () => {
+    const timeout = new TxTimeoutError('the NEAR RPC timed out after the pay tx was sent', PAY_TX, EXPLORER);
+    const s = stub({ payError: timeout });
+    const progress: SeedProgress = {};
+    const err = await runSeed(seedOptions(s, progress, [])).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBe(timeout);
+    expect(s.sent).toEqual(['registerService', 'pay']);
+    const report = describeSeedFailure(err, EXPLORER, progress);
+    expect(report.exitCode).toBe(2);
+    const text = report.lines.join('\n');
+    expect(text).toContain(`${EXPLORER}/txns/${PAY_TX}`);
+    expect(text).toContain('service #1 is registered');
+    expect(text).toMatch(/do not rerun the seed/i);
+  });
+
+  it('any failure after the pay names the service and the payment and says not to rerun, whatever its kind', async () => {
+    const s = stub({ receipt: null }); // the gateway has no receipt: SEED_NO_RECEIPT
+    const progress: SeedProgress = {};
+    const err = await runSeed(seedOptions(s, progress, [])).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect((err as { code?: string }).code).toBe('SEED_NO_RECEIPT');
+    const report = describeSeedFailure(err, EXPLORER, progress);
+    expect(report.exitCode).toBe(1);
+    const text = report.lines.join('\n');
+    expect(text).toContain('service #1 is registered');
+    expect(text).toContain(`${EXPLORER}/txns/${REGISTER_TX}`);
+    expect(text).toContain(`paid (tx ${PAY_TX})`);
+    expect(text).toContain(`${EXPLORER}/txns/${PAY_TX}`);
+    expect(text).toMatch(/do not rerun the seed/i);
+    expect(text).toMatch(/do not pay for it again/i);
+  });
+
+  it('a failure after the register but before the pay says how to finish by hand', async () => {
+    const s = stub({ free: true });
+    const progress: SeedProgress = {};
+    const err = await runSeed(seedOptions(s, progress, [])).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    const text = describeSeedFailure(err, EXPLORER, progress).lines.join('\n');
+    expect(text).toContain('service #1 is registered');
+    expect(text).toMatch(/do not rerun the seed/i);
+    expect(text).toContain('neargate -- buy 1');
+    expect(text).not.toContain('paid (tx');
+  });
+
+  it('a failure before anything was sent adds no state lines', async () => {
+    const s = stub();
+    const progress: SeedProgress = {};
+    const err = await runSeed({ ...seedOptions(s, progress, []), buyer: { kind: 'near', accountId: 'seller.testnet' } }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(describeSeedFailure(err, EXPLORER, progress).lines).toHaveLength(1);
+    expect(s.sent).toEqual([]);
   });
 });
 

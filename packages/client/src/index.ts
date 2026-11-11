@@ -576,7 +576,52 @@ export interface WaitForReceiptOpts extends ReceiptFetchOpts {
 }
 
 /** Failures that retrying cannot fix: `waitForReceipt` rethrows these at once. */
-const FATAL_RECEIPT_CODES = new Set(['BAD_URL', 'FORBIDDEN_HOST', 'REDIRECT_REFUSED', 'INVALID_NONCE', 'BAD_RECEIPT']);
+const FATAL_RECEIPT_CODES = new Set([
+  'BAD_URL',
+  'FORBIDDEN_HOST',
+  'REDIRECT_REFUSED',
+  'INVALID_NONCE',
+  'BAD_RECEIPT',
+  'BODY_TOO_LARGE',
+]);
+
+/**
+ * The most a gateway may send back in an answer that is not the paid response itself (a 402
+ * invoice, a receipt): both are well under 4 KiB. The gateway is seller-controlled, so what it
+ * streams is not trusted to end.
+ */
+export const MAX_GATEWAY_BODY_BYTES = 64 * 1024;
+
+/**
+ * Reads a response body as text, refusing (BODY_TOO_LARGE) one over `maxBytes`: a declared
+ * content-length over the cap fails before any byte is read, and a stream is cancelled the
+ * moment it passes the cap, so an endless body costs at most the cap in memory.
+ */
+export async function readCappedText(res: Response, maxBytes: number = MAX_GATEWAY_BODY_BYTES): Promise<string> {
+  const tooLarge = (): AgentGateError =>
+    new AgentGateError('BODY_TOO_LARGE', `the gateway's answer is over ${maxBytes} bytes: not reading it`, 502);
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body?.cancel().catch(() => undefined);
+    throw tooLarge();
+  }
+  if (res.body === null) return '';
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw tooLarge();
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
 
 /**
  * The gateway's receipts URL for a paid call: `<gateway>/receipts/<nonce>`, taken from the
@@ -626,8 +671,9 @@ export async function fetchReceipt(
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(await res.text()) as unknown;
-  } catch {
+    raw = JSON.parse(await readCappedText(res)) as unknown;
+  } catch (err) {
+    if (err instanceof AgentGateError) throw err; // BODY_TOO_LARGE
     throw new AgentGateError('BAD_RECEIPT', `invalid gateway receipt: ${quoteUrl(url)} did not answer JSON`, 502);
   }
   const receipt = parseGatewayReceipt(raw);

@@ -2,13 +2,24 @@ import { afterEach, describe, expect, it } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp } from 'node:fs/promises';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { TxTimeoutError } from '@agentgate/chain';
 import { isNearTxHash, type AnySigner, type GatewayReceipt } from '@agentgate/shared';
-import { ReceiptStore, RECEIPT_CAP } from '../src/index';
+import {
+  createApp,
+  MemoryAttestationQueue,
+  ReceiptStore,
+  RECEIPT_CAP,
+  type AppInternals,
+  type PendingAttestation,
+} from '../src/index';
 import {
   adminMap,
   bootGateway,
   payInvoice,
   proofHeaders,
+  silentLogger,
   startUpstream,
   testConfig,
   until,
@@ -148,6 +159,8 @@ describe('GET /receipts/:nonce', () => {
     for (const nonce of [NONCE, 'abc', '1'.repeat(21), '0x1f']) {
       const res = await getReceipt(gw, nonce);
       expect(res.status, nonce).toBe(404);
+      // A 404 can become a 200 a moment later (the receipt is opened as the buyer is served): never cache it.
+      expect(res.headers.get('cache-control'), nonce).toBe('no-store');
       expect(await res.json()).toEqual({ error: 'receipt_not_found' });
     }
   });
@@ -230,11 +243,12 @@ describe('GET /receipts/:nonce', () => {
   });
 
   it('every attempt failing ends as failed (no tx hash)', async () => {
-    const { gw } = await boot({ attestationRetryDelayMs: 20, attestationMaxAttempts: 2 });
+    // The retry waits 300 ms, so the receipt is still pending right after the first attempt failed.
+    const { gw } = await boot({ attestationRetryDelayMs: 300, attestationMaxAttempts: 2 });
     gw.fake.failAttestations = 99;
     const proof = await payInvoice(gw, 1);
     expect((await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) })).status).toBe(200);
-    expect((await receiptOf(gw, proof.nonce)).attestation.status).toBe('pending'); // first attempt may still be retrying
+    expect((await receiptOf(gw, proof.nonce)).attestation.status).toBe('pending');
     await until(() => gw.fake.attestationCalls === 2);
     const receipt = await pollUntilSettled(gw, proof.nonce);
     expect(receipt.attestation).toEqual({ status: 'failed' });
@@ -247,6 +261,52 @@ describe('GET /receipts/:nonce', () => {
     expect((await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) })).status).toBe(200);
     const receipt = await pollUntilSettled(gw, proof.nonce);
     expect(receipt.attestation).toEqual({ status: 'recorded' });
+  });
+
+  it('an attestation that timed out and then finds the payment already attested names the tx that timed out', async () => {
+    const fake = new ScriptedAttestChain();
+    fake.script.push(
+      () => Promise.reject(new TxTimeoutError('the NEAR RPC timed out after the attestation tx was sent', TX('D'), 'https://explorer.test')),
+      () => Promise.reject(contractError('ERR_ALREADY_ATTESTED', 'this payment is already attested')),
+    );
+    const { gw } = await boot({ fake, attestationRetryDelayMs: 20 });
+    const proof = await payInvoice(gw, 1);
+    expect((await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) })).status).toBe(200);
+    const receipt = await pollUntilSettled(gw, proof.nonce);
+    expect(receipt.attestation).toEqual({ status: 'recorded', txHash: TX('D') });
+    expect(fake.calls).toBe(2);
+  });
+
+  it('a plain failure before ERR_ALREADY_ATTESTED names no tx (nothing was sent)', async () => {
+    const fake = new ScriptedAttestChain();
+    fake.script.push(
+      () => Promise.reject(new Error('the NEAR RPC is unreachable')),
+      () => Promise.reject(contractError('ERR_ALREADY_ATTESTED', 'this payment is already attested')),
+    );
+    const { gw } = await boot({ fake, attestationRetryDelayMs: 20 });
+    const proof = await payInvoice(gw, 1);
+    expect((await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) })).status).toBe(200);
+    expect((await pollUntilSettled(gw, proof.nonce)).attestation).toEqual({ status: 'recorded' });
+  });
+
+  it('a queue that cannot enqueue settles the receipt failed instead of leaving it pending', async () => {
+    class BrokenQueue extends MemoryAttestationQueue {
+      override enqueue(_item: PendingAttestation): Promise<void> {
+        return Promise.reject(new Error('disk full'));
+      }
+    }
+    const { gw, up, stop } = await bootWithQueue(new BrokenQueue());
+    try {
+      const proof = await payInvoice(gw, 1);
+      const served = await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
+      expect(served.status).toBe(200); // the buyer is served regardless
+      const receipt = await pollUntilSettled(gw, proof.nonce);
+      expect(receipt.attestation).toEqual({ status: 'failed' });
+      expect(gw.fake.attestationCalls).toBe(0);
+    } finally {
+      await stop();
+      await up.close();
+    }
   });
 
   it('an attestation replayed after a restart gets its receipt back', async () => {
@@ -312,4 +372,51 @@ async function pollUntilSettled(gw: TestGateway, nonce: string): Promise<Gateway
     if (Date.now() > deadline) throw new Error(`receipt ${nonce} still pending after 5 s`);
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+}
+
+/** recordAttestation answers a script of outcomes first (one per call), then behaves like the fake. */
+class ScriptedAttestChain extends FakeChainClient {
+  readonly script: Array<() => Promise<{ txHash: string }>> = [];
+  calls = 0;
+
+  override recordAttestation(
+    input: Parameters<FakeChainClient['recordAttestation']>[0],
+    signer: AnySigner,
+  ): Promise<{ txHash: string }> {
+    this.calls += 1;
+    const step = this.script.shift();
+    return step === undefined ? super.recordAttestation(input, signer) : step();
+  }
+}
+
+/** A gateway built straight from createApp so the test can inject its own attestation queue. */
+async function bootWithQueue(
+  queue: MemoryAttestationQueue,
+): Promise<{ gw: TestGateway; up: TestUpstream; stop(): Promise<void> }> {
+  const fake = new FakeChainClient();
+  fake.addService({ id: 1 });
+  const up = await startUpstream();
+  const config = testConfig();
+  const upstreamsFile = path.join(await mkdtemp(path.join(os.tmpdir(), 'agentgate-rcpt-')), 'upstreams.json');
+  const app = createApp({ config, chain: fake, logger: silentLogger, upstreamsFile, attestationQueue: queue });
+  const server: Server = await new Promise((resolve) => {
+    const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+  });
+  const gw: TestGateway = {
+    baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    fake,
+    config,
+    upstreamsFile,
+    close: () => Promise.resolve(),
+  };
+  await adminMap(gw, 1, `${up.url}/data`);
+  return {
+    gw,
+    up,
+    async stop() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await (app.locals['agentgate'] as AppInternals).dispose();
+    },
+  };
 }

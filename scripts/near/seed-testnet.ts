@@ -85,8 +85,26 @@ export interface SeedOptions {
   allowLocalGateway: boolean;
   attestationTimeoutMs?: number;
   pollIntervalMs?: number;
+  /** Wait after the payment before presenting the proof (ms); the client's live default when unset. */
+  settleDelayMs?: number;
+  /** Pause between mapping retries (ms). Default 5000. */
+  mappingRetryDelayMs?: number;
   fetchImpl?: typeof fetch;
+  /**
+   * Filled in as the run goes (service registered, payment made). A caller that catches a failure
+   * hands it to `describeSeedFailure`, which then says what already happened and not to redo it.
+   */
+  progress?: SeedProgress;
   log: (line: string) => void;
+}
+
+/** What a seed run has already done on chain. */
+export interface SeedProgress {
+  /** Set once `register_service` succeeded. */
+  serviceId?: number;
+  registerTxHash?: string;
+  /** Set once the buy's `pay` succeeded. */
+  paymentTxHash?: string;
 }
 
 export interface SeedResult {
@@ -154,7 +172,7 @@ async function retryMapping(
   let failure = firstFailure ?? 'the mapping request failed';
   for (let attempt = 1; attempt <= MAPPING_RETRIES; attempt += 1) {
     opts.log(`mapping failed (${failure.split('\n')[0] ?? ''}); retrying the mapping only (${attempt}/${MAPPING_RETRIES})`);
-    await sleep(MAPPING_RETRY_DELAY_MS);
+    await sleep(opts.mappingRetryDelayMs ?? MAPPING_RETRY_DELAY_MS);
     try {
       await mapService({
         serviceId,
@@ -163,6 +181,7 @@ async function retryMapping(
         signer: opts.seller,
         mode: opts.mode,
         nearNetwork: opts.nearNetwork,
+        ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
       });
       return;
     } catch (err) {
@@ -187,6 +206,7 @@ export async function runSeed(opts: SeedOptions): Promise<SeedResult> {
   const explorer = stripTrailingSlashes(opts.explorerUrl);
   const link = (hash: string): string => `  ${explorer}/txns/${hash}`;
   const pollMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const progress: SeedProgress = opts.progress ?? {};
 
   // -- checks that must pass before anything is sent ---------------------------------------
   if (opts.buyer.accountId === opts.seller.accountId) {
@@ -232,6 +252,8 @@ export async function runSeed(opts: SeedOptions): Promise<SeedResult> {
     ...(opts.adminToken !== undefined ? { adminToken: opts.adminToken } : {}),
     ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
   });
+  progress.serviceId = wrapped.serviceId;
+  progress.registerTxHash = wrapped.txHash;
   log(`registered service #${wrapped.serviceId}`);
   log(link(wrapped.txHash));
   if (!wrapped.adminOk) await retryMapping(opts, wrapped.serviceId, wrapped.adminWarning);
@@ -244,6 +266,7 @@ export async function runSeed(opts: SeedOptions): Promise<SeedResult> {
     id: wrapped.serviceId,
     maxNear: cap,
     rejectPrivateHosts: guard.rejectPrivateHosts,
+    ...(opts.settleDelayMs !== undefined ? { settleDelayMs: opts.settleDelayMs } : {}),
     ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
   });
   const { result } = bought;
@@ -255,13 +278,14 @@ export async function runSeed(opts: SeedOptions): Promise<SeedResult> {
     );
   }
   const paymentTxHash = result.txHash;
+  progress.paymentTxHash = paymentTxHash;
   log(`paid: tx ${paymentTxHash}`);
   log(link(paymentTxHash));
   if (result.status < 200 || result.status >= 300) {
     throw new AgentGateError(
       'SEED_NOT_SERVED',
       `paid (tx ${paymentTxHash}), but the upstream answered HTTP ${result.status}. The gateway attests such a ` +
-        'call as failed. Check SEED_UPSTREAM_URL; do not pay for the same call again.',
+        'call as failed. Check SEED_UPSTREAM_URL.',
       502,
     );
   }
@@ -274,12 +298,11 @@ export async function runSeed(opts: SeedOptions): Promise<SeedResult> {
     pollIntervalMs: pollMs,
     ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
   });
-  const paidNote = `The payment went through (tx ${paymentTxHash}); do not pay for it again.`;
   if (receipt === null) {
     throw new AgentGateError(
       'SEED_NO_RECEIPT',
       `the gateway has no receipt for nonce ${result.requirements.extra.nonce} (it restarted, or GATEWAY_PUBLIC_URL ` +
-        `is not the gateway that served the call). ${paidNote}`,
+        'is not the gateway that served the call).',
       502,
     );
   }
@@ -293,7 +316,7 @@ export async function runSeed(opts: SeedOptions): Promise<SeedResult> {
       skipped_self_paid: 'the payment counted as self-paid, so it is never attested',
       skipped_upstream_failed: 'the gateway could not reach the upstream, so it did not attest',
     };
-    throw new AgentGateError('SEED_NOT_ATTESTED', `${why[status] ?? status}. ${paidNote}`, 502);
+    throw new AgentGateError('SEED_NOT_ATTESTED', `${why[status] ?? status}.`, 502);
   }
   const attestationTxHash = receipt.attestation.txHash ?? null;
   if (attestationTxHash !== null) {
@@ -322,32 +345,52 @@ export async function runSeed(opts: SeedOptions): Promise<SeedResult> {
 /**
  * What the CLI prints, and the exit code it ends with, for a failed seed. A change call whose
  * outcome is unknown, or a paid call that was not served, names its tx and says what NOT to do:
- * the seed never retries a `register_service` or a `pay`.
+ * the seed never retries a `register_service` or a `pay`. Whatever the failure, if the run had
+ * already registered the service (or paid) it says so and that the seed must not be rerun: a
+ * rerun registers a second service.
  */
-export function describeSeedFailure(err: unknown, explorerUrl: string): { lines: string[]; exitCode: number } {
+export function describeSeedFailure(
+  err: unknown,
+  explorerUrl: string,
+  progress: SeedProgress = {},
+): { lines: string[]; exitCode: number } {
   const explorer = stripTrailingSlashes(explorerUrl);
+  const tx = (hash: string): string => `${explorer}/txns/${hash}`;
+  let lines: string[];
+  let exitCode = 1;
   if (err instanceof TxTimeoutError) {
-    return {
-      lines: [
-        `seed stopped: ${err.message}`,
-        `tx: ${explorer}/txns/${err.txHash}`,
-        'Its outcome is unknown. Look the tx up before anything else; do not retry register_service or pay ' +
-          'until you know whether it landed (a retry can register or pay twice).',
-      ],
-      exitCode: 2,
-    };
+    exitCode = 2;
+    lines = [
+      `seed stopped: ${err.message}`,
+      `tx: ${tx(err.txHash)}`,
+      'Its outcome is unknown. Look the tx up before anything else; do not retry register_service or pay ' +
+        'until you know whether it landed (a retry can register or pay twice).',
+    ];
+  } else if (err instanceof PaidNotServedError) {
+    lines = [
+      `seed stopped: ${err.message}`,
+      `payment tx: ${tx(err.txHash)}`,
+      `Re-present the proof (tx above, nonce ${err.nonce}) to the gateway once it serves; do not pay again.`,
+    ];
+  } else {
+    lines = [`seed failed: ${formatError(err)}`];
   }
-  if (err instanceof PaidNotServedError) {
-    return {
-      lines: [
-        `seed stopped: ${err.message}`,
-        `payment tx: ${explorer}/txns/${err.txHash}`,
-        `Re-present the proof (tx above, nonce ${err.nonce}) to the gateway once it serves; do not pay again.`,
-      ],
-      exitCode: 1,
-    };
+  if (progress.serviceId !== undefined) {
+    lines.push(
+      `service #${progress.serviceId} is registered` +
+        (progress.registerTxHash !== undefined ? ` (register tx: ${tx(progress.registerTxHash)})` : '') +
+        ': do not rerun the seed, a rerun registers a second service.',
+    );
+    if (progress.paymentTxHash !== undefined) {
+      lines.push(`The call is paid (tx ${progress.paymentTxHash}): do not pay for it again. ${tx(progress.paymentTxHash)}`);
+    } else if (!(err instanceof TxTimeoutError)) {
+      lines.push(
+        `To finish by hand, once the cause is fixed: npm run neargate -- buy ${progress.serviceId} as the buyer ` +
+          'account, then npm run smoke:live.',
+      );
+    }
   }
-  return { lines: [`seed failed: ${formatError(err)}`], exitCode: 1 };
+  return { lines, exitCode };
 }
 
 function requiredEnv(name: string, why: string): string {
@@ -382,6 +425,7 @@ async function main(): Promise<void> {
   const seller = await cliSigner(config, 'seller');
   const buyer = await cliSigner(config, 'buyer');
   const upstreamUrl = process.env['SEED_UPSTREAM_URL']?.trim() || DEFAULT_SEED_UPSTREAM_URL;
+  const progress: SeedProgress = {};
   try {
     await runSeed({
       chain,
@@ -395,10 +439,11 @@ async function main(): Promise<void> {
       nearNetwork: config.nearNetwork,
       explorerUrl: config.nearExplorerUrl,
       allowLocalGateway: process.env['SEED_ALLOW_LOCAL_GATEWAY'] === '1',
+      progress,
       log: (line) => console.log(line),
     });
   } catch (err) {
-    const report = describeSeedFailure(err, config.nearExplorerUrl);
+    const report = describeSeedFailure(err, config.nearExplorerUrl, progress);
     for (const line of report.lines) console.error(line);
     process.exit(report.exitCode);
   }

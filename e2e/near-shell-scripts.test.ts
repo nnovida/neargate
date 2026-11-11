@@ -26,6 +26,19 @@ while [ $# -gt 0 ]; do
   shift
 done
 id=$(printf '%s' "$body" | sed -n 's/.*"account_id":"\\([^"]*\\)".*/\\1/p')
+case $body in
+  *'"request_type":"call_function"'*)
+    # services_count: the decimal count in $STUB_STATE/count (default 0) as the JSON bytes of its text.
+    count=$(cat "$STUB_STATE/count" 2>/dev/null || echo 0)
+    if [ "$count" = unreadable ]; then
+      printf '{"jsonrpc":"2.0","error":{"name":"HANDLER_ERROR","cause":{"name":"NO_CONTRACT_CODE"}},"id":"neargate"}'
+      exit 0
+    fi
+    bytes=""
+    for ((i = 0; i < \${#count}; i++)); do bytes="$bytes\${bytes:+,}$(printf '%d' "'\${count:i:1}")"; done
+    printf '{"jsonrpc":"2.0","result":{"result":[%s],"logs":[]},"id":"neargate"}' "$bytes"
+    exit 0 ;;
+esac
 if [ -f "$STUB_STATE/$id" ]; then
   read -r amount code < "$STUB_STATE/$id"
   printf '{"jsonrpc":"2.0","result":{"amount":"%s","code_hash":"%s","locked":"0"},"id":"neargate"}' "$amount" "$code"
@@ -48,6 +61,10 @@ case "$1 $2" in
   "contract call-function") echo "0" ;;
 esac
 if [ "$1" = tokens ]; then echo "balance of $2: 10 NEAR"; fi
+`,
+  // The scripts wait a couple of seconds between polls; the stubs answer at once.
+  sleep: `#!/usr/bin/env bash
+exit 0
 `,
   cargo: `#!/usr/bin/env bash
 echo "cargo $*" >> "$STUB_LOG"
@@ -72,7 +89,7 @@ describe('scripts/near shell scripts (bash, stub near/curl/cargo)', () => {
     await mkdir(path.join(repo, 'contracts/registry'), { recursive: true });
     await mkdir(bin, { recursive: true });
     await mkdir(home, { recursive: true });
-    for (const name of ['bootstrap-testnet.sh', 'deploy-registry.sh']) {
+    for (const name of ['bootstrap-testnet.sh', 'deploy-registry.sh', 'lib.sh']) {
       await copyFile(path.join(REPO_ROOT, 'scripts/near', name), path.join(repo, 'scripts/near', name));
     }
     for (const [name, body] of Object.entries(STUBS)) {
@@ -215,7 +232,8 @@ describe('scripts/near shell scripts (bash, stub near/curl/cargo)', () => {
           'prepaid-gas 100 Tgas attached-deposit 0 NEAR network-config testnet sign-with-legacy-keychain send',
         `near contract call-function as-read-only ${REGISTRY} services_count json-args {} network-config testnet now`,
       ]);
-      expect(run.stdout).toContain('== services_count (expect 0');
+      expect(run.stdout).toContain('== services_count (must be 0 on a fresh deploy)');
+      expect(run.stdout).toContain('services_count: 0 (as expected on a fresh deploy)');
       expect(run.stdout).toMatch(/^wasm: 9 bytes, sha256 [0-9a-f]{64}$/m);
       expect(run.stdout).toContain(`REGISTRY_CONTRACT_ID=${REGISTRY}`);
     });
@@ -293,7 +311,7 @@ describe('scripts/near shell scripts (bash, stub near/curl/cargo)', () => {
       await mkdir(brokenBin, { recursive: true });
       await writeFile(path.join(brokenBin, 'cargo'), '#!/usr/bin/env bash\necho "cargo $*" >> "$STUB_LOG"\n');
       await chmod(path.join(brokenBin, 'cargo'), 0o755);
-      for (const name of ['curl', 'near']) {
+      for (const name of ['curl', 'near', 'sleep']) {
         await copyFile(path.join(bin, name), path.join(brokenBin, name));
         await chmod(path.join(brokenBin, name), 0o755);
       }
@@ -301,6 +319,53 @@ describe('scripts/near shell scripts (bash, stub near/curl/cargo)', () => {
       expect(run.code).not.toBe(0);
       expect(run.stderr).toContain('wasm not found');
       expect(run.calls.some((c) => c.startsWith('near contract deploy'))).toBe(false);
+    });
+
+    it('fails after deploying when services_count is not 0 on a fresh deploy', async () => {
+      await putAccount(REGISTRY);
+      await writeFile(path.join(state, 'count'), '3');
+      const run = await bash('deploy-registry.sh', env);
+      expect(run.code).not.toBe(0);
+      expect(run.stderr).toContain('services_count is 3 on a fresh deploy, expected 0');
+      // it did deploy: the failure is the check after it
+      expect(run.calls.some((c) => c.startsWith('near contract deploy'))).toBe(true);
+    });
+
+    it('fails when services_count cannot be read after the deploy, and says to read it by hand', async () => {
+      await putAccount(REGISTRY);
+      await writeFile(path.join(state, 'count'), 'unreadable');
+      const run = await bash('deploy-registry.sh', env);
+      expect(run.code).not.toBe(0);
+      expect(run.stderr).toContain('could not read services_count');
+      expect(run.calls.filter((c) => c.includes('call_function'))).toHaveLength(5); // five tries
+    });
+
+    it('an upgrade (FORCE_REDEPLOY) prints the current services_count instead of requiring 0', async () => {
+      await putAccount(REGISTRY, { code: 'SOMEOLDCODEHASH' });
+      await writeFile(path.join(state, 'count'), '12');
+      const run = await bash('deploy-registry.sh', { ...env, FORCE_REDEPLOY: '1' });
+      expect(run.code, run.stderr).toBe(0);
+      expect(run.stdout).toContain('== services_count (an upgrade keeps the existing services: this is the current count)');
+      expect(run.stdout).toContain('services_count: 12 (current)');
+    });
+
+    it('DRY_RUN=1 with FORCE_REDEPLOY=1 shows both plans: it cannot know which init call applies', async () => {
+      const run = await bash('deploy-registry.sh', { ...env, DRY_RUN: '1', FORCE_REDEPLOY: '1' });
+      expect(run.code, run.stderr).toBe(0);
+      expect(run.calls).toEqual([]);
+      expect(run.stdout).toContain('the init call is chosen at run time from the on-chain code hash');
+      const deploys = run.stdout.split('\n').filter((l) => l.startsWith('[dry-run] near contract deploy'));
+      expect(deploys).toHaveLength(2);
+      expect(deploys[0]).toContain('with-init-call new');
+      expect(deploys[1]).toContain('without-init-call');
+      expect(deploys[1]).not.toContain('json-args');
+    });
+
+    it('DRY_RUN=1 without FORCE_REDEPLOY shows the one plan that can run', async () => {
+      const run = await bash('deploy-registry.sh', { ...env, DRY_RUN: '1' });
+      expect(run.stdout.match(/^\[dry-run\] near contract deploy /gm)).toHaveLength(1);
+      expect(run.stdout).not.toContain('without-init-call');
+      expect(run.stdout).toContain('fail unless it is 0');
     });
 
     it('DRY_RUN=1 prints the plan and runs nothing: no near, no curl, no cargo, no build output', async () => {

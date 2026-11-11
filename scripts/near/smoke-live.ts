@@ -17,7 +17,7 @@
  */
 import { pathToFileURL } from 'node:url';
 import { createChainClient } from '@agentgate/chain';
-import { assertFetchableUrl, parsePaymentRequired, refuseRedirect } from '@agentgate/client';
+import { assertFetchableUrl, parsePaymentRequired, readCappedText, refuseRedirect } from '@agentgate/client';
 import { formatServiceTable, listServices, serviceStatus } from '@neargate/cli';
 import {
   AgentGateError,
@@ -74,7 +74,7 @@ async function requestInvoice(
     throw smokeFailed(`the gateway did not answer ${url}: ${formatError(err)}`);
   }
   await refuseRedirect(url, res);
-  const text = await res.text();
+  const text = await readCappedText(res); // BODY_TOO_LARGE: the gateway is seller-controlled
   if (res.status !== 402) {
     throw smokeFailed(
       `the gateway answered HTTP ${res.status} for ${url}, expected a 402 invoice: ${text.slice(0, 200)}`,

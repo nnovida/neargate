@@ -18,6 +18,7 @@ import {
   createLogger,
   decodeXPayment,
   encodeXPaymentResponse,
+  isNearTxHash,
   isValidNonce,
   PAYMENT_STORAGE_FEE_YOCTO,
   randomNonce,
@@ -113,6 +114,17 @@ function defaultUpstreamsFile(): string {
   // <package>/src/app.ts → <package>/data/upstreams.json
   const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   return path.join(packageDir, 'data', 'upstreams.json');
+}
+
+/**
+ * The tx hash a TX_TIMEOUT failure names (a change call that was sent but whose outcome is
+ * unknown), or undefined for any other failure. Read by duck typing: the gateway does not pull
+ * the live chain client in just to recognise its error.
+ */
+function timedOutTxHash(err: unknown): string | undefined {
+  if (!(err instanceof AgentGateError) || err.code !== 'TX_TIMEOUT') return undefined;
+  const txHash = (err as { txHash?: unknown }).txHash;
+  return isNearTxHash(txHash) ? txHash : undefined;
 }
 
 /** Constant-time string comparison (hash first so lengths never short-circuit). */
@@ -293,6 +305,8 @@ export function createApp(deps: MiddlewareDeps): Express {
     const input = { serviceId: service.id, nonce, paymentTxHash, success };
     const signer = gateSignerFor(service);
     const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+    // The last attempt whose outcome was unknown (TX_TIMEOUT) named a tx that may have landed.
+    let timedOutTx: string | undefined;
     const attempt = (n: number): void => {
       chain.recordAttestation(input, signer).then(
         (r) => {
@@ -309,10 +323,16 @@ export function createApp(deps: MiddlewareDeps): Express {
           if (chainErrorCode(err) === 'ERR_ALREADY_ATTESTED') {
             logger.info('attestation_already_recorded', { ...input, attempt: n });
             void attestations.remove(nonce);
-            // Another party attested it: recorded, but this gateway has no tx to name.
-            receipts.settle(nonce, { status: 'recorded' });
+            // Recorded either way. After an attempt that timed out, that tx most likely landed
+            // and is what made the retry see the payment attested: name it. Otherwise another
+            // party attested it and this gateway has no tx to name.
+            receipts.settle(
+              nonce,
+              timedOutTx !== undefined ? { status: 'recorded', txHash: timedOutTx } : { status: 'recorded' },
+            );
             return;
           }
+          timedOutTx = timedOutTxHash(err) ?? timedOutTx;
           if (n >= attestationMaxAttempts) {
             // Leave it queued: a persistent queue replays it on the next boot; an
             // in-memory one drops it (under-count, never over-count).
@@ -347,9 +367,18 @@ export function createApp(deps: MiddlewareDeps): Express {
     paymentTxHash: string,
     success: boolean,
   ): void {
-    void attestations
+    attestations
       .enqueue({ nonce, paymentTxHash, serviceId: service.id, success, enqueuedAt: Date.now() })
-      .then(() => runAttestation(service, nonce, paymentTxHash, success));
+      .then(() => runAttestation(service, nonce, paymentTxHash, success))
+      .catch((err: unknown) => {
+        // Nothing was sent and nothing is queued for replay: say so, never leave the receipt pending.
+        logger.error('attestation_schedule_failed', {
+          serviceId: service.id,
+          nonce,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        receipts.settle(nonce, { status: 'failed' });
+      });
   }
 
   /**
@@ -473,11 +502,12 @@ export function createApp(deps: MiddlewareDeps): Express {
   app.get('/receipts/:nonce', (req, res) => {
     const nonce = req.params.nonce;
     const receipt = nonce !== undefined && isValidNonce(nonce) ? receipts.get(nonce) : undefined;
+    // Never cached: a pending receipt changes, and a 404 becomes a 200 once the buyer is served.
+    res.set('Cache-Control', 'no-store');
     if (receipt === undefined) {
       res.status(404).json({ error: 'receipt_not_found' });
       return;
     }
-    res.set('Cache-Control', 'no-store'); // a pending receipt changes
     res.json(receipt);
   });
 
