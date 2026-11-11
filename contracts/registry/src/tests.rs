@@ -5,7 +5,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use near_sdk::json_types::U128;
 use near_sdk::test_utils::{VMContextBuilder, get_created_receipts, get_logs};
-use near_sdk::{AccountId, NearToken, testing_env};
+use near_sdk::{AccountId, NearToken, PromiseError, testing_env};
 
 use crate::*;
 
@@ -1269,4 +1269,482 @@ fn views_have_exactly_the_documented_keys() {
     assert_eq!(kinds, ["attestation", "payment", "service_registered"]);
     assert!(activity[2]["amount"].is_null());
     assert!(activity[2]["nonce"].is_null());
+}
+
+// ---------------------------------------------------------------------------------------------
+// escrow
+// ---------------------------------------------------------------------------------------------
+
+fn deposit_as(c: &mut Registry, account: &str, yocto: u128) {
+    ctx(account, yocto);
+    c.deposit_escrow();
+}
+
+fn escrow(c: &Registry, account: &str) -> u128 {
+    c.escrow_of(acct(account)).0
+}
+
+/// Opens `account`'s escrow holding exactly `balance` (the first deposit keeps the storage fee).
+fn fund_escrow(c: &mut Registry, account: &str, balance: u128) {
+    deposit_as(c, account, balance + ESCROW_STORAGE_FEE_YOCTO);
+    assert_eq!(escrow(c, account), balance);
+}
+
+fn pay_from_escrow_as(c: &mut Registry, payer: &str, service_id: u64, nonce: &str) {
+    ctx(payer, 0);
+    c.pay_from_escrow(service_id, nonce.to_string());
+}
+
+#[test]
+fn escrow_first_deposit_keeps_storage_fee() {
+    let mut c = setup();
+    // an unknown account holds "0"
+    assert_eq!(
+        near_sdk::serde_json::to_value(c.escrow_of(acct("buyer.near"))).unwrap(),
+        "0"
+    );
+
+    deposit_as(&mut c, "buyer.near", NEAR);
+    assert_eq!(escrow(&c, "buyer.near"), 998_000_000_000_000_000_000_000); // 0.998 NEAR
+    assert!(transfers().is_empty()); // the fee is kept, nothing is refunded
+    let e = events();
+    assert_eq!(e.len(), 1);
+    assert_eq!(e[0]["standard"], "neargate");
+    assert_eq!(e[0]["version"], "1.0.0");
+    assert_eq!(e[0]["event"], "escrow_deposit");
+    assert_eq!(
+        e[0]["data"],
+        near_sdk::serde_json::json!({
+            "account_id": "buyer.near",
+            "amount": (NEAR - ESCROW_STORAGE_FEE_YOCTO).to_string(),
+            "balance": (NEAR - ESCROW_STORAGE_FEE_YOCTO).to_string(),
+        })
+    );
+
+    // a second deposit is credited in full
+    deposit_as(&mut c, "buyer.near", NEAR);
+    assert_eq!(escrow(&c, "buyer.near"), 1_998_000_000_000_000_000_000_000); // 1.998 NEAR
+    let e = events();
+    assert_eq!(e[0]["data"]["amount"], NEAR.to_string());
+    assert_eq!(
+        e[0]["data"]["balance"],
+        (2 * NEAR - ESCROW_STORAGE_FEE_YOCTO).to_string()
+    );
+    // escrows are per account
+    assert_eq!(escrow(&c, "other.near"), 0);
+}
+
+#[test]
+fn escrow_first_deposit_must_exceed_fee() {
+    let mut c = setup();
+    ctx("buyer.near", ESCROW_STORAGE_FEE_YOCTO);
+    expect_err("ERR_DEPOSIT_TOO_LOW", || c.deposit_escrow());
+    ctx("buyer.near", 0);
+    expect_err("ERR_DEPOSIT_TOO_LOW", || c.deposit_escrow());
+    assert_eq!(escrow(&c, "buyer.near"), 0);
+
+    // one yocto above the fee opens the escrow with a one-yocto balance
+    deposit_as(&mut c, "buyer.near", ESCROW_STORAGE_FEE_YOCTO + 1);
+    assert_eq!(escrow(&c, "buyer.near"), 1);
+    // from then on any deposit above zero is credited in full
+    ctx("buyer.near", 0);
+    expect_err("ERR_DEPOSIT_TOO_LOW", || c.deposit_escrow());
+    deposit_as(&mut c, "buyer.near", 1);
+    assert_eq!(escrow(&c, "buyer.near"), 2);
+}
+
+#[test]
+fn withdraw_requires_one_yocto() {
+    let mut c = setup();
+    fund_escrow(&mut c, "buyer.near", NEAR);
+    for attached in [0, 2] {
+        ctx("buyer.near", attached);
+        expect_err("ERR_ONE_YOCTO_REQUIRED", || {
+            c.withdraw_escrow(U128(NEAR / 2))
+        });
+    }
+    assert_eq!(escrow(&c, "buyer.near"), NEAR);
+    // it is the first check: an account without an escrow gets it too
+    ctx("stranger.near", 0);
+    expect_err("ERR_ONE_YOCTO_REQUIRED", || c.withdraw_escrow(U128(1)));
+}
+
+#[test]
+fn withdraw_more_than_balance() {
+    let mut c = setup();
+    fund_escrow(&mut c, "buyer.near", NEAR);
+    ctx("buyer.near", 1);
+    expect_err("ERR_ESCROW_INSUFFICIENT", || {
+        c.withdraw_escrow(U128(NEAR + 1))
+    });
+    // zero is not a withdrawal either
+    expect_err("ERR_ESCROW_INSUFFICIENT", || c.withdraw_escrow(U128(0)));
+    assert_eq!(escrow(&c, "buyer.near"), NEAR);
+    // an account that never deposited has nothing to withdraw
+    ctx("stranger.near", 1);
+    expect_err("ERR_ESCROW_INSUFFICIENT", || c.withdraw_escrow(U128(1)));
+    assert_eq!(escrow(&c, "stranger.near"), 0);
+}
+
+#[test]
+fn withdraw_debits_then_transfers_with_a_recredit_callback() {
+    use near_sdk::mock::MockAction;
+    let mut c = setup();
+    fund_escrow(&mut c, "buyer.near", NEAR);
+    ctx("buyer.near", 1);
+    c.withdraw_escrow(U128(NEAR / 4));
+
+    // debited before the transfer runs; the amount goes to the caller, the 1 yocto stays
+    assert_eq!(escrow(&c, "buyer.near"), NEAR * 3 / 4);
+    assert_eq!(transfers(), vec![("buyer.near".to_string(), NEAR / 4)]);
+    // then the registry calls itself back with the transfer's outcome
+    let receipts = get_created_receipts();
+    assert_eq!(receipts.len(), 2);
+    let callback = &receipts[1];
+    assert_eq!(callback.receiver_id, acct("registry.near"));
+    assert_eq!(callback.receipt_indices.len(), 1); // it waits for the transfer
+    match &callback.actions[..] {
+        [
+            MockAction::FunctionCallWeight {
+                method_name,
+                args,
+                attached_deposit,
+                prepaid_gas,
+                ..
+            },
+        ] => {
+            assert_eq!(String::from_utf8_lossy(method_name), "on_escrow_withdraw");
+            assert_eq!(
+                near_sdk::serde_json::from_slice::<near_sdk::serde_json::Value>(args).unwrap(),
+                near_sdk::serde_json::json!({
+                    "account_id": "buyer.near",
+                    "amount": (NEAR / 4).to_string(),
+                })
+            );
+            assert_eq!(attached_deposit.as_yoctonear(), 0);
+            assert_eq!(*prepaid_gas, near_sdk::Gas::from_tgas(5));
+        }
+        other => panic!("expected one function call, got {other:?}"),
+    }
+    let e = events();
+    assert_eq!(e.len(), 1);
+    assert_eq!(e[0]["event"], "escrow_withdraw");
+    assert_eq!(
+        e[0]["data"],
+        near_sdk::serde_json::json!({
+            "account_id": "buyer.near",
+            "amount": (NEAR / 4).to_string(),
+            "balance": (NEAR * 3 / 4).to_string(),
+        })
+    );
+
+    // the rest can be withdrawn too, which leaves nothing
+    ctx("buyer.near", 1);
+    c.withdraw_escrow(U128(NEAR * 3 / 4));
+    assert_eq!(escrow(&c, "buyer.near"), 0);
+    ctx("buyer.near", 1);
+    expect_err("ERR_ESCROW_INSUFFICIENT", || c.withdraw_escrow(U128(1)));
+}
+
+#[test]
+fn withdraw_callback_recredits_only_a_failed_transfer() {
+    let mut c = setup();
+    let id = register(&mut c);
+    fund_escrow(&mut c, "buyer.near", NEAR);
+    ctx("buyer.near", 1);
+    c.withdraw_escrow(U128(NEAR / 4));
+
+    // the transfer went through: the callback changes nothing
+    ctx("registry.near", 0);
+    c.on_escrow_withdraw(acct("buyer.near"), U128(NEAR / 4), Ok(()));
+    assert_eq!(escrow(&c, "buyer.near"), NEAR * 3 / 4);
+    assert!(events().is_empty());
+
+    // a second withdrawal fails, with a payment in between: the amount is added back, once,
+    // to the balance as it is when the callback runs
+    ctx("buyer.near", 1);
+    c.withdraw_escrow(U128(NEAR / 4));
+    pay_from_escrow_as(&mut c, "buyer.near", id, "1");
+    let now = NEAR / 2 - PRICE - PAYMENT_STORAGE_FEE_YOCTO;
+    assert_eq!(escrow(&c, "buyer.near"), now);
+    ctx("registry.near", 0);
+    c.on_escrow_withdraw(
+        acct("buyer.near"),
+        U128(NEAR / 4),
+        Err(PromiseError::Failed),
+    );
+    assert_eq!(escrow(&c, "buyer.near"), now + NEAR / 4);
+    assert!(transfers().is_empty());
+    // the re-credit is logged as a credit, so the events keep matching escrow_of
+    let e = events();
+    assert_eq!(e.len(), 1);
+    assert_eq!(e[0]["event"], "escrow_deposit");
+    assert_eq!(
+        e[0]["data"],
+        near_sdk::serde_json::json!({
+            "account_id": "buyer.near",
+            "amount": (NEAR / 4).to_string(),
+            "balance": (now + NEAR / 4).to_string(),
+        })
+    );
+}
+
+#[test]
+fn pay_from_escrow_debits_price_plus_fee() {
+    let mut c = setup();
+    let id = register_with(&mut c, vec![native(NEAR / 2)]); // 0.5 NEAR
+    fund_escrow(&mut c, "buyer.near", NEAR);
+
+    ctx_at("buyer.near", 0, 1_700_000_500_000, 777);
+    c.pay_from_escrow(id, "12345".to_string());
+    assert_eq!(escrow(&c, "buyer.near"), 498_000_000_000_000_000_000_000); // 0.498 NEAR
+    // the price goes to the payment target, the fee stays, nothing is refunded
+    assert_eq!(transfers(), vec![("seller.near".to_string(), NEAR / 2)]);
+    // one payment event, as pay emits it
+    let e = events();
+    assert_eq!(e.len(), 1);
+    assert_eq!(e[0]["event"], "payment");
+    assert_eq!(
+        e[0]["data"],
+        near_sdk::serde_json::json!({
+            "service_id": id,
+            "nonce": "12345",
+            "payer": "buyer.near",
+            "amount": (NEAR / 2).to_string(),
+            "self_paid": false,
+        })
+    );
+    // the same record and activity entry as pay: the payer is the caller, the amount the price
+    assert_eq!(
+        c.get_payment("12345".to_string()),
+        Some(PaymentView {
+            nonce: "12345".to_string(),
+            service_id: id,
+            payer: acct("buyer.near"),
+            amount: U128(NEAR / 2),
+            timestamp_ms: 1_700_000_500_000,
+            block_height: 777,
+            self_paid: false,
+            attested: false,
+        })
+    );
+    assert_eq!(
+        c.get_recent_activity(1)[0],
+        ActivityView {
+            kind: ActivityKind::Payment,
+            service_id: id,
+            account: acct("buyer.near"),
+            amount: Some(U128(NEAR / 2)),
+            success: None,
+            nonce: Some("12345".to_string()),
+            payment_tx_hash: None,
+            timestamp_ms: 1_700_000_500_000,
+            block_height: 777,
+        }
+    );
+    // and it is attested like any other payment
+    attest_as(&mut c, "attestor.near", id, "12345", "tx", true);
+    assert_eq!(c.get_score(id).total_calls, 1);
+}
+
+#[test]
+fn pay_from_escrow_rejects_attached_deposit() {
+    let mut c = setup();
+    let id = register(&mut c);
+    fund_escrow(&mut c, "buyer.near", NEAR);
+    for attached in [1, PRICE + PAYMENT_STORAGE_FEE_YOCTO] {
+        ctx("buyer.near", attached);
+        expect_err("ERR_DEPOSIT_NOT_ALLOWED", || {
+            c.pay_from_escrow(id, "1".to_string())
+        });
+    }
+    // it is the first check, before the service is looked up
+    expect_err("ERR_DEPOSIT_NOT_ALLOWED", || {
+        c.pay_from_escrow(99, "1".to_string())
+    });
+    assert_eq!(escrow(&c, "buyer.near"), NEAR);
+    assert_eq!(c.get_payment("1".to_string()), None);
+}
+
+#[test]
+fn pay_from_escrow_insufficient() {
+    let mut c = setup();
+    let id = register(&mut c);
+
+    // no escrow entry at all
+    ctx("buyer.near", 0);
+    expect_err("ERR_ESCROW_INSUFFICIENT", || {
+        c.pay_from_escrow(id, "1".to_string())
+    });
+    assert_eq!(escrow(&c, "buyer.near"), 0);
+
+    // one yocto short of price + fee
+    let short = PRICE + PAYMENT_STORAGE_FEE_YOCTO - 1;
+    fund_escrow(&mut c, "buyer.near", short);
+    ctx("buyer.near", 0);
+    expect_err("ERR_ESCROW_INSUFFICIENT", || {
+        c.pay_from_escrow(id, "1".to_string())
+    });
+    // checked where pay checks its deposit: before the nonce
+    expect_err("ERR_ESCROW_INSUFFICIENT", || {
+        c.pay_from_escrow(id, "1x".to_string())
+    });
+    // no state change
+    assert_eq!(escrow(&c, "buyer.near"), short);
+    assert_eq!(c.get_payment("1".to_string()), None);
+    assert!(
+        c.get_recent_activity(10)
+            .iter()
+            .all(|a| a.kind != ActivityKind::Payment)
+    );
+    assert!(transfers().is_empty());
+
+    // exactly price + fee is enough, and leaves nothing
+    deposit_as(&mut c, "buyer.near", 1);
+    pay_from_escrow_as(&mut c, "buyer.near", id, "1");
+    assert_eq!(escrow(&c, "buyer.near"), 0);
+
+    // a price near u128::MAX is an escrow error, not an overflow
+    let huge = register_with(&mut c, vec![native(u128::MAX - 5)]);
+    ctx("buyer.near", 0);
+    expect_err("ERR_ESCROW_INSUFFICIENT", || {
+        c.pay_from_escrow(huge, "2".to_string())
+    });
+}
+
+#[test]
+fn pay_from_escrow_nonce_reuse() {
+    let mut c = setup();
+    let id = register(&mut c);
+    fund_escrow(&mut c, "buyer.near", NEAR);
+    pay_from_escrow_as(&mut c, "buyer.near", id, "42");
+    let left = NEAR - PRICE - PAYMENT_STORAGE_FEE_YOCTO;
+    assert_eq!(escrow(&c, "buyer.near"), left);
+
+    // a nonce paid from the escrow is used up, for both ways of paying
+    ctx("buyer.near", 0);
+    expect_err("ERR_NONCE_USED", || c.pay_from_escrow(id, "42".to_string()));
+    ctx("other.near", PRICE + PAYMENT_STORAGE_FEE_YOCTO);
+    expect_err("ERR_NONCE_USED", || c.pay(id, "42".to_string()));
+    // and a nonce paid with pay cannot be paid again from the escrow
+    pay_as(&mut c, "other.near", id, "43");
+    ctx("buyer.near", 0);
+    expect_err("ERR_NONCE_USED", || c.pay_from_escrow(id, "43".to_string()));
+    expect_err("ERR_INVALID_NONCE", || {
+        c.pay_from_escrow(id, "4x".to_string())
+    });
+
+    // no rejected call debited the escrow or touched the records
+    assert_eq!(escrow(&c, "buyer.near"), left);
+    assert_eq!(
+        c.get_payment("42".to_string()).unwrap().payer,
+        acct("buyer.near")
+    );
+    assert_eq!(
+        c.get_payment("43".to_string()).unwrap().payer,
+        acct("other.near")
+    );
+}
+
+#[test]
+fn pay_from_escrow_inactive_service() {
+    let mut c = setup();
+    let id = register(&mut c);
+    fund_escrow(&mut c, "buyer.near", NEAR);
+    ctx("owner.near", 0);
+    c.set_active(id, false);
+
+    ctx("buyer.near", 0);
+    expect_err("ERR_SERVICE_INACTIVE", || {
+        c.pay_from_escrow(id, "1".to_string())
+    });
+    expect_err("ERR_SERVICE_NOT_FOUND", || {
+        c.pay_from_escrow(99, "1".to_string())
+    });
+    let token_only = register_with(&mut c, vec![token(MIN_PRICE_YOCTO)]);
+    ctx("buyer.near", 0);
+    expect_err("ERR_NO_NATIVE_PRICE", || {
+        c.pay_from_escrow(token_only, "1".to_string())
+    });
+    // the service is checked before the escrow: an account without one gets the same error
+    ctx("stranger.near", 0);
+    expect_err("ERR_SERVICE_INACTIVE", || {
+        c.pay_from_escrow(id, "1".to_string())
+    });
+    assert_eq!(escrow(&c, "buyer.near"), NEAR);
+    assert_eq!(c.get_payment("1".to_string()), None);
+
+    // switched back on, it takes escrow payments again
+    ctx("owner.near", 0);
+    c.set_active(id, true);
+    pay_from_escrow_as(&mut c, "buyer.near", id, "1");
+    assert!(c.get_payment("1".to_string()).is_some());
+}
+
+#[test]
+fn pay_from_escrow_self_paid_flag() {
+    let mut c = setup();
+    let id = register(&mut c);
+    // the owner and the payment target paying from their own escrow are self-paid; the
+    // attestor and a buyer are not
+    for (payer, nonce, self_paid) in [
+        ("owner.near", "1", true),
+        ("seller.near", "2", true),
+        ("attestor.near", "3", false),
+        ("buyer.near", "4", false),
+    ] {
+        fund_escrow(&mut c, payer, NEAR);
+        pay_from_escrow_as(&mut c, payer, id, nonce);
+        let p = c.get_payment(nonce.to_string()).unwrap();
+        assert_eq!(p.payer, acct(payer));
+        assert_eq!(p.self_paid, self_paid, "{payer}");
+        assert_eq!(events()[0]["data"]["self_paid"], self_paid);
+    }
+    // so a self-paid escrow payment cannot be attested either
+    ctx("attestor.near", 0);
+    expect_err("ERR_SELF_PAYMENT", || {
+        c.record_attestation(id, "1".to_string(), "h".to_string(), true)
+    });
+}
+
+#[test]
+fn escrow_entry_storage_fits_its_fee() {
+    let mut c = setup();
+    let id = register(&mut c);
+    let byte_cost = near_sdk::env::storage_byte_cost().as_yoctonear();
+    assert_eq!(ESCROW_STORAGE_FEE_YOCTO / byte_cost, 200);
+
+    // The first deposit from the longest account id (64 bytes) creates the largest entry:
+    // record overhead 40 + key (prefix 1 + length 4 + 64) + balance 16 = 125 bytes.
+    ctx(IMPLICIT, NEAR);
+    let before = storage_bytes();
+    c.deposit_escrow();
+    let created = storage_bytes() - before;
+    println!("escrow entry: {created} bytes (fee covers 200)");
+    assert_eq!(created, 125);
+    assert_eq!(u128::from(created), ESCROW_RECORD_MAX_BYTES);
+    assert!(u128::from(created) * byte_cost <= ESCROW_STORAGE_FEE_YOCTO);
+
+    // a top-up and a withdrawal rewrite the entry in place
+    ctx(IMPLICIT, NEAR);
+    let before = storage_bytes();
+    c.deposit_escrow();
+    assert_eq!(storage_bytes(), before);
+    ctx(IMPLICIT, 1);
+    c.withdraw_escrow(U128(1));
+    assert_eq!(storage_bytes(), before);
+
+    // paying from the escrow stores exactly what pay stores: the debit adds nothing
+    let nonce = |i: u128| format!("{:020}", 10u128.pow(19) + i);
+    ctx(IMPLICIT, PRICE + PAYMENT_STORAGE_FEE_YOCTO);
+    let before = storage_bytes();
+    c.pay(id, nonce(1));
+    let by_pay = storage_bytes() - before;
+    ctx(IMPLICIT, 0);
+    let before = storage_bytes();
+    c.pay_from_escrow(id, nonce(2));
+    let by_escrow = storage_bytes() - before;
+    println!("pay: {by_pay} bytes, pay_from_escrow: {by_escrow} bytes (fee covers 200)");
+    assert_eq!(by_escrow, by_pay);
+    assert!(u128::from(by_escrow) * byte_cost <= PAYMENT_STORAGE_FEE_YOCTO);
 }

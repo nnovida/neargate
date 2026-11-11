@@ -6,6 +6,11 @@
 //! received, once, and never for a self-payment (payer is the service owner or the payment
 //! target), so a score can only come from real transfers between distinct parties.
 //!
+//! A buyer can also prepay an escrow (`deposit_escrow`) and pay from it with
+//! `pay_from_escrow`, which attaches nothing, so a function-call access key restricted to that
+//! method can sign it. Such a key can spend the escrow and nothing else: `withdraw_escrow`
+//! needs exactly 1 yocto attached, and a function-call key cannot attach a deposit.
+//!
 //! The contract has no owner and no admin. The only privileged roles are per service: the
 //! service owner and the service attestor.
 //!
@@ -16,7 +21,9 @@ pub use types::*;
 
 use near_sdk::json_types::U128;
 use near_sdk::store::LookupMap;
-use near_sdk::{AccountId, BorshStorageKey, NearToken, PanicOnDefault, Promise, env, near};
+use near_sdk::{
+    AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseError, env, near,
+};
 
 #[cfg(test)]
 mod tests;
@@ -33,6 +40,14 @@ pub const PAYMENT_STORAGE_FEE_YOCTO: u128 = 2_000_000_000_000_000_000_000;
 /// 0.12 NEAR: kept by the registry on every `register_service`. It prepays the service record
 /// and [`ATTESTATION_RESERVE_YOCTO`], the storage the service can later fill with attestations.
 pub const REGISTRATION_DEPOSIT_YOCTO: u128 = 120_000_000_000_000_000_000_000;
+/// 0.002 NEAR: kept from an account's first `deposit_escrow`, which creates its escrow entry.
+/// The entry is never deleted and takes at most 125 of the 200 bytes the fee buys (see
+/// `ESCROW_RECORD_MAX_BYTES`).
+pub const ESCROW_STORAGE_FEE_YOCTO: u128 = 2_000_000_000_000_000_000_000;
+
+/// Gas reserved for `on_escrow_withdraw`, which at most rewrites one escrow entry and logs an
+/// event. It also receives its share of the call's unused gas.
+const ON_ESCROW_WITHDRAW_GAS: Gas = Gas::from_tgas(5);
 
 pub const MAX_ATTESTATIONS: usize = 100;
 pub const ACTIVITY_CAP: u64 = 200;
@@ -79,6 +94,17 @@ pub const ATTESTATION_RESERVE_YOCTO: u128 = ATTESTATION_RESERVE_BYTES * STORAGE_
 // The deposit must leave room for a service record on top of the reserve.
 const _: () = assert!(ATTESTATION_RESERVE_YOCTO < REGISTRATION_DEPOSIT_YOCTO);
 
+/// The longest account id NEAR allows, in bytes (an implicit account: 64 hex characters).
+const ACCOUNT_ID_MAX_BYTES: u128 = 64;
+/// The largest `escrow` record: key (one prefix byte, then the account id as a Borsh string,
+/// 4-byte length + at most 64 bytes) + the `u128` balance + record overhead:
+/// `40 + 69 + 16 = 125` bytes.
+const ESCROW_RECORD_MAX_BYTES: u128 = RECORD_OVERHEAD_BYTES + (1 + 4 + ACCOUNT_ID_MAX_BYTES) + 16;
+
+// The escrow fee must prepay the largest escrow entry.
+const _: () =
+    assert!(ESCROW_RECORD_MAX_BYTES * STORAGE_BYTE_COST_YOCTO <= ESCROW_STORAGE_FEE_YOCTO);
+
 /// The `asset` string of the one option `pay` can settle.
 pub const NATIVE_ASSET: &str = "near";
 
@@ -119,6 +145,22 @@ pub enum NearGateEvent {
         service_id: u64,
         attestor: AccountId,
     },
+    /// `amount` was credited to `account_id`'s escrow (a deposit after the first one's storage
+    /// fee, or a failed withdrawal put back); `balance` is the escrow after it.
+    #[event_version("1.0.0")]
+    EscrowDeposit {
+        account_id: AccountId,
+        amount: U128,
+        balance: U128,
+    },
+    /// `amount` was debited from `account_id`'s escrow and sent to it; `balance` is the escrow
+    /// after it.
+    #[event_version("1.0.0")]
+    EscrowWithdraw {
+        account_id: AccountId,
+        amount: U128,
+        balance: U128,
+    },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -133,6 +175,7 @@ enum StorageKey {
     Payments,
     Attestations,
     Activity,
+    Escrow,
 }
 
 #[near(contract_state)]
@@ -151,6 +194,9 @@ pub struct Registry {
     activity: LookupMap<u64, ActivityEntry>,
     /// Number of events ever written.
     activity_head: u64,
+    /// Prepaid balances in yocto, spent by `pay_from_escrow`. An account's first
+    /// `deposit_escrow` creates its entry; entries are never deleted.
+    escrow: LookupMap<AccountId, u128>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -228,7 +274,117 @@ fn refund(to: &AccountId, attached: u128, kept: u128) {
     }
 }
 
+/// Where a payment's `price + PAYMENT_STORAGE_FEE_YOCTO` comes from.
+#[derive(Clone, Copy)]
+enum Funding {
+    /// `pay`: the attached deposit, in yocto. The excess is refunded.
+    Deposit(u128),
+    /// `pay_from_escrow`: the payer's escrow, debited by exactly the required amount.
+    Escrow,
+}
+
 impl Registry {
+    fn escrow_balance(&self, account_id: &AccountId) -> u128 {
+        self.escrow.get(account_id).copied().unwrap_or(0)
+    }
+
+    /// The checks and settlement shared by `pay` and `pay_from_escrow`, in this order: the
+    /// service exists, is active and has a native price; `funding` covers price + fee; the nonce
+    /// is valid and unused. Then the escrow debit (if any), the payment record, its ring entry,
+    /// the storage check, the price to `payment_target`, the refund (if any), the `payment`
+    /// event.
+    fn settle_payment(&mut self, service_id: u64, nonce: String, funding: Funding) {
+        let usage_before = env::storage_usage();
+
+        let (price, target, owner) = {
+            let service = self.service(service_id);
+            ensure!(
+                service.active,
+                "ERR_SERVICE_INACTIVE: the service is switched off"
+            );
+            let price = service
+                .accepts
+                .iter()
+                .find(|o| o.asset == NATIVE_ASSET)
+                .map(|o| o.amount.0)
+                .unwrap_or_else(|| env::panic_str("ERR_NO_NATIVE_PRICE: no \"near\" option"));
+            (price, service.payment_target.clone(), service.owner.clone())
+        };
+
+        let payer = env::predecessor_account_id();
+        let required = price.saturating_add(PAYMENT_STORAGE_FEE_YOCTO);
+        let escrow_after = match funding {
+            Funding::Deposit(attached) => {
+                ensure!(
+                    attached >= required,
+                    format!(
+                        "ERR_DEPOSIT_TOO_LOW: attach at least {required} yocto (price + storage fee)"
+                    )
+                );
+                None
+            }
+            Funding::Escrow => {
+                let balance = self.escrow_balance(&payer);
+                ensure!(
+                    balance >= required,
+                    format!(
+                        "ERR_ESCROW_INSUFFICIENT: the escrow holds {balance} yocto, the payment \
+                         needs {required} (price + storage fee)"
+                    )
+                );
+                Some(balance - required)
+            }
+        };
+        ensure!(
+            is_valid_nonce(&nonce),
+            "ERR_INVALID_NONCE: the nonce must be 1 to 20 decimal digits"
+        );
+        ensure!(
+            !self.payments.contains_key(&nonce),
+            "ERR_NONCE_USED: nonce already paid"
+        );
+
+        // The entry exists (its balance covered `required`), so the debit adds no storage.
+        if let Some(balance) = escrow_after {
+            self.escrow.set(payer.clone(), Some(balance));
+        }
+        let self_paid = payer == owner || payer == target;
+        self.payments.set(
+            nonce.clone(),
+            Some(Payment {
+                service_id,
+                payer: payer.clone(),
+                amount: price,
+                timestamp_ms: env::block_timestamp_ms(),
+                block_height: env::block_height(),
+                self_paid,
+                attested: false,
+            }),
+        );
+        self.push_activity(ActivityEntry::Payment {
+            nonce: nonce.clone(),
+        });
+
+        check_storage(
+            self.storage_cost_since(usage_before),
+            PAYMENT_STORAGE_FEE_YOCTO,
+        );
+        Promise::new(target)
+            .transfer(NearToken::from_yoctonear(price))
+            .detach();
+        if let Funding::Deposit(attached) = funding {
+            refund(&payer, attached, required);
+        }
+        NearGateEvent::Payment {
+            service_id,
+            nonce,
+            payer,
+            amount: U128(price),
+            self_paid,
+        }
+        .emit();
+    }
+
     fn service(&self, service_id: u64) -> &Service {
         self.services
             .get(&service_id)
@@ -263,6 +419,7 @@ impl Registry {
         self.payments.flush();
         self.attestations.flush();
         self.activity.flush();
+        self.escrow.flush();
     }
 
     /// Flushes, then returns the storage those writes added since `usage_before`, in yocto.
@@ -356,6 +513,7 @@ impl Registry {
             attestations: LookupMap::new(StorageKey::Attestations),
             activity,
             activity_head: 0,
+            escrow: LookupMap::new(StorageKey::Escrow),
         }
     }
 
@@ -446,72 +604,125 @@ impl Registry {
     /// `nonce` is single-use across the whole registry: 1 to 20 decimal digits.
     #[payable]
     pub fn pay(&mut self, service_id: u64, nonce: String) {
-        let usage_before = env::storage_usage();
-
-        let (price, target, owner) = {
-            let service = self.service(service_id);
-            ensure!(
-                service.active,
-                "ERR_SERVICE_INACTIVE: the service is switched off"
-            );
-            let price = service
-                .accepts
-                .iter()
-                .find(|o| o.asset == NATIVE_ASSET)
-                .map(|o| o.amount.0)
-                .unwrap_or_else(|| env::panic_str("ERR_NO_NATIVE_PRICE: no \"near\" option"));
-            (price, service.payment_target.clone(), service.owner.clone())
-        };
-
         let attached = env::attached_deposit().as_yoctonear();
-        let required = price.saturating_add(PAYMENT_STORAGE_FEE_YOCTO);
-        ensure!(
-            attached >= required,
-            format!("ERR_DEPOSIT_TOO_LOW: attach at least {required} yocto (price + storage fee)")
-        );
-        ensure!(
-            is_valid_nonce(&nonce),
-            "ERR_INVALID_NONCE: the nonce must be 1 to 20 decimal digits"
-        );
-        ensure!(
-            !self.payments.contains_key(&nonce),
-            "ERR_NONCE_USED: nonce already paid"
-        );
+        self.settle_payment(service_id, nonce, Funding::Deposit(attached));
+    }
 
-        let payer = env::predecessor_account_id();
-        let self_paid = payer == owner || payer == target;
-        self.payments.set(
-            nonce.clone(),
-            Some(Payment {
-                service_id,
-                payer: payer.clone(),
-                amount: price,
-                timestamp_ms: env::block_timestamp_ms(),
-                block_height: env::block_height(),
-                self_paid,
-                attested: false,
-            }),
+    /// Pays for one call of a service from the caller's escrow (see `deposit_escrow`). It
+    /// attaches nothing, so a function-call access key restricted to this method can sign it.
+    ///
+    /// The same checks, order and settlement as `pay`, except that the escrow must hold the
+    /// service's native price plus `PAYMENT_STORAGE_FEE_YOCTO` and is debited exactly that: the
+    /// price goes to the service's `payment_target`, the fee stays here, nothing is refunded.
+    /// The payment record, ring entry and `payment` event are the ones `pay` writes.
+    #[payable]
+    pub fn pay_from_escrow(&mut self, service_id: u64, nonce: String) {
+        ensure!(
+            env::attached_deposit().is_zero(),
+            "ERR_DEPOSIT_NOT_ALLOWED: pay_from_escrow takes no deposit, it spends the escrow"
         );
-        self.push_activity(ActivityEntry::Payment {
-            nonce: nonce.clone(),
-        });
+        self.settle_payment(service_id, nonce, Funding::Escrow);
+    }
 
-        check_storage(
-            self.storage_cost_since(usage_before),
-            PAYMENT_STORAGE_FEE_YOCTO,
-        );
-        Promise::new(target)
-            .transfer(NearToken::from_yoctonear(price))
-            .detach();
-        refund(&payer, attached, required);
-        NearGateEvent::Payment {
-            service_id,
-            nonce,
-            payer,
-            amount: U128(price),
-            self_paid,
+    /// Credits the attached deposit to the caller's escrow, which `pay_from_escrow` spends.
+    ///
+    /// The first deposit creates the caller's escrow entry and keeps `ESCROW_STORAGE_FEE_YOCTO`
+    /// for its storage, so it must attach more than that. Later deposits are credited in full.
+    #[payable]
+    pub fn deposit_escrow(&mut self) {
+        let usage_before = env::storage_usage();
+        let account_id = env::predecessor_account_id();
+        let attached = env::attached_deposit().as_yoctonear();
+
+        let existing = self.escrow.get(&account_id).copied();
+        let fee = if existing.is_some() {
+            ensure!(attached > 0, "ERR_DEPOSIT_TOO_LOW: attach a deposit");
+            0
+        } else {
+            ensure!(
+                attached > ESCROW_STORAGE_FEE_YOCTO,
+                "ERR_DEPOSIT_TOO_LOW: the first deposit must be more than \
+                 2000000000000000000000 yocto (0.002 NEAR escrow storage fee)"
+            );
+            ESCROW_STORAGE_FEE_YOCTO
+        };
+        let amount = attached - fee;
+        let balance = existing.unwrap_or(0) + amount;
+        self.escrow.set(account_id.clone(), Some(balance));
+
+        // A new entry must fit in its fee; a top-up rewrites the entry and may add nothing.
+        check_storage(self.storage_cost_since(usage_before), fee);
+        NearGateEvent::EscrowDeposit {
+            account_id,
+            amount: U128(amount),
+            balance: U128(balance),
         }
         .emit();
+    }
+
+    /// Sends `amount` of the caller's escrow back to the caller.
+    ///
+    /// Requires exactly 1 yocto attached, which a function-call access key cannot attach: only
+    /// a full-access key withdraws. The escrow is debited before the transfer, and
+    /// `on_escrow_withdraw` puts the amount back if the transfer fails. The 1 yocto stays here.
+    #[payable]
+    pub fn withdraw_escrow(&mut self, amount: U128) {
+        ensure!(
+            env::attached_deposit().as_yoctonear() == 1,
+            "ERR_ONE_YOCTO_REQUIRED: attach exactly 1 yocto (only a full-access key can withdraw)"
+        );
+        let account_id = env::predecessor_account_id();
+        let amount = amount.0;
+        let balance = self.escrow_balance(&account_id);
+        ensure!(
+            amount > 0 && amount <= balance,
+            format!(
+                "ERR_ESCROW_INSUFFICIENT: the amount must be between 1 and the escrow balance, \
+                 {balance} yocto"
+            )
+        );
+        let balance = balance - amount;
+        self.escrow.set(account_id.clone(), Some(balance));
+        self.flush_all();
+
+        Promise::new(account_id.clone())
+            .transfer(NearToken::from_yoctonear(amount))
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(ON_ESCROW_WITHDRAW_GAS)
+                    .on_escrow_withdraw(account_id.clone(), U128(amount)),
+            )
+            .detach();
+        NearGateEvent::EscrowWithdraw {
+            account_id,
+            amount: U128(amount),
+            balance: U128(balance),
+        }
+        .emit();
+    }
+
+    /// Callback of `withdraw_escrow`. If the transfer failed (its NEAR is refunded to the
+    /// registry), `amount` goes back into `account_id`'s escrow and an `escrow_deposit` event
+    /// logs the credit. A transfer that went through changes nothing.
+    #[private]
+    pub fn on_escrow_withdraw(
+        &mut self,
+        account_id: AccountId,
+        amount: U128,
+        #[callback_result] transfer: Result<(), PromiseError>,
+    ) {
+        if let Err(PromiseError::Failed) = transfer {
+            // `withdraw_escrow` never deletes the entry, so this rewrites it in place.
+            let balance = self.escrow_balance(&account_id) + amount.0;
+            self.escrow.set(account_id.clone(), Some(balance));
+            self.flush_all();
+            NearGateEvent::EscrowDeposit {
+                account_id,
+                amount,
+                balance: U128(balance),
+            }
+            .emit();
+        }
     }
 
     /// Records the outcome of the service call that followed a payment. Only the service's
@@ -662,6 +873,11 @@ impl Registry {
         self.payments
             .get(&nonce)
             .map(|p| PaymentView::new(&nonce, p))
+    }
+
+    /// The escrow balance of `account_id` in yocto; `"0"` for an account that never deposited.
+    pub fn escrow_of(&self, account_id: AccountId) -> U128 {
+        U128(self.escrow_balance(&account_id))
     }
 
     /// Newest first. `limit` is clamped to `ACTIVITY_CAP`.

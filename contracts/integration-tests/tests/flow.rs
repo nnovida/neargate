@@ -9,12 +9,14 @@
 
 use anyhow::{Result, anyhow, ensure};
 use near_workspaces::result::ExecutionFinalResult;
-use near_workspaces::types::{Gas, NearToken};
-use near_workspaces::{Account, Contract};
+use near_workspaces::types::{Gas, KeyType, NearToken, SecretKey};
+use near_workspaces::{AccessKey, Account, Contract};
 use serde_json::{Value, json};
 
+const NEAR: u128 = 1_000_000_000_000_000_000_000_000;
 const PRICE: u128 = 10_000_000_000_000_000_000_000; // 0.01 NEAR
 const FEE: u128 = 2_000_000_000_000_000_000_000; // 0.002 NEAR
+const ESCROW_FEE: u128 = 2_000_000_000_000_000_000_000; // 0.002 NEAR, kept by the first deposit
 const REGISTRATION_DEPOSIT: u128 = 120_000_000_000_000_000_000_000; // 0.12 NEAR
 const BYTE_COST: u128 = 10_000_000_000_000_000_000; // 10^19 yocto per byte
 /// Storage a service can later fill through `record_attestation`: the score record
@@ -139,6 +141,41 @@ async fn balance(account: &Account) -> Result<u128> {
 
 async fn storage_usage(env: &Env) -> Result<u64> {
     Ok(env.registry.view_account().await?.storage_usage)
+}
+
+async fn escrow_of(env: &Env, account: &Account) -> Result<u128> {
+    let balance = view(env, "escrow_of", json!({"account_id": account.id()})).await?;
+    let balance = balance
+        .as_str()
+        .ok_or_else(|| anyhow!("escrow_of returned {balance}, not a string"))?;
+    Ok(balance.parse()?)
+}
+
+async fn deposit_escrow(env: &Env, account: &Account, attached: u128) -> Result<()> {
+    let res = account
+        .call(env.registry.id(), "deposit_escrow")
+        .deposit(yocto(attached))
+        .gas(CALL_GAS)
+        .transact()
+        .await?;
+    ensure!(
+        res.is_success(),
+        "deposit_escrow failed: {:?}",
+        res.into_result().err()
+    );
+    Ok(())
+}
+
+/// The error of a transaction NEAR refused to execute (an invalid transaction never reaches the
+/// contract, so near-workspaces returns an `Err` instead of a failed outcome).
+fn refused(sent: near_workspaces::Result<ExecutionFinalResult>) -> Result<String> {
+    match sent {
+        Ok(res) => Err(anyhow!(
+            "NEAR accepted the transaction: {:?}",
+            res.into_result()
+        )),
+        Err(err) => Ok(format!("{err:?}")),
+    }
 }
 
 #[tokio::test]
@@ -351,5 +388,174 @@ async fn self_paid_payment_cannot_be_attested_onchain() -> Result<()> {
 
     let score = view(&env, "get_score", json!({"service_id": id})).await?;
     assert_eq!(score, json!({"total_calls": 0, "success_calls": 0}));
+    Ok(())
+}
+
+/// The buyer funds an escrow and gives its agent a function-call key that may only call
+/// `pay_from_escrow` on the registry. That key pays. It cannot withdraw: NEAR refuses the
+/// transaction before it reaches the registry. The buyer's full-access key can.
+#[tokio::test]
+async fn agent_function_call_key_pays_from_escrow_only() -> Result<()> {
+    let env = setup().await?;
+    let id = register(&env).await?;
+
+    // The buyer deposits 1 NEAR; the first deposit keeps the 0.002 NEAR storage fee.
+    let usage_before = storage_usage(&env).await?;
+    deposit_escrow(&env, &env.buyer, NEAR).await?;
+    let grown = storage_usage(&env).await? - usage_before;
+    let cost = u128::from(grown) * BYTE_COST;
+    println!("[deposit_escrow] storage grew by {grown} bytes = {cost} yocto (fee {ESCROW_FEE})");
+    assert!(cost <= ESCROW_FEE, "escrow entry {cost} exceeds its fee");
+    assert_eq!(escrow_of(&env, &env.buyer).await?, NEAR - ESCROW_FEE);
+
+    // The buyer adds the agent's key: function calls to the registry's pay_from_escrow only.
+    let agent_key = SecretKey::from_random(KeyType::ED25519);
+    let res = env
+        .buyer
+        .batch(env.buyer.id())
+        .add_key(
+            agent_key.public_key(),
+            AccessKey::function_call_access(
+                env.registry.id(),
+                &["pay_from_escrow"],
+                Some(NearToken::from_millinear(250)),
+            ),
+        )
+        .transact()
+        .await?;
+    ensure!(
+        res.is_success(),
+        "add_key failed: {:?}",
+        res.into_result().err()
+    );
+    let mut agent = env.buyer.clone();
+    agent.set_secret_key(agent_key);
+
+    // With that key, pay_from_escrow (no deposit) pays the seller from the buyer's escrow.
+    let seller_before = balance(&env.seller).await?;
+    let res = agent
+        .call(env.registry.id(), "pay_from_escrow")
+        .args_json(json!({"service_id": id, "nonce": "5001"}))
+        .gas(CALL_GAS)
+        .transact()
+        .await?;
+    ensure!(
+        res.is_success(),
+        "pay_from_escrow failed: {:?}",
+        res.into_result().err()
+    );
+    assert_eq!(balance(&env.seller).await? - seller_before, PRICE);
+    let payment = view(&env, "get_payment", json!({"nonce": "5001"})).await?;
+    assert_eq!(payment["payer"], env.buyer.id().as_str());
+    assert_eq!(payment["amount"], PRICE.to_string());
+    let escrow = escrow_of(&env, &env.buyer).await?;
+    assert_eq!(escrow, NEAR - ESCROW_FEE - PRICE - FEE);
+
+    // With that key, withdraw_escrow is refused. The 1 yocto it needs is a deposit, which a
+    // function-call key may not attach...
+    let err = refused(
+        agent
+            .call(env.registry.id(), "withdraw_escrow")
+            .args_json(json!({"amount": escrow.to_string()}))
+            .deposit(yocto(1))
+            .gas(CALL_GAS)
+            .transact()
+            .await,
+    )?;
+    println!("[agent withdraw, 1 yocto] refused: {err}");
+    assert!(
+        err.contains("DepositWithFunctionCall"),
+        "unexpected error: {err}"
+    );
+    // ...and without it, the method is not one the key may call.
+    let err = refused(
+        agent
+            .call(env.registry.id(), "withdraw_escrow")
+            .args_json(json!({"amount": escrow.to_string()}))
+            .gas(CALL_GAS)
+            .transact()
+            .await,
+    )?;
+    println!("[agent withdraw, no deposit] refused: {err}");
+    assert!(
+        err.contains("MethodNameMismatch"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(escrow_of(&env, &env.buyer).await?, escrow);
+
+    // With the full-access key, withdraw_escrow succeeds: the balance rises by the amount minus gas.
+    let amount = NEAR / 2;
+    let before = balance(&env.buyer).await?;
+    let res = env
+        .buyer
+        .call(env.registry.id(), "withdraw_escrow")
+        .args_json(json!({"amount": amount.to_string()}))
+        .deposit(yocto(1))
+        .gas(CALL_GAS)
+        .transact()
+        .await?;
+    ensure!(
+        res.is_success(),
+        "withdraw_escrow failed: {:?}",
+        res.clone().into_result().err()
+    );
+    ensure!(
+        res.receipt_failures().is_empty(),
+        "a withdraw receipt failed: {:?}",
+        res.receipt_failures()
+    );
+    for outcome in res.receipt_outcomes() {
+        println!(
+            "[withdraw_escrow] receipt on {} burnt {} Ggas",
+            outcome.executor_id,
+            outcome.gas_burnt.as_ggas()
+        );
+    }
+    // The callback's unused gas is refunded a block after it runs, which `transact()` does not
+    // wait for (until then the balance is short by that prepaid gas), so poll for it.
+    let gas_cap = NearToken::from_millinear(10).as_yoctonear();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let rise = loop {
+        let rise = i128::try_from(balance(&env.buyer).await?)? - i128::try_from(before)?;
+        if rise > i128::try_from(amount - gas_cap)? || std::time::Instant::now() > deadline {
+            break rise;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    };
+    let burnt: u128 = res
+        .outcomes()
+        .iter()
+        .map(|o| o.tokens_burnt.as_yoctonear())
+        .sum();
+    println!("[withdraw_escrow] balance rose by {rise} yocto: amount {amount} - burnt {burnt} - 1");
+    assert!(
+        rise < i128::try_from(amount)? && rise > i128::try_from(amount - gas_cap)?,
+        "balance rose by {rise}, expected {amount} minus at most 0.01 NEAR of gas"
+    );
+    assert_eq!(escrow_of(&env, &env.buyer).await?, escrow - amount);
+    Ok(())
+}
+
+/// The re-credit callback would mint escrow if anyone could call it: only the registry may.
+#[tokio::test]
+async fn escrow_recredit_callback_is_private() -> Result<()> {
+    let env = setup().await?;
+    deposit_escrow(&env, &env.buyer, NEAR / 10).await?;
+    let before = escrow_of(&env, &env.buyer).await?;
+
+    let res = env
+        .buyer
+        .call(env.registry.id(), "on_escrow_withdraw")
+        .args_json(json!({"account_id": env.buyer.id(), "amount": NEAR.to_string()}))
+        .gas(CALL_GAS)
+        .transact()
+        .await?;
+    assert!(res.is_failure());
+    let err = format!("{:?}", res.into_result().unwrap_err());
+    assert!(
+        err.contains("Method on_escrow_withdraw is private"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(escrow_of(&env, &env.buyer).await?, before);
     Ok(())
 }
