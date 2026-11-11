@@ -1,16 +1,15 @@
 import type { Metadata } from 'next';
+import { DEFAULT_DASHBOARD_URL } from '@agentgate/shared';
 
 /**
  * Production origin for absolute URLs (canonical, OpenGraph, sitemap, robots).
- * Defaults to the hosted dashboard; set NEXT_PUBLIC_SITE_URL to override for
- * a self-hosted deployment.
+ * Set NEXT_PUBLIC_SITE_URL to the deployment's origin; without it this falls back to the shared
+ * DEFAULT_DASHBOARD_URL (the one place the hosted dashboard URL is defined).
  */
-export const SITE_URL = (
-  process.env.NEXT_PUBLIC_SITE_URL ?? 'https://agentgate.example.org'
-).replace(
-  /\/+$/,
-  '',
-);
+export const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? DEFAULT_DASHBOARD_URL).replace(/\/+$/, '');
+
+/** The source repository (nav, footer, home page, docs). */
+export const REPO_URL = 'https://example.invalid/AgentGate';
 
 /**
  * Per-page metadata helper: a unique title + description, a self-referencing

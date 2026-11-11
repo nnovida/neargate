@@ -46,6 +46,7 @@ export async function GET(
 
     const body: ServiceDetailResponse = {
       network: chain.network,
+      explorerUrl: config.nearExplorerUrl,
       mode: config.mode,
       service,
       score,

@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/docs/quickstart' },
   title: 'Quickstart',
   description:
-    'From a clean clone to a verified register → 402 → pay → serve → attest → score loop in about a minute. Run the offline demo, view it live in the dashboard, then drive your first manual wrap by hand. Mock mode — no testnet keys or network required.',
+    'From a clean clone to a verified register → 402 → pay → serve → attest → score loop in about a minute, offline on the mock chain; then view it in the dashboard, drive a wrap and a buy by hand, and the NEAR testnet scripts.',
 };
 
 export default function Page() {
@@ -27,147 +27,103 @@ export default function Page() {
       <DocHeader
         kicker="GET STARTED"
         title="Quickstart"
-        lede="Go from clone to a working payment loop in about a minute. After a ten-second live probe, everything here runs in mock mode against an in-process devnet — no keys, no network, no chain access required."
+        lede="Go from a clone to a working payment loop in about a minute. Everything up to the testnet section runs in mock mode against an in-process devnet — no keys, no network, no NEAR account needed."
       />
-
-      <H2 id="see-it-live">See it live in 10 seconds</H2>
-      <P>
-        Before installing anything: the hosted gateway is running against Casper Testnet right
-        now. Ask it for service <M>#5</M> and a real 402 invoice comes back — a fresh{' '}
-        <M>nonce</M>, the on-chain price, and the seller&apos;s payment account:
-      </P>
-      <CodeBlock label="no install required" code={'curl -sS https://gateway.example.org/svc/5'} />
-      <CodeBlock
-        label="response (abbreviated)"
-        code={[
-          '{',
-          '  "x402Version": 1,',
-          '  "error": "X-PAYMENT header is required",',
-          '  "accepts": [{',
-          '    "scheme": "exact", "network": "casper-test",',
-          '    "maxAmountRequired": "2500000000",',
-          '    "payTo": "account-hash-19ff…b5f0",',
-          '    "extra": { "nonce": "1542202979977604", "serviceId": 5, … }',
-          '  }]',
-          '}',
-        ].join('\n')}
-      />
-      <P>
-        Paying that invoice and redeeming the proof is one command —{' '}
-        <M>npx @neargate/cli@latest buy 5 --pem key.pem</M> — or the{' '}
-        <DocLink href="/docs/buyers#plain-curl">three-step curl flow</DocLink>. The rest of this
-        page runs the same loop fully offline instead — an in-process mock chain, no keys and no
-        faucet needed.
-      </P>
 
       <H2 id="prerequisites">Prerequisites</H2>
       <P>
-        The offline path needs nothing but a recent Node.js. There is no API key, no wallet, and
-        no network call to a real chain — the demo boots its own in-memory devnet, oracle and
-        gateway inside one process.
+        The offline path needs a recent Node.js and nothing else: the demo boots its own in-memory
+        devnet, sample oracle and gateway inside one process.
       </P>
       <DocTable
         head={['Requirement', 'Version', 'Notes']}
         rows={[
           [
             <M key="n">Node.js</M>,
-            '≥ 22',
-            'Declared in the root package.json engines field (npm warns on older Node). The monorepo uses npm workspaces, so a single install at the root covers every package plus the dashboard.',
-          ],
-          [
-            'npm',
-            'ships with Node 22',
-            'No global installs needed — all commands run through npm run scripts.',
+            '≥ 22.22.2',
+            'Declared in the root package.json engines field. The repository is an npm workspace, so one npm install at the root covers every package and the dashboard.',
           ],
           [
             <M key="k">ANTHROPIC_API_KEY</M>,
             'optional',
-            'Not required for any step on this page. Set it only if you want the buyer agent to use Claude instead of the deterministic MockLlm.',
+            'Not needed for any step before the testnet section. Set it only if you want the buyer agent to use Claude instead of the deterministic MockLlm.',
           ],
           [
-            'Rust toolchain',
-            'optional',
+            'near CLI, cargo-near',
+            'testnet scripts only',
             <span key="d">
-              Only needed to build or test the registry contract. The auto-pinned toolchain is
-              covered in <DocLink href="/docs/contract">Smart contracts</DocLink>.
+              <M>npm run near:bootstrap</M> uses the <M>near</M> CLI to create accounts;{' '}
+              <M>npm run near:deploy</M> also builds the contract with <M>cargo near</M>. See{' '}
+              <DocLink href="#testnet">Testnet scripts</DocLink>.
             </span>,
           ],
         ]}
       />
       <Callout tone="info" title="Two modes, one code path">
-        <M>AGENTGATE_MODE</M> selects the chain backend behind the <M>ChainClient</M> seam:{' '}
-        <M>mock</M> (the in-process devnet used throughout this page, fully offline) or{' '}
-        <M>live</M> (Casper Testnet, which needs PEM keys and a CSPR.cloud API key). The stack
-        defaults to <M>mock</M> via <M>loadConfig()</M>, but the <M>agentgate</M> CLI defaults to{' '}
-        <M>live</M> — so the manual CLI commands below pass <M>--mode mock</M>. Everything above the
-        seam is identical. See <DocLink href="/docs/configuration">Configuration</DocLink>.
+        <M>AGENTGATE_MODE</M> selects the chain backend: <M>mock</M> (the in-process devnet, fully
+        offline; the stack and the demo use it) or <M>live</M> (NEAR testnet). The <M>neargate</M>{' '}
+        CLI defaults to <M>live</M>, so the manual CLI commands below pass <M>--mode mock</M>.
+        Everything above the chain seam is identical. See{' '}
+        <DocLink href="/docs#modes">Mock vs live modes</DocLink>.
       </Callout>
 
       <H2 id="offline-demo">60-second offline demo</H2>
       <P>
         The fastest proof the whole system works end to end. Install once, then run the one-shot
-        demo. It exits <M>0</M> after printing the loop&apos;s two transaction hashes — the payment
-        deploy and the attestation — recorded on the in-process mock chain.
+        demo. It exits <M>0</M> after printing the loop’s two transaction hashes — the payment and
+        the attestation — recorded on the in-process mock chain.
       </P>
       <StepFlow
         steps={[
           {
-            title: 'Get the code',
-            body: (
-              <>
-                Clone the public repo and enter it. The full layout and requirements live in{' '}
-                <DocLink href="/docs/installation">Installation</DocLink>.
-              </>
-            ),
-            code: 'git clone https://example.invalid/AgentGate.git agentgate\ncd agentgate',
-          },
-          {
             title: 'Install the workspace',
-            body: <>One install at the repo root resolves every workspace package and the dashboard.</>,
+            body: <>From the repository root, one install resolves every package and the dashboard.</>,
             code: 'npm install',
           },
           {
             title: 'Run the loop',
             body: (
               <>
-                Boots devnet + oracle (static fixture) + middleware (the HTTP 402 paywall gateway){' '}
-                <em>in-process</em>, creates
+                Boots devnet + oracle (static fixture) + gateway <em>in-process</em>, creates
                 faucet-funded buyer and seller accounts, wraps the oracle as service #1 at 0.5
-                CSPR, runs the buyer agent once with the deterministic <M>MockLlm</M>, records the
-                attestation on-chain, prints both tx hashes and exits 0.
+                NEAR, buys one call exactly like <M>neargate buy</M> does, lets the gateway record
+                the attestation and prints six lines.
               </>
             ),
             code: 'npm run demo',
           },
         ]}
       />
-      <P>
-        The full loop — register, 402 (HTTP Payment Required), pay, serve, attest, score — prints
-        like this:
-      </P>
       <CodeBlock
-        label="npm run demo (abbreviated)"
-        code={"════════════════════════════════════════════════════════════════════════\n  AGENTGATE DEMO — register → 402 → pay → serve → attest → score\n════════════════════════════════════════════════════════════════════════\n\nstack up: devnet :4030 · oracle :4010 (static fixture) · middleware :4021\n\nseller: 01a1b2c3d4e5f6a7b8… (1000 CSPR)\nbuyer:  01f9e8d7c6b5a4d3c2… (1000 CSPR)\n\nwrapped service #1 at http://127.0.0.1:4021/svc/1 (register tx 0123456789abcdef…)\n\n════════════════════════════════════════════════════════════════════════\n  DEMO COMPLETE in 1.2s — full loop verified on the mock chain\n════════════════════════════════════════════════════════════════════════\n  payment deploy hash : <full_payment_deploy_hash>\n  attestation tx hash : <full_attestation_tx_hash>\n  amount paid         : 0.5 CSPR\n  final score         : 1/1 (success/total)\n  service public URL  : http://127.0.0.1:4021/svc/1\n  dashboard           : http://localhost:3000/services/1  (start it with `npm run dev:dashboard`)\n════════════════════════════════════════════════════════════════════════"}
+        label="npm run demo"
+        code={[
+          'registered service #1',
+          '402 invoice: 0.5 NEAR + 0.002 NEAR storage',
+          'paid: tx <payment tx hash>',
+          'served: 200',
+          'attested: tx <attestation tx hash>',
+          'score: 1/1 (new)',
+        ].join('\n')}
       />
       <Callout tone="ok" title="The proof is in two hashes">
-        The <strong className="text-white">payment deploy hash</strong> and the{' '}
-        <strong className="text-white">attestation tx hash</strong> are the loop&apos;s two
-        transactions on the mock chain — the buyer&apos;s native CSPR transfer and the gateway&apos;s{' '}
-        <M>record_attestation</M> call. <M>1/1 (success/total)</M> is the trust score that results.
-        That is the entire product in four lines, and the script exits 0.
+        The <strong className="text-white">payment</strong> and the{' '}
+        <strong className="text-white">attestation</strong> are the loop’s two transactions: the
+        buyer’s registry <M>pay</M> call and the gateway’s <M>record_attestation</M> call.{' '}
+        <M>1/1</M> is the score that results (success/total); the tier stays <M>new</M> until a
+        service has at least five attested calls.
       </Callout>
       <Callout tone="warn" title="The demo is ephemeral">
         <M>npm run demo</M> boots its own in-memory chain, runs the loop and exits — its data is
-        gone by the time you could open a browser, so it will <em>not</em> appear in the dashboard.
-        To view a live, populated stack use <M>npm run dev:seed</M> below instead.
+        gone before you could open a browser, so it will <em>not</em> appear in the dashboard. To
+        view a populated, running stack use <M>npm run dev:seed</M> below.
       </Callout>
 
       <H2 id="dashboard">See it live in the dashboard</H2>
       <P>
         Where <M>demo</M> is a one-shot, <M>dev:seed</M> brings up the same stack and{' '}
         <strong className="text-white">keeps it running</strong> until Ctrl+C, pre-populated with
-        one wrapped service and one real paid call so the dashboard shows live data the instant you
-        open it. Use two terminals.
+        one wrapped service and one real paid call, so the dashboard shows data the moment you open
+        it. Use two terminals.
       </P>
       <StepFlow
         steps={[
@@ -175,9 +131,9 @@ export default function Page() {
             title: 'Terminal 1 — boot and seed the stack',
             body: (
               <>
-                Boots devnet + oracle + middleware, then wraps the oracle at 0.5 CSPR and runs one
-                paid call (score 1/1). The stack stays up. Plain <M>npm run dev</M> does the same
-                without the seeding step.
+                Boots devnet + oracle + gateway, then wraps the oracle at 0.5 NEAR and runs one
+                paid call (score 1/1). Plain <M>npm run dev</M> does the same without the seeding
+                step.
               </>
             ),
             code: 'npm run dev:seed',
@@ -191,96 +147,151 @@ export default function Page() {
             title: 'Open the URL it prints',
             body: (
               <>
-                The default is <M>http://localhost:3000</M>. Use the URL the terminal actually
-                prints (see the port note below).
+                Usually <M>http://localhost:3000</M>. If that port is taken Next.js moves to the
+                next free one and prints it — open the URL the terminal shows.
               </>
             ),
           },
         ]}
       />
-      <P>Terminal 1 prints a ready-to-view summary once seeding completes:</P>
+      <P>Terminal 1 ends with a summary like this:</P>
       <CodeBlock
         label="npm run dev:seed (abbreviated)"
-        code={"devnet      → http://localhost:4030\noracle      → http://localhost:4010/feed\nmiddleware  → http://localhost:4021\n\nseeding the dashboard (wrap → 402 → pay → serve → attest)…\n\n────────────────────────────────────────────────────────────────────────\nAgentGate dev stack is up (mock mode) — SEEDED and ready to view.\n\n  service #1   http://localhost:4021/svc/1\n  paid call    0.5 CSPR · deploy 0123456789abcdef…\n  attestation  0123456789abcdef…\n  score        1/1 (success/total)\n\n▶ Open the dashboard:  npm run dev:dashboard   →  http://localhost:3000\n  (the stack stays up; the dashboard polls it live every 5s)\n\nCtrl+C stops everything.\n────────────────────────────────────────────────────────────────────────"}
+        code={[
+          'NearGate dev stack is up (mock mode) — SEEDED and ready to view.',
+          '',
+          '  service #1   http://localhost:4021/svc/1',
+          '  paid call    0.502 NEAR spent (price + storage) · tx <payment tx hash>…',
+          '  attestation  <attestation tx hash>…',
+          '  score        1/1 (success/total)',
+          '',
+          '▶ Open the dashboard:  npm run dev:dashboard   →  http://localhost:3000',
+        ].join('\n')}
       />
-      <Callout tone="warn" title="Port note: 3000 may shift to 3001">
-        The dashboard runs on port 3000 by default (next dev; set the <M>PORT</M> env var to change it — <M>DASHBOARD_PORT</M> only controls the link the CLI prints). If 3000 is already taken
-        Next.js automatically moves to the next free port — typically <M>http://localhost:3001</M> —
-        and prints the new URL at startup. Always open the URL printed in the{' '}
-        <M>dev:dashboard</M> terminal rather than hard-coding 3000.
-      </Callout>
       <P>
-        Once open, the dashboard polls the running stack every 5 seconds: the{' '}
-        <DocLink href="/catalog">catalog</DocLink> (ID, name, price, trust tier, score, active
-        flag), the <DocLink href="/activity">activity feed</DocLink> (registrations, payments,
-        attestations) and per-service detail pages such as{' '}
-        <DocLink href="/services/1">/services/1</DocLink>.
+        The dashboard polls the running stack: the <DocLink href="/catalog">catalog</DocLink> (id,
+        name, price in NEAR, trust tier, score, active flag), the{' '}
+        <DocLink href="/activity">activity feed</DocLink> (registrations, payments, attestations)
+        and per-service pages such as <DocLink href="/services/1">/services/1</DocLink>. On the
+        mock chain transaction hashes are plain text; against NEAR testnet they link to nearblocks.
       </P>
 
-      <H2 id="manual-wrap">Your first manual wrap</H2>
+      <H2 id="manual-wrap">Your first manual wrap and buy</H2>
       <P>
-        Now drive each side of the marketplace by hand. First stop the seeded stack from the
-        previous section (Ctrl+C) — both stacks bind the same ports — then start an{' '}
-        <em>empty</em> stack (no seeding), export the demo accounts it prints, wrap an API as a
-        seller, then run the buyer agent against it.
+        Stop the seeded stack (Ctrl+C) first — both stacks bind the same ports — then start an{' '}
+        <em>empty</em> one, export the demo accounts it prints, wrap an API as a seller, and buy a
+        call as a buyer.
       </P>
       <H3 id="manual-stack">Start an empty stack and export accounts</H3>
       <CommandBlock text="npm run dev" />
       <P>
-        This boots devnet, oracle and middleware and stays up, then prints two ready-to-paste
-        export lines for a faucet-funded buyer and seller (1000 CSPR each). Paste them into the
-        shell you will run the next commands from:
+        This boots devnet, oracle and gateway and stays up, then prints two ready-to-paste export
+        lines for a faucet-funded buyer and seller (1000 NEAR each). Paste them into the shell you
+        run the next commands from:
       </P>
       <CodeBlock
-        code={"export MOCK_BUYER_ACCOUNT=<buyerPublicKeyHex>\nexport MOCK_SELLER_ACCOUNT=<sellerPublicKeyHex>"}
+        code={'export MOCK_BUYER_ACCOUNT=buyer-<8 hex>.mock\nexport MOCK_SELLER_ACCOUNT=seller-<8 hex>.mock'}
       />
-      <Callout tone="info" title="Where the accounts come from">
-        <M>npm run dev</M> seeds the devnet faucet and prints the exports for you. You can also
-        mint a fresh pair any time with <M>npm run agentgate -- demo-accounts --mode mock</M>. Both the buyer
-        agent and <M>agentgate wrap</M> read these env vars to find their mock signer.
-      </Callout>
+      <P>
+        You can mint a fresh pair any time with{' '}
+        <M>npm run neargate -- demo-accounts --mode mock</M>.
+      </P>
       <H3 id="manual-wrap-cmd">Wrap an API (seller side)</H3>
       <CommandBlock
         wrap
-        text={'npm run agentgate -- wrap http://localhost:4010/feed --price 0.5 --name "RWA FX & Gold Oracle" --mode mock'}
+        text={'npm run neargate -- wrap http://localhost:4010/feed --price 0.5 --name "RWA FX & Gold Oracle" --mode mock'}
       />
-      <Callout tone="warn" title="Use the command above, not the terminal's">
-        The next-steps block that <M>npm run dev</M> prints omits <M>--mode mock</M>, so pasted
-        into a fresh shell it fails with <M>SIGNER_MISSING</M> — the CLI defaults to live mode and
-        asks for a PEM key. The command above passes <M>--mode mock</M> explicitly.
-      </Callout>
       <P>
-        This registers the service on-chain (name, gateway URL, the price as an <M>accepts[]</M>{' '}
-        option, payment target,
-        attestor) <em>and</em> maps the upstream URL on the gateway over the authenticated admin
-        API. On success it prints the service id, the public <M>/svc/&lt;id&gt;</M> endpoint, a
-        dashboard link and the register tx hash. Every flag is documented in{' '}
-        <DocLink href="/docs/sellers">Wrap an API</DocLink> and{' '}
+        This registers the service on-chain and maps the upstream on the gateway (in mock mode with
+        the admin token). It prints the service id, the public <M>/svc/&lt;id&gt;</M> endpoint, a
+        dashboard link and the register tx hash. Every flag is in{' '}
         <DocLink href="/docs/cli#wrap">CLI → wrap</DocLink>.
       </P>
-      <H3 id="manual-agent">Run the buyer agent (buyer side)</H3>
+      <H3 id="manual-buy">Buy a call (buyer side)</H3>
+      <CommandBlock wrap text="npm run neargate -- buy 1 --max 1 --mode mock" />
+      <P>
+        Pays the service’s 402 invoice with a registry <M>pay</M> call — price plus the{' '}
+        <M>0.002 NEAR</M> storage fee, capped at <M>--max 1</M> NEAR in total — and prints the
+        response body on stdout and a receipt on stderr. Or let the buyer agent choose a service
+        itself:
+      </P>
       <CommandBlock
         wrap
-        text={'npm run agent -- --task "Get today\'s USD/IDR rate and gold price, summarize for a treasury report"'}
+        text={'npm run agent -- --task "Get today\'s USD/IDR rate and gold price, summarize for a treasury report" --budget 1'}
       />
       <P>
-        The agent discovers the catalog from the chain, picks a service, runs a budget check, hits{' '}
-        <M>/svc/&lt;id&gt;</M> to get the 402 invoice, pays with a native CSPR transfer carrying
-        the nonce, retries with the payment proof, consumes the data and writes its receipt. It
-        requires <M>MOCK_BUYER_ACCOUNT</M> exported (and the stack running). Add{' '}
-        <M>--budget &lt;cspr&gt;</M> to cap spend. With no <M>ANTHROPIC_API_KEY</M> set it uses the
-        deterministic <M>MockLlm</M>; set the key to let it use Claude instead. See{' '}
-        <DocLink href="/docs/buyers">Build an agent</DocLink>.
+        With no <M>ANTHROPIC_API_KEY</M> the agent uses the deterministic <M>MockLlm</M>; with one
+        it asks Claude to choose, but the budget check and the payment are the same code either way.
       </P>
       <Callout tone="ok" title="Watch the score climb">
-        Re-run the buyer agent and refresh the dashboard — each successful paid call adds an
-        attestation and bumps the service score (2/2, 3/3, …), which feeds its trust tier.
+        Buy again with a different buyer and refresh the dashboard — each served call adds an
+        attestation and bumps the score (2/2, 3/3, …). A payment made by the service’s own owner or
+        payment target is served but never attested, so it cannot raise the score.
       </Callout>
+
+      <H2 id="testnet">Testnet scripts</H2>
+      <P>
+        These root scripts take the same loop to NEAR testnet. They are the operator path, run from
+        a clone with a <M>.env</M> copied from <M>.env.example</M>; nothing is published to npm.
+      </P>
+      <DocTable
+        head={['Script', 'What it does']}
+        rows={[
+          [
+            <M key="b">npm run near:bootstrap</M>,
+            <span key="bd">
+              Creates the four accounts <M>&lt;prefix&gt;-registry.testnet</M>,{' '}
+              <M>-seller</M>, <M>-gateway</M> and <M>-buyer</M> through the near CLI faucet sponsor,
+              each with a fresh key saved to <M>~/.near-credentials/testnet/</M>. Idempotent: an
+              existing account is skipped. <M>NEARGATE_PREFIX</M> sets the prefix.
+            </span>,
+          ],
+          [
+            <M key="d">npm run near:deploy</M>,
+            <span key="dd">
+              Builds <M>neargate-registry</M> with <M>cargo near</M>, deploys it onto the registry
+              account with <M>new</M> (no arguments, no admin) and reads <M>services_count</M> back.
+              It refuses an account that already holds a contract unless <M>FORCE_REDEPLOY=1</M>.
+            </span>,
+          ],
+          [
+            <M key="l">npm run dev:live</M>,
+            <span key="ld">
+              Starts the gateway in live mode against the deployed registry; it prints the registry,
+              the attestor account and the next steps.
+            </span>,
+          ],
+          [
+            <M key="s">npm run near:seed</M>,
+            <span key="sd">
+              One real register → pay → attest triple: the seller wraps a public upstream at 0.01
+              NEAR, the buyer buys one call, then the script polls the gateway’s{' '}
+              <DocLink href="/docs/protocol#receipts">receipt</DocLink> until the attestation is
+              recorded. It needs a running gateway reachable at <M>GATEWAY_PUBLIC_URL</M>, because
+              the registry stores that URL for good.
+            </span>,
+          ],
+          [
+            <M key="m">npm run smoke:live</M>,
+            <span key="md">
+              A read-only check of the live deployment: lists the services, shows one, and requests
+              an unpaid invoice from its gateway, which must answer a valid 402. Nothing is paid or
+              signed.
+            </span>,
+          ],
+        ]}
+      />
+      <Callout tone="info" title="DRY_RUN=1">
+        <M>near:bootstrap</M> and <M>near:deploy</M> accept <M>DRY_RUN=1</M>: they print every
+        command instead of running it, send nothing and never contact the network. Use it to see
+        exactly what a run would do.
+      </Callout>
+      <CodeBlock label="see what a bootstrap would do" code="DRY_RUN=1 npm run near:bootstrap" />
 
       <NextLinks
         links={[
-          { href: '/docs/installation', label: 'Installation' },
-          { href: '/docs/sellers', label: 'Wrap an API' },
+          { href: '/docs/cli', label: 'CLI & MCP' },
+          { href: '/docs/protocol', label: 'How it works' },
         ]}
       />
     </>

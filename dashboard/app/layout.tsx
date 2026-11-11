@@ -10,22 +10,22 @@ const display = Space_Grotesk({ subsets: ['latin'], variable: '--font-display' }
 const body = Inter({ subsets: ['latin'], variable: '--font-body' });
 const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-mono' });
 
-const SITE_TAGLINE = 'AgentGate — Stripe for AI agents on Casper';
+const SITE_TAGLINE = 'NearGate — Stripe for AI agents on NEAR';
 const SITE_DESCRIPTION =
-  'Wrap any API into a paid x402 service in one command — machine-to-machine CSPR micropayments with on-chain discovery and reputation on Casper.';
+  'Wrap any API into a paid x402 service in one command — machine-to-machine NEAR micropayments with on-chain discovery and reputation on NEAR.';
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  applicationName: 'AgentGate',
+  applicationName: 'NearGate',
   title: {
     default: SITE_TAGLINE,
-    template: '%s — AgentGate',
+    template: '%s — NearGate',
   },
   description: SITE_DESCRIPTION,
   alternates: { canonical: '/' },
   openGraph: {
     type: 'website',
-    siteName: 'AgentGate',
+    siteName: 'NearGate',
     url: '/',
     title: SITE_TAGLINE,
     description: SITE_DESCRIPTION,
@@ -48,18 +48,18 @@ const jsonLd = {
       '@type': 'WebSite',
       '@id': `${SITE_URL}/#website`,
       url: SITE_URL,
-      name: 'AgentGate',
-      description: 'HTTP 402 payments for AI agents on Casper.',
+      name: 'NearGate',
+      description: 'HTTP 402 payments for AI agents on NEAR.',
     },
     {
       '@type': 'SoftwareApplication',
-      name: 'AgentGate',
+      name: 'NearGate',
       applicationCategory: 'DeveloperApplication',
       operatingSystem: 'Any',
       offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
       url: SITE_URL,
       description:
-        'Wrap any HTTP API into a paid x402 service with on-chain discovery and reputation on Casper.',
+        'Wrap any HTTP API into a paid x402 service with on-chain discovery and reputation on NEAR.',
     },
   ],
 };

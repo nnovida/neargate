@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { REPO_URL } from '@/lib/seo';
 
 const LINKS = [
   { href: '/catalog', label: 'Catalog' },
@@ -26,10 +27,10 @@ export function Nav() {
         <Link href="/" className="group flex items-center gap-3">
           <GateMark />
           <span className="font-display text-[15px] font-bold uppercase tracking-[0.22em] text-white">
-            Agent<span className="text-accent transition-colors group-hover:text-white">Gate</span>
+            Near<span className="text-accent transition-colors group-hover:text-white">Gate</span>
           </span>
           <span className="hidden border border-line px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.2em] text-mut sm:inline">
-            casper testnet
+            near testnet
           </span>
         </Link>
 
@@ -50,10 +51,10 @@ export function Nav() {
             );
           })}
           <a
-            href="https://example.invalid/AgentGate"
+            href={REPO_URL}
             target="_blank"
             rel="noopener noreferrer"
-            title="AgentGate on GitHub"
+            title="NearGate on GitHub"
             className="ml-1 hidden border border-line px-3 py-2 font-mono text-xs uppercase tracking-[0.18em] text-mut transition-colors hover:border-accent/60 hover:text-white sm:block"
           >
             GitHub

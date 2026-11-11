@@ -16,7 +16,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/docs' },
   title: 'Overview',
   description:
-    'What AgentGate is, the HTTP 402 + Casper mental model, the seller / buyer / operator roles, mock vs live modes, and a map of the full documentation.',
+    'What NearGate is, the HTTP 402 + NEAR mental model, the seller / buyer / operator roles, mock vs live modes, and a map of the documentation.',
 };
 
 export default function Page() {
@@ -24,73 +24,58 @@ export default function Page() {
     <>
       <DocHeader
         kicker="GET STARTED"
-        title="AgentGate Docs"
-        lede="Stripe for AI agents on Casper. Wrap any HTTP API behind an HTTP 402 paywall, register and score it on-chain, and let buying agents pay per call — native CSPR by default, or a CEP-18 token via the official Casper x402 facilitator — with no accounts, no API keys, no subscriptions. This page gives you the mental model, then routes you by role — seller, buyer, or gateway operator — to the right guide."
+        title="NearGate Docs"
+        lede="Stripe for AI agents on NEAR. Wrap any HTTP API behind an HTTP 402 paywall, register and score it on-chain, and let buying agents pay per call in native NEAR, with no accounts, no API keys and no subscriptions. This page gives you the mental model, then routes you by role — seller, buyer or gateway operator."
       />
 
-      <H2 id="what-is-agentgate">What AgentGate is</H2>
+      <H2 id="what-is-neargate">What NearGate is</H2>
       <P>
-        AgentGate is an <DocLink href="/docs/protocol">x402</DocLink>-style payment gateway — x402
-        is the open convention for settling HTTP <M>402 Payment Required</M> challenges with
-        on-chain payments — for machine-to-machine APIs. A seller puts any
-        HTTP endpoint behind a <M>402 Payment Required</M> paywall and registers it in an on-chain
-        Casper registry. A buying agent discovers that service, receives a machine-readable invoice,
-        settles it on-chain, then retries with cryptographic proof of payment — and the gateway
-        records an on-chain attestation that feeds the service&apos;s trust score. The whole loop is{' '}
+        NearGate is an <DocLink href="/docs/protocol">x402</DocLink>-style payment gateway — x402 is
+        the open convention for settling HTTP <M>402 Payment Required</M> challenges with on-chain
+        payments — for machine-to-machine APIs. A seller puts any HTTP endpoint behind a{' '}
+        <M>402</M> paywall and registers it in the on-chain <M>neargate-registry</M> contract. A
+        buying agent discovers the service, receives a machine-readable invoice, pays it through
+        the registry, then retries with the transaction hash as proof — and the gateway records an
+        on-chain attestation that feeds the service’s trust score. The whole loop is{' '}
         <M>register → 402 → pay → serve → attest → score</M>.
       </P>
       <P>
-        Nothing about it is human-shaped. There is no signup form, no credit card, no KYC, and no API
-        key to copy into a config file. The only credentials an agent needs are a Casper wallet and
-        the ability to make an HTTP request — which is exactly what an autonomous agent already has.
+        Nothing about it is human-shaped. There is no signup form, no credit card, no KYC and no API
+        key to copy into a config file. The only credential an agent needs is a NEAR account and its
+        key, plus the ability to make an HTTP request.
       </P>
 
-      <H3 id="mental-model">The mental model: HTTP 402 + Casper</H3>
+      <H3 id="mental-model">The mental model: HTTP 402 + NEAR</H3>
       <P>
-        HTTP reserved the status code <M>402 Payment Required</M> for decades without a standard way
-        to use it. AgentGate gives it a concrete meaning. When an agent calls a paid endpoint with no
-        proof, the gateway answers <M>402</M> with a <M>PaymentRequiredResponse</M> (x402 V1) — a
-        JSON body with <M>x402Version:1</M>, a human-readable <M>error</M>, and an{' '}
-        <M>accepts[]</M> array carrying <M>maxAmountRequired</M>, the <M>payTo</M> account, a
-        single-use <M>extra.nonce</M>, and an <M>extra.expiresAtMs</M> timestamp. The agent reads
-        the challenge, sends a{' '}
-        <strong className="text-white">native CSPR transfer</strong> to <M>payTo</M> with{' '}
-        <M>transfer_id = extra.nonce</M>, then retries the request with the{' '}
-        <M>X-PAYMENT</M> proof header (base64-encoded <M>PaymentPayload</M>).
-        The gateway verifies that transfer on-chain (target, amount, transfer id, and age), burns the
-        nonce so it can never be reused, proxies to the seller&apos;s upstream API, and returns the
-        response — then records a success attestation that lifts the service&apos;s trust tier.
+        When an agent calls a paid endpoint with no proof, the gateway answers <M>402</M> with a{' '}
+        <M>PaymentRequiredResponse</M> (x402 V1): <M>x402Version: 1</M>, an <M>error</M> text and an{' '}
+        <M>accepts[]</M> entry carrying <M>maxAmountRequired</M> (the price plus the storage fee, in
+        yoctoNEAR), <M>payTo</M> (the registry account), a single-use <M>extra.nonce</M> and{' '}
+        <M>extra.expiresAtMs</M>. The agent calls the registry’s{' '}
+        <M>pay(service_id, nonce)</M> with <M>maxAmountRequired</M> attached, then retries the
+        request with an <M>X-PAYMENT</M> header (base64 JSON naming the transaction, the nonce and
+        the payer). The gateway checks the registry’s payment record for that nonce, burns the nonce
+        so it can never be reused, proxies to the seller’s upstream API and returns the response,
+        then records a success attestation on-chain.
       </P>
-      <Callout tone="info" title="TWO PAYMENT RAILS: NATIVE CSPR + OFFICIAL FACILITATOR">
+      <Callout tone="info" title="PAYMENTS GO THROUGH THE REGISTRY">
         <P>
-          <strong className="text-white">Native CSPR (default).</strong> Settlement is a plain native
-          CSPR transfer whose <M>transfer_id</M> equals the invoice nonce — the buyer broadcasts it and
-          the gateway verifies it on-chain. It does not call any vault contract; the gateway never
-          custodies funds, and payment goes straight to the seller&apos;s account. Casper enforces a{' '}
-          <M>2.5 CSPR</M> network minimum on live native transfers, so native-rail services should
-          price at ≥ 2.5 CSPR.
-        </P>
-        <P>
-          <strong className="text-white">Official facilitator (opt-in, per service).</strong> A service
-          listed in <M>FACILITATOR_SERVICES</M> instead settles through the official Casper x402{' '}
-          <M>facilitator</M> (CSPR.cloud): a <strong className="text-white">CEP-18</strong> token moved
-          by an <strong className="text-white">EIP-712</strong> authorization (x402 v2,{' '}
-          <M>PAYMENT-SIGNATURE</M> header), with gas sponsored by the facilitator. CEP-18 has no
-          2.5-CSPR floor, so this rail supports true sub-CSPR micropayments. The live deployment
-          settles in <M>WCSPR</M> (Wrapped CSPR, mintable 1:1 from CSPR on <M>testnet.cspr.trade</M>),
-          though the rail accepts any CEP-18 token. Either way the gateway custodies nothing. See{' '}
-          <DocLink href="/docs/deployment">Deploy</DocLink> and the{' '}
-          <DocLink href="/docs/changelog">changelog</DocLink>.
+          The buyer never pays the seller directly. <M>pay</M> forwards exactly the service price
+          to the seller’s <M>payment_target</M>, keeps a flat <M>0.002 NEAR</M> storage fee for the
+          payment record, and refunds anything attached above <M>price + 0.002 NEAR</M>. Because
+          the registry itself holds the payment record, an attestation can only exist for a real
+          payment — see the <DocLink href="/docs/security">security model</DocLink>. The gateway
+          never custodies funds.
         </P>
       </Callout>
 
-      <H2 id="when-to-use">When to use AgentGate</H2>
+      <H2 id="when-to-use">When to use NearGate</H2>
       <P>
-        Reach for AgentGate when the consumer of an API is software that holds a wallet rather than a
-        person with a card. Typical fits:
+        Reach for NearGate when the consumer of an API is software that holds a NEAR account rather
+        than a person with a card. Typical fits:
       </P>
       <DocTable
-        head={['You want to…', 'AgentGate gives you']}
+        head={['You want to…', 'NearGate gives you']}
         rows={[
           [
             'Sell data or compute to autonomous agents',
@@ -102,215 +87,139 @@ export default function Page() {
           ],
           [
             'Charge per request without accounts',
-            'Native CSPR settlement that lands directly in your account; the gateway holds nothing.',
+            'Native NEAR settlement that lands directly in your payment-target account; the gateway holds nothing.',
           ],
           [
             'Pick providers by reputation',
-            'An on-chain attestation trail and trust tier (new → reliable → trusted) computed from real calls.',
+            'A payment-backed attestation trail and a trust tier (new → reliable → trusted) computed from real paid calls.',
           ],
         ]}
       />
       <P>
         It is a poor fit for human-facing checkout flows, subscriptions, or anything that needs
-        chargebacks and refunds — those are the human-shaped patterns AgentGate deliberately
-        replaces.
+        chargebacks and refunds — those are the human-shaped patterns NearGate deliberately replaces.
       </P>
 
       <H2 id="roles">The roles: seller, buyer, operator</H2>
-      <P>
-        Three actors meet at the gateway. Each has its own guide; this is the one-paragraph version
-        of each.
-      </P>
+      <P>Three actors meet at the gateway. Each has its own commands; this is the short version.</P>
       <H3 id="role-seller">Seller — wraps an API</H3>
       <P>
         A seller owns an upstream HTTP API and wants to charge per call. Running{' '}
-        <M>agentgate wrap</M> once registers the service on-chain (name, price in motes, payment
-        target, attestor) and maps the private upstream URL on the gateway. After that, every call to
-        the public <M>/svc/:id</M> endpoint is metered and paid. Full walkthrough in{' '}
-        <DocLink href="/docs/sellers">Wrap an API</DocLink>.
+        <M>neargate wrap</M> once calls <M>register_service</M> on the registry (name, description,
+        gateway URL, price, payment target, attestor; <M>0.12 NEAR</M> deposit) and maps the
+        private upstream URL on the gateway (live mode: with a request signed by the owner’s
+        key). After that, every call to the public <M>/svc/:id</M> endpoint is metered and paid. See{' '}
+        <DocLink href="/docs/cli#wrap">CLI → wrap</DocLink>.
       </P>
-      <H3 id="role-buyer">Buyer — builds an agent that consumes a service</H3>
+      <H3 id="role-buyer">Buyer — an agent that consumes a service</H3>
       <P>
-        A buyer writes an agent that discovers services in the on-chain catalog, calls{' '}
-        <M>/svc/:id</M>, handles the <M>402</M>, pays (a native CSPR transfer carrying the nonce, or —
-        on facilitator-enabled services — a CEP-18 EIP-712 authorization), and retries with proof
-        headers. You can do this with one command (<M>npx @neargate/cli@latest
-        buy</M>), an MCP-capable agent via the <DocLink href="/docs/cli#mcp">MCP server</DocLink>, the
-        bundled LLM buyer agent, the client SDK&apos;s <M>fetchPaid</M> helper, or plain <M>curl</M>. See{' '}
-        <DocLink href="/docs/buyers">Build an agent</DocLink>.
+        A buyer discovers services in the on-chain catalog, calls <M>/svc/:id</M>, handles the{' '}
+        <M>402</M>, pays through the registry and retries with proof. You can do that with one
+        command (<M>neargate buy</M>), any MCP-capable agent through the{' '}
+        <DocLink href="/docs/cli#mcp">MCP server</DocLink>, the bundled buyer agent, or the{' '}
+        <M>@agentgate/client</M> package’s <M>fetchPaid</M> helper. The{' '}
+        <DocLink href="/docs/protocol">protocol page</DocLink> spells out every step for a
+        hand-rolled client.
       </P>
       <H3 id="role-operator">Operator — runs the gateway</H3>
       <P>
-        An operator runs the gateway (the 402 reverse proxy + admin API — the{' '}
-        <M>@agentgate/middleware</M> package) and, in live mode, the chain plumbing. The operator
-        sets the admin token, the SSRF policy on upstream URLs, and the chain backend, and points{' '}
-        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> at a deployed <M>AgentGateRegistry</M> before going
-        live — on Casper Testnet the contract is already deployed, so most operators just set the
-        hash (deploying your own registry is covered in{' '}
-        <DocLink href="/docs/contract">Smart contracts</DocLink>). See{' '}
-        <DocLink href="/docs/deployment">Deploy to production</DocLink>.
+        An operator runs the gateway (the 402 reverse proxy — the <M>@agentgate/middleware</M>{' '}
+        package) against a deployed registry. In live mode the gateway needs a NEAR account of its
+        own: it signs the attestations and is registered as each service’s attestor. The operator
+        sets <M>REGISTRY_CONTRACT_ID</M>, the gateway account and key, and a non-default admin
+        token. The <DocLink href="/docs/quickstart#testnet">quickstart</DocLink> lists the testnet
+        scripts that create the accounts, deploy the contract and seed a first service.
       </P>
 
       <H2 id="modes">Mock vs live modes</H2>
       <P>
         A single environment variable — <M>AGENTGATE_MODE</M> — selects the chain backend behind the{' '}
-        <M>ChainClient</M> seam. The stack (gateway, buyer agent, dashboard) defaults to <M>mock</M> via{' '}
-        <M>loadConfig()</M>, while the published <M>npx</M> CLI defaults to <M>live</M>. Everything above
-        the seam is identical, so you build and test offline and flip one flag to go on-chain.
+        <M>ChainClient</M> seam. The stack (gateway, buyer agent, dashboard) defaults to <M>mock</M>,
+        while the <M>neargate</M> CLI defaults to <M>live</M>. Everything above the seam is the same,
+        so you build and test offline and flip one variable to go on-chain.
       </P>
       <DocTable
-        head={['Concern', 'mock (default)', 'live (Casper Testnet)']}
+        head={['Concern', 'mock (default for the stack)', 'live (NEAR testnet)']}
         rows={[
           [
             'Chain backend',
             <span key="m">
-              In-memory devnet (<M>@agentgate/devnet</M>) at <M>:4030</M>
+              In-memory devnet (<M>@agentgate/devnet</M>) at <M>:4030</M>, network{' '}
+              <M>near-mock</M>
             </span>,
-            'casper-js-sdk v5 + CSPR.cloud REST',
+            <span key="l">
+              The NEAR RPC (<M>NEAR_RPC_URL</M>), network <M>near-testnet</M>
+            </span>,
           ],
           [
             'Registry',
-            'Devnet mirrors the registry contract rules (written in Odra, Casper’s Rust framework) in memory',
-            <span key="l">
-              Deployed <M>AgentGateRegistry</M> contract
+            'The devnet applies the registry contract’s rules in memory',
+            <span key="r">
+              The deployed <M>neargate-registry</M> contract (<M>REGISTRY_CONTRACT_ID</M>)
             </span>,
           ],
           [
-            'Payment verify',
-            'Devnet transfer lookup',
+            'Payment check',
+            'The devnet’s payment record for the nonce',
             <span key="v">
-              CSPR.cloud <M>GET /deploys/&lt;hash&gt;/transfers</M>
+              The registry’s <M>get_payment</M> view, plus the RPC’s record of the <M>pay</M>{' '}
+              transaction
             </span>,
           ],
-          ['Signers', 'Mock account strings', 'PEM keys'],
+          [
+            'Signers',
+            'Mock account ids, no keys',
+            'ed25519 keys: a near-cli credentials file, a key file, or a secret key in the environment',
+          ],
+          [
+            'Explorer links',
+            'None (no explorer indexes the devnet)',
+            <span key="e">
+              nearblocks (<M>NEAR_EXPLORER_URL</M>)
+            </span>,
+          ],
           [
             'Guardrails',
-            'Default admin token allowed; SSRF guard off',
-            'Default token refused; SSRF guard on',
+            'Default admin token allowed; SSRF guard off so localhost upstreams work',
+            'Default admin token refused; SSRF guard on',
           ],
         ]}
       />
       <Callout tone="warn" title="LIVE MODE PREREQUISITES">
-        Live mode requires <M>CSPR_CLOUD_API_KEY</M> and a non-default <M>AGENTGATE_ADMIN_TOKEN</M>{' '}
-        (both enforced by config), plus the registry package hash set as{' '}
-        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M>. The <M>AgentGateRegistry</M> contract is LIVE on
-        Casper Testnet (network <M>casper-test</M>) — package hash{' '}
-        <M>hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df</M>. If{' '}
-        <M>REGISTRY_CONTRACT_PACKAGE_HASH</M> is unset (e.g. a fresh checkout with no .env), the
-        gateway falls back to <M>NOT_DEPLOYED</M> (503). See{' '}
-        <DocLink href="/docs/contract">Smart contracts</DocLink>. These prerequisites apply only
-        when you run the gateway/stack yourself — the public gateway is already hosted at{' '}
-        <M>https://gateway.example.org</M>, and the published CLI defaults the registry hash and
-        reads Casper Testnet with no keys.
+        Live mode needs <M>REGISTRY_CONTRACT_ID</M> — with it unset the chain client refuses to
+        start with <M>CONFIG_INVALID</M>. The registry badge at the top of each docs page reads{' '}
+        <M>not deployed</M> until a default registry id is set. The gateway also needs{' '}
+        <M>GATEWAY_ACCOUNT_ID</M> with a key and a non-default <M>AGENTGATE_ADMIN_TOKEN</M>; both are
+        enforced by config. Reading the catalog (<M>neargate list</M>, <M>status</M>) needs no key.
       </Callout>
 
-      <H2 id="get-started">Get started</H2>
+      <H2 id="get-started">Where to go next</H2>
       <CardGrid
         cards={[
           {
             href: '/docs/quickstart',
             title: 'Quickstart',
-            desc: 'Run the offline one-shot demo (register → 402 → pay → serve → attest → score) in about 60 seconds, then bring the stack up with seeded data and open the dashboard.',
-          },
-          {
-            href: '/docs/installation',
-            title: 'Installation',
-            desc: 'Node ≥ 22 prerequisites, npm install, the monorepo package layout, and the dev scripts that boot the devnet, the sample oracle upstream (an FX & gold price API used in the demo), and the gateway.',
-          },
-        ]}
-      />
-
-      <H2 id="for-sellers">For sellers</H2>
-      <CardGrid
-        cards={[
-          {
-            href: '/docs/sellers',
-            title: 'Wrap an API',
-            desc: 'Put a 402 paywall in front of your upstream in one command, set a per-call price in CSPR, register on-chain, and collect payments straight to your account.',
+            desc: 'Run the offline demo (register → 402 → pay → serve → attest → score), bring the stack up with seeded data and open this dashboard, then the testnet scripts.',
           },
           {
             href: '/docs/cli',
-            title: 'CLI',
-            desc: 'agentgate wrap, buy, list, status, pause, resume, demo-accounts, and the mcp server — flags, environment, output, and exit codes.',
+            title: 'CLI & MCP',
+            desc: 'neargate wrap, map, list, buy, status, pause, resume, demo-accounts and the MCP server: every flag, the four MCP tools, and the error codes you can meet.',
           },
-        ]}
-      />
-
-      <H2 id="for-buyers">For buyers</H2>
-      <CardGrid
-        cards={[
-          {
-            href: '/docs/buyers',
-            title: 'Build an agent',
-            desc: 'Discover services on-chain, parse the 402, pay with a native CSPR transfer, and retry with proof — via the one-command buy CLI, the LLM buyer agent, the client SDK, or plain curl.',
-          },
-          {
-            href: '/docs/sdk',
-            title: 'Client SDK',
-            desc: 'The agent-side fetchPaid helper that parses a 402, pays, and retries — signatures, options, and return shapes.',
-          },
-        ]}
-      />
-
-      <H2 id="run-a-gateway">Run a gateway</H2>
-      <CardGrid
-        cards={[
-          {
-            href: '/docs/deployment',
-            title: 'Deploy to production',
-            desc: 'Host the dashboard, gateway, and oracle; configure live-mode guardrails; and set REGISTRY_CONTRACT_PACKAGE_HASH to connect to the live AgentGateRegistry on Casper Testnet.',
-          },
-        ]}
-      />
-
-      <H2 id="concepts">Concepts</H2>
-      <CardGrid
-        cards={[
           {
             href: '/docs/protocol',
             title: 'How it works',
-            desc: 'The x402 V1 payment protocol end to end: PaymentRequiredResponse fields, X-PAYMENT / X-PAYMENT-RESPONSE headers, on-chain verification, single-use nonce burning, and the attestation that feeds the trust score.',
-          },
-          {
-            href: '/docs/architecture',
-            title: 'Architecture',
-            desc: 'The monorepo packages, the ChainClient seam that swaps mock and live, the middleware reverse proxy, and how each piece fits together.',
+            desc: 'The x402 flow on NEAR end to end: the 402 body, the registry pay call, the X-PAYMENT proof, verification, the single-use nonce, attestations and the gateway’s receipts endpoint.',
           },
           {
             href: '/docs/security',
             title: 'Security model',
-            desc: 'Single-use nonces, admin-token enforcement, the SSRF guard on upstream URLs, on-chain payment verification, and the trust system that makes attestations meaningful.',
-          },
-        ]}
-      />
-
-      <H2 id="reference">Reference</H2>
-      <CardGrid
-        cards={[
-          {
-            href: '/docs/api',
-            title: 'HTTP API',
-            desc: 'Both surfaces: the gateway — health probes, the /svc/:id paywall proxy, self-service mapping and the admin API — plus the dashboard’s read-only /api routes.',
-          },
-          {
-            href: '/docs/configuration',
-            title: 'Configuration',
-            desc: 'Every environment variable, the mock vs live guardrails, and the ports table for the full stack.',
+            desc: 'What the chain enforces and what the gateway reports: payment-backed scores, the self-map signature, the SSRF guard, redirects and budget caps.',
           },
           {
             href: '/docs/contract',
-            title: 'Smart contracts',
-            desc: 'AgentGateRegistry entrypoints, events, error codes, storage layout, build/test commands, and deploy status.',
-          },
-          {
-            href: '/docs/errors',
-            title: 'Error codes',
-            desc: 'The full table of 402 and gateway error codes, what each one means, and how a buying agent should respond.',
-          },
-          {
-            href: '/docs/changelog',
-            title: 'Changelog',
-            desc: 'Notable changes to the CLI, gateway, smart contracts and docs — newest first.',
+            title: 'Registry contract',
+            desc: 'The neargate-registry ABI: change methods, views, constants, limits, events and every ERR_* code.',
           },
         ]}
       />

@@ -24,6 +24,8 @@ export interface ServicesResponse {
 
 export interface ServiceDetailResponse {
   network: string;
+  /** Explorer base for this deployment (server config NEAR_EXPLORER_URL); the UI links nothing on near-mock. */
+  explorerUrl: string;
   mode: 'mock' | 'live';
   service: ServiceRecord;
   score: ServiceScore;
@@ -37,6 +39,8 @@ export interface ServiceDetailResponse {
 
 export interface ActivityResponse {
   network: string;
+  /** Explorer base for this deployment (server config NEAR_EXPLORER_URL); the UI links nothing on near-mock. */
+  explorerUrl: string;
   events: ActivityEvent[];
   /** True when served from the server cache because a live refresh failed (e.g. an RPC rate limit). */
   stale?: boolean;

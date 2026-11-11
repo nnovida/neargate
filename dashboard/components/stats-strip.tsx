@@ -58,7 +58,7 @@ export function StatsStrip() {
           </p>
           <p className="mt-2 text-sm text-mut">
             {down
-              ? 'The devnet is not responding — stats will appear as soon as it is back.'
+              ? 'The chain is not responding — stats will appear as soon as it is back.'
               : 'Could not load stats — retrying automatically.'}
           </p>
         </div>

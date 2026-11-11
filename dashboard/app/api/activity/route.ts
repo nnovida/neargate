@@ -7,12 +7,11 @@ export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
 
 /**
- * Short server-side cache. The /activity page polls this route frequently and
- * each miss fans out to several CSPR.cloud reads (deploys + per-target
- * transfers), so without a cache many open tabs quickly exhaust the CSPR.cloud
- * daily quota. Caching per limit collapses all pollers to one upstream fetch
- * per TTL, and the last good response is served through a transient upstream
- * failure (e.g. a 429) so the feed degrades to "cached" instead of blank.
+ * Short server-side cache. The /activity page polls this route frequently and each miss is a
+ * `get_recent_activity` view on the NEAR RPC, which rate-limits public clients, so without a cache
+ * many open tabs quickly hit the limit. Caching per limit collapses all pollers to one upstream
+ * fetch per TTL, and the last good response is served through a transient upstream failure (e.g. a
+ * 429) so the feed degrades to "cached" instead of blank.
  */
 const CACHE_TTL_MS = 30_000;
 type Entry = { at: number; body: ActivityResponse };
@@ -26,14 +25,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json(hit.body, { headers: { 'x-cache': 'hit' } });
   }
   try {
-    const { chain } = getChain();
+    const { chain, config } = getChain();
     const events = await chain.listRecentActivity(limit);
-    const body: ActivityResponse = { network: chain.network, events };
+    const body: ActivityResponse = { network: chain.network, explorerUrl: config.nearExplorerUrl, events };
     cache.set(limit, { at: now, body });
     return NextResponse.json(body, { headers: { 'x-cache': 'miss' } });
   } catch (err) {
     // Serve the last good data through a transient upstream failure so the feed
-    // shows "cached" rather than emptying out (CSPR.cloud 429s, brief outages).
+    // shows "cached" rather than emptying out (RPC 429s, brief outages).
     if (hit) {
       return NextResponse.json(
         { ...hit.body, stale: true },

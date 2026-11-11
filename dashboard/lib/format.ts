@@ -1,4 +1,4 @@
-/** Display-only formatting helpers (money formatting itself lives in @agentgate/shared). */
+/** Display-only formatting helpers. NEAR amounts are formatted by `formatNear` / `yoctoToNear` from @agentgate/shared. */
 
 export function truncateHash(hash: string, lead = 10, tail = 8): string {
   if (hash.length <= lead + tail + 1) return hash;
@@ -8,6 +8,14 @@ export function truncateHash(hash: string, lead = 10, tail = 8): string {
 export function truncateMiddle(value: string, lead = 18, tail = 8): string {
   if (value.length <= lead + tail + 1) return value;
   return `${value.slice(0, lead)}…${value.slice(-tail)}`;
+}
+
+/**
+ * A NEAR account id for display: named and sub-account ids (alice.testnet) stay whole; a 64-hex
+ * implicit account, or anything else long, keeps both ends. Show the full id in a tooltip.
+ */
+export function shortAccount(accountId: string): string {
+  return truncateMiddle(accountId, 20, 6);
 }
 
 export function formatInt(n: number): string {

@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
+import { DEFAULT_DASHBOARD_URL, DEFAULT_GATEWAY_URL } from '@agentgate/shared';
 import { CommandBlock } from '@/components/copy';
+import { DEFAULT_EXPLORER_URL } from '@/lib/explorer';
 import {
   Callout,
   CodeBlock,
@@ -12,113 +14,179 @@ import {
   NextLinks,
   P,
   PropList,
+  Sub,
 } from '@/components/docs';
 
 export const metadata: Metadata = {
   alternates: { canonical: '/docs/cli' },
-  title: 'CLI',
+  title: 'CLI & MCP',
   description:
-    'Reference for the agentgate CLI: wrap, buy, list, status, pause, resume, demo-accounts and mcp. Every flag, argument, default and example output, verified against packages/cli/src/bin.ts.',
+    'Reference for the neargate CLI — wrap, map, list, buy, status, pause, resume, demo-accounts and mcp — with every flag, the four MCP tools, the Claude Desktop setup and the error codes you can meet.',
 };
 
 export default function Page() {
   return (
     <>
       <DocHeader
-        kicker="FOR SELLERS"
-        title="CLI"
-        lede="The agentgate CLI publishes services, buys one paid call to any of them, inspects the on-chain catalog, toggles a service you own, mints faucet-funded demo accounts, and serves AgentGate as an MCP server for agent frameworks."
+        kicker="USE NEARGATE"
+        title="CLI & MCP"
+        lede="The neargate CLI publishes services, buys one paid call to any of them, inspects the on-chain catalog, toggles a service you own, mints demo accounts on the offline devnet, and serves NearGate to agent frameworks as an MCP server."
       />
 
       {/* ───────────────────────────── invocation ───────────────────────────── */}
       <H2 id="invocation">Invocation</H2>
-      <P>The published CLI runs with <M>npx</M> — no install, no clone:</P>
-      <CommandBlock text="npx @neargate/cli@latest <command> [args] [options]" />
       <P>
-        From a cloned repo you can run it through the workspace script instead (everything after the{' '}
-        <M>--</M> is forwarded verbatim to the <M>agentgate</M> binary), or invoke the binary
-        directly if it is on your <M>PATH</M>:
+        Nothing is published to npm: run the CLI from a clone of the repository. Everything after
+        the <M>--</M> is forwarded to the <M>neargate</M> binary:
       </P>
-      <CommandBlock text="npm run agentgate -- <command> [args] [options]" />
-      <CommandBlock text="agentgate <command> [args] [options]" />
+      <CommandBlock text="npm run neargate -- <command> [args] [options]" />
       <P>
         The entry point is <M>packages/cli/src/bin.ts</M> (a <M>commander</M> program named{' '}
-        <M>agentgate</M>). There are eight commands: <DocLink href="#wrap">wrap</DocLink>,{' '}
-        <DocLink href="#buy">buy</DocLink>, <DocLink href="#list">list</DocLink>,{' '}
+        <M>neargate</M>). <M>npm run build -w @neargate/cli</M> bundles it to{' '}
+        <M>packages/cli/dist/bin.js</M>, which you can run with <M>node</M> directly — the form the{' '}
+        <DocLink href="#mcp-claude-desktop">Claude Desktop</DocLink> config uses. There are nine
+        commands: <DocLink href="#wrap">wrap</DocLink>, <DocLink href="#map">map</DocLink>,{' '}
+        <DocLink href="#list">list</DocLink>, <DocLink href="#buy">buy</DocLink>,{' '}
         <DocLink href="#status">status</DocLink>, <DocLink href="#pause">pause</DocLink>,{' '}
         <DocLink href="#resume">resume</DocLink>,{' '}
-        <DocLink href="#demo-accounts">demo-accounts</DocLink> and{' '}
-        <DocLink href="#mcp">mcp</DocLink>. Every command exits{' '}
-        <M>0</M> on success and <M>1</M> on error; AgentGate failures print to stderr as{' '}
-        <M>error: &lt;CODE&gt;: &lt;message&gt;</M> (usage mistakes are reported by the
-        argument parser without a code).
+        <DocLink href="#demo-accounts">demo-accounts</DocLink> and <DocLink href="#mcp">mcp</DocLink>.
+        Every command exits <M>0</M> on success and <M>1</M> on error; failures print one line to
+        stderr, <M>error: &lt;CODE&gt;: &lt;message&gt;</M> (see{' '}
+        <DocLink href="#error-codes">Error codes</DocLink>); a usage mistake is reported by the
+        argument parser without a code.
       </P>
 
       {/* ───────────────────────────── environment ───────────────────────────── */}
-      <H2 id="environment">Environment &amp; flags it reads</H2>
+      <H2 id="environment">Environment &amp; flags</H2>
       <P>
-        Every command calls <M>loadConfig()</M>, but each config value can be supplied as a{' '}
-        <strong>flag or an environment variable</strong> — precedence is{' '}
-        <M>flag &gt; env var &gt; built-in default</M>. The published CLI defaults to{' '}
-        <M>live</M> mode and the deployed registry hash, so <M>list</M> and <M>status</M> read
-        Casper Testnet with no configuration at all; <M>--mode</M>, <M>--node-url</M>,{' '}
-        <M>--registry</M>, <M>--pem</M>, <M>--admin-token</M> and <M>--api-key</M> override the
-        matching env vars. The table below covers only what the commands here touch; the full
-        list lives in <DocLink href="/docs/configuration">Configuration</DocLink>.
+        Each setting can be a <strong>flag or an environment variable</strong>; precedence is{' '}
+        <M>flag &gt; env var &gt; built-in default</M>. The CLI defaults to <M>live</M> mode, so{' '}
+        <M>list</M> and <M>status</M> read NEAR testnet with no key; pass <M>--mode mock</M> (or set{' '}
+        <M>AGENTGATE_MODE=mock</M>) to use the offline devnet from <M>npm run dev</M>.
       </P>
+      <H3 id="config-flags">Config flags</H3>
+      <P>Accepted by every command:</P>
       <PropList
         items={[
           {
-            name: 'AGENTGATE_MODE',
-            type: "'mock' | 'live'",
-            required: false,
+            name: '--mode <mock|live>',
+            type: 'AGENTGATE_MODE',
             default: 'live',
-            desc: (
-              <>
-                Selects the chain backend. <M>mock</M> uses the in-process devnet (offline);{' '}
-                <M>live</M> targets Casper Testnet. Reads (<M>list</M>, <M>status</M>) need
-                no keys; <M>CSPR_CLOUD_API_KEY</M> (via <M>--api-key</M>) is only used to
-                fetch attestation history in <M>status</M>.
-              </>
-            ),
+            desc: 'The chain backend: the offline devnet or NEAR.',
           },
           {
-            name: 'MOCK_SELLER_ACCOUNT',
-            type: 'string',
-            required: false,
-            default: '(empty)',
-            desc: (
-              <>
-                Seller/owner signer public key used in <M>mock</M> mode by{' '}
-                <M>wrap</M>, <M>pause</M> and <M>resume</M>. Empty &rarr;{' '}
-                <M>SIGNER_MISSING</M>. Populate it from <DocLink href="#demo-accounts">demo-accounts</DocLink>.
-              </>
-            ),
+            name: '--rpc <url>',
+            type: 'NEAR_RPC_URL',
+            desc: 'The NEAR RPC. Default: the RPC of NEAR_NETWORK (testnet: https://rpc.testnet.near.org).',
           },
           {
-            name: 'SELLER_SIGNER_PEM_PATH',
-            type: 'string (path)',
-            required: false,
-            default: '(empty)',
-            desc: (
-              <>
-                Path to the seller key PEM used in <M>live</M> mode by <M>wrap</M>,{' '}
-                <M>pause</M> and <M>resume</M>. Empty &rarr; <M>SIGNER_MISSING</M>.
-              </>
-            ),
+            name: '--registry <contract id>',
+            type: 'REGISTRY_CONTRACT_ID',
+            desc: 'The registry contract account. Default: the shared default registry id; the badge at the top of each docs page shows it (not deployed until it is set).',
           },
           {
-            name: 'AGENTGATE_ADMIN_TOKEN',
-            type: 'string',
-            required: false,
+            name: '--admin-token <token>',
+            type: 'AGENTGATE_ADMIN_TOKEN',
             default: 'dev-admin-token',
             desc: (
               <>
-                Bearer token for the legacy admin mapping{' '}
-                <M>POST &lt;gateway&gt;/admin/services</M>, used by <M>wrap</M> in{' '}
-                <M>mock</M> mode or against a self-hosted admin gateway. Live wrap does not
-                use it — it maps the upstream with an owner-signed request to{' '}
-                <M>&lt;gateway&gt;/services/&lt;id&gt;/map</M> instead.
+                Read by <M>wrap</M> in mock mode only. A flag lands in shell history and{' '}
+                <M>ps</M>, so prefer the environment variable.
+              </>
+            ),
+          },
+        ]}
+      />
+      <H3 id="signer-flags">Signer flags and key resolution</H3>
+      <P>
+        Commands that write to the chain take the account to act as. The same two flags mean the{' '}
+        <strong>seller</strong> on <M>wrap</M>, <M>map</M>, <M>pause</M> and <M>resume</M>, and the{' '}
+        <strong>buyer</strong> on <M>buy</M> and <M>mcp</M>.
+      </P>
+      <DocTable
+        head={['Flag', 'Seller env', 'Buyer env']}
+        rows={[
+          [
+            <M key="a">--account {'<id>'}</M>,
+            <M key="a1">SELLER_ACCOUNT_ID</M>,
+            <M key="a2">BUYER_ACCOUNT_ID</M>,
+          ],
+          [
+            <M key="k">--key-file {'<path>'}</M>,
+            <M key="k1">SELLER_KEY_PATH</M>,
+            <M key="k2">BUYER_KEY_PATH</M>,
+          ],
+          [
+            'no flag (a secret)',
+            <M key="s1">SELLER_PRIVATE_KEY</M>,
+            <M key="s2">BUYER_PRIVATE_KEY</M>,
+          ],
+        ]}
+      />
+      <P>
+        In <strong>mock</strong> mode the account is <M>--account</M>, else{' '}
+        <M>MOCK_SELLER_ACCOUNT</M> / <M>MOCK_BUYER_ACCOUNT</M> (print a pair with{' '}
+        <DocLink href="#demo-accounts">demo-accounts</DocLink>); mock signers carry no key and{' '}
+        <M>--key-file</M> is ignored with a note. In <strong>live</strong> mode the key is resolved
+        before any chain call, first match wins:
+      </P>
+      <DocTable
+        head={['Source, in order', 'Notes']}
+        rows={[
+          [
+            <span key="r1">
+              1 · <M>SELLER_PRIVATE_KEY</M> / <M>BUYER_PRIVATE_KEY</M>
+            </span>,
+            <span key="n1">
+              An <M>ed25519:…</M> secret key. It wins over <M>--key-file</M>, and the CLI says so
+              when both are set.
+            </span>,
+          ],
+          [
+            <span key="r2">
+              2 · <M>--key-file</M>, else <M>SELLER_KEY_PATH</M> / <M>BUYER_KEY_PATH</M>
+            </span>,
+            <span key="n2">
+              A near-cli credentials JSON (<M>account_id</M>, <M>public_key</M>,{' '}
+              <M>private_key</M>) whose <M>account_id</M> must match the account.
+            </span>,
+          ],
+          [
+            <span key="r3">
+              3 · <M>~/.near-credentials/&lt;network&gt;/&lt;account&gt;.json</M>
+            </span>,
+            'Where the near CLI keeps keys; npm run near:bootstrap writes it here.',
+          ],
+        ]}
+      />
+      <P>
+        The CLI warns when a key file is readable by group or others (<M>chmod 600</M> it) and never
+        prints key material.
+      </P>
+      <H3 id="other-env">Other variables</H3>
+      <PropList
+        items={[
+          {
+            name: 'NEAR_NETWORK',
+            type: "'testnet' | 'mainnet'",
+            required: false,
+            default: 'testnet',
+            desc: (
+              <>
+                Picks the default RPC and explorer and the <M>~/.near-credentials/&lt;network&gt;</M>{' '}
+                folder. The published defaults and every example target testnet.
+              </>
+            ),
+          },
+          {
+            name: 'NEAR_EXPLORER_URL',
+            type: 'string (url)',
+            required: false,
+            default: DEFAULT_EXPLORER_URL,
+            desc: (
+              <>
+                Base of the explorer link <M>buy</M> prints under its payment transaction, in live
+                mode.
               </>
             ),
           },
@@ -129,9 +197,9 @@ export default function Page() {
             default: '4021',
             desc: (
               <>
-                Feeds the default <M>--gateway</M> in <M>mock</M> mode
-                (<M>http://localhost:&lt;MIDDLEWARE_PORT&gt;</M>); <M>live</M> mode defaults{' '}
-                <M>--gateway</M> to the hosted <M>https://gateway.example.org</M>.
+                Mock mode only: the default <M>wrap --gateway</M> is{' '}
+                <M>http://localhost:&lt;MIDDLEWARE_PORT&gt;</M>. In live mode it is the shared{' '}
+                <M>{DEFAULT_GATEWAY_URL}</M>.
               </>
             ),
           },
@@ -142,10 +210,9 @@ export default function Page() {
             default: '3000',
             desc: (
               <>
-                Feeds the dashboard detail link printed by <M>wrap</M> in <M>mock</M> mode
-                (<M>http://localhost:&lt;DASHBOARD_PORT&gt;/services/&lt;id&gt;</M>); <M>live</M>{' '}
-                mode links to the hosted{' '}
-                <M>https://agentgate.example.org/services/&lt;id&gt;</M>.
+                Mock mode only: the dashboard link <M>wrap</M> prints is{' '}
+                <M>http://localhost:&lt;DASHBOARD_PORT&gt;/services/&lt;id&gt;</M>. In live mode it
+                points at the shared <M>{DEFAULT_DASHBOARD_URL}</M>.
               </>
             ),
           },
@@ -156,548 +223,553 @@ export default function Page() {
             default: 'http://localhost:4030',
             desc: (
               <>
-                Mock devnet base URL the faucet is called on by <M>demo-accounts</M> (derived
-                from <M>DEVNET_PORT</M>, default <M>4030</M>).
+                The offline devnet that mock mode reads and <M>demo-accounts</M> funds from (derived
+                from <M>DEVNET_PORT</M>).
               </>
             ),
           },
         ]}
       />
 
-      <H3 id="config-flags">Config flags</H3>
-      <P>
-        Each of these overrides the matching environment variable (<M>flag &gt; env &gt; default</M>).{' '}
-        <M>--mode</M>, <M>--node-url</M> and <M>--registry</M> are accepted by all eight commands; the
-        signer and key flags are read only by the commands that need them.
-      </P>
-      <DocTable
-        head={['Flag', 'Overrides', 'Default', 'Used by']}
-        rows={[
-          [<M key="f1">--mode {'<mock|live>'}</M>, <M key="e1">AGENTGATE_MODE</M>, <M key="d1">live</M>, 'all commands'],
-          [
-            <M key="f2">--node-url {'<url>'}</M>,
-            <M key="e2">CASPER_NODE_URL</M>,
-            <M key="d2">https://node.testnet.casper.network/rpc</M>,
-            'all commands',
-          ],
-          [
-            <M key="f3">--registry {'<hash>'}</M>,
-            <M key="e3">REGISTRY_CONTRACT_PACKAGE_HASH</M>,
-            <span key="d3"><M>hash-e09869a1…</M> (the deployed package)</span>,
-            'all commands',
-          ],
-          [
-            <M key="f4">--pem {'<path>'}</M>,
-            <M key="e4">SELLER_SIGNER_PEM_PATH</M>,
-            <M key="d4">(none)</M>,
-            'wrap, pause, resume (live writes); for buy and mcp it means the buyer key (env: BUYER_SIGNER_PEM_PATH)',
-          ],
-          [
-            <M key="f5">--admin-token {'<token>'}</M>,
-            <M key="e5">AGENTGATE_ADMIN_TOKEN</M>,
-            <M key="d5">dev-admin-token</M>,
-            'wrap (mock / self-hosted admin)',
-          ],
-          [
-            <M key="f6">--api-key {'<key>'}</M>,
-            <M key="e6">CSPR_CLOUD_API_KEY</M>,
-            <M key="d6">(none)</M>,
-            'status (attestation history)',
-          ],
-          [
-            <M key="f7">--key-algo {'<algo>'}</M>,
-            <M key="e7">BUYER_KEY_ALGO</M>,
-            <M key="d7">secp256k1</M>,
-            'buy / mcp — signing key algorithm (ed25519 | secp256k1) for the facilitator (x402 v2) rail',
-          ],
-        ]}
-      />
-      <Callout tone="warn" title="Secrets on the command line">
-        <M>--pem</M> is a path (safe), but <M>--admin-token</M> and <M>--api-key</M> put the secret
-        itself into shell history and <M>ps</M> output. Prefer the environment variable for those two
-        in any shared or CI environment.
-      </Callout>
-
       {/* ───────────────────────────── wrap ───────────────────────────── */}
       <H2 id="wrap">wrap</H2>
       <P>
-        Wrap an upstream API behind the AgentGate 402 paywall and register it on-chain. The
-        upstream URL is kept private — it is only sent to the gateway mapping API, never to the
-        registry. <M>wrap</M> performs two steps: it registers the service on-chain first,
-        then maps the upstream on the gateway. In live mode this is a self-service call —{' '}
-        <M>wrap</M> signs an ownership challenge with the seller key and POSTs{' '}
-        <M>{'{upstreamUrl, publicKeyHex, timestamp, signatureHex}'}</M> to{' '}
-        <M>&lt;gateway&gt;/services/&lt;id&gt;/map</M> (no admin token). Mock mode and
-        self-hosted admin gateways use the legacy <M>POST &lt;gateway&gt;/admin/services</M>{' '}
-        with <M>AGENTGATE_ADMIN_TOKEN</M> instead.
+        Registers a service on-chain and puts the 402 paywall in front of your API. The upstream URL
+        is kept private: it is only ever sent to the gateway.
       </P>
       <CommandBlock
         wrap
-        text='npx @neargate/cli@latest wrap <upstreamUrl> --price <cspr> --name <name> --pem <path> [options]'
+        text={'npm run neargate -- wrap <upstreamUrl> --price <near> --name <name> [options]'}
       />
-      <DocTable
-        head={['Flag / arg', 'Required', 'Default', 'Meaning']}
-        rows={[
-          [
-            <M key="a">{'<upstreamUrl>'}</M>,
-            'yes',
-            '—',
-            'Positional. Upstream API URL to wrap (kept private). Must be a valid http:// or https:// URL.',
-          ],
-          [
-            <M key="p">--price {'<cspr>'}</M>,
-            'yes',
-            '—',
-            'Price per call in CSPR (e.g. 0.5), up to 9 decimal places. A malformed value (non-numeric, negative, or >9 dp) fails with INVALID_AMOUNT; a price of 0 fails with INVALID_PRICE. Stored as motes on-chain.',
-          ],
-          [<M key="n">--name {'<name>'}</M>, 'yes', '—', 'Service name. Non-empty, no control characters, ≤ 128 chars.'],
-          [
-            <M key="d">--description {'<d>'}</M>,
-            'no',
-            <M key="dd">&apos;&apos; (empty)</M>,
-            'Service description. No control characters, ≤ 512 chars.',
-          ],
-          [
-            <M key="g">--gateway {'<url>'}</M>,
-            'no',
-            <M key="gd">https://gateway.example.org (live) · http://localhost:&lt;MIDDLEWARE_PORT&gt; (mock)</M>,
-            'Gateway base URL (this base is what gets stored on-chain; readers compute <base>/svc/<id>). No query/fragment; https required for non-localhost hosts in live mode.',
-          ],
-          [
-            <M key="t">--payment-target {'<accountHash>'}</M>,
-            'no',
-            'derived from the seller signer',
-            <span key="td">
-              Account-hash that receives payment. Must match <M>account-hash-&lt;64 hex&gt;</M>.
-            </span>,
-          ],
-          [
-            <M key="x">--attestor {'<publicKeyHex>'}</M>,
-            'no',
-            'the seller signer public key',
-            <span key="xd">
-              Public key allowed to record attestations. Casper hex (<M>01</M>+64 hex or{' '}
-              <M>02</M>+66 hex).
-            </span>,
-          ],
+      <PropList
+        items={[
+          { name: '<upstreamUrl>', type: 'url', required: true, desc: 'The http(s) API to wrap.' },
+          {
+            name: '--price <near>',
+            type: 'NEAR decimal',
+            required: true,
+            desc: (
+              <>
+                Price per call, at least <M>0.000001</M> NEAR (the registry minimum, else{' '}
+                <M>INVALID_PRICE</M>). Buyers attach this plus the flat <M>0.002 NEAR</M> storage
+                fee.
+              </>
+            ),
+          },
+          {
+            name: '--name <name>',
+            type: 'string',
+            required: true,
+            desc: 'Service name, at most 64 bytes (UTF-8), no control characters.',
+          },
+          {
+            name: '--description <d>',
+            type: 'string',
+            required: false,
+            desc: 'At most 280 bytes (UTF-8).',
+          },
+          {
+            name: '--gateway <url>',
+            type: 'url',
+            required: false,
+            desc: (
+              <>
+                Gateway base URL, stored on-chain (at most 200 bytes, no query string or fragment);
+                readers derive the endpoint <M>&lt;gateway&gt;/svc/&lt;id&gt;</M>. Live mode needs{' '}
+                <M>https://</M> unless the host is localhost (<M>INSECURE_URL</M>).
+              </>
+            ),
+          },
+          {
+            name: '--payment-target <account>',
+            type: 'NEAR account id',
+            required: false,
+            default: 'the seller account',
+            desc: 'The account that receives each price. Live mode checks it exists first (ACCOUNT_NOT_FOUND), because the registry forwards every price there.',
+          },
+          {
+            name: '--attestor <account>',
+            type: 'NEAR account id',
+            required: false,
+            default: 'the seller account',
+            desc: 'The account allowed to record attestations besides the owner. In production this is the gateway’s account.',
+          },
         ]}
       />
       <P>
-        <M>wrap</M> also reads the <DocLink href="#config-flags">config flags</DocLink> — most
-        importantly <M>--pem</M> (required for live writes) and <M>--admin-token</M> (mock or
-        self-hosted admin mapping).
+        Plus the <DocLink href="#signer-flags">signer flags</DocLink> (seller) and{' '}
+        <M>--admin-token</M>. The command validates everything and, in live mode, loads your key and
+        checks the payment target <em>before</em> anything is sent; then it calls{' '}
+        <M>register_service</M> (attaching the <M>0.12 NEAR</M> registration deposit) and maps the
+        upstream on the gateway. In live mode the mapping is a request signed with your key — no
+        shared admin token (see <DocLink href="/docs/security#self-map">the self-map signature</DocLink>);
+        in mock mode it goes through the gateway’s admin route with the admin token.
       </P>
       <H3 id="wrap-example">Example</H3>
-      <CommandBlock
-        wrap
-        text='npx @neargate/cli@latest wrap https://api.example.com/gold --price 2.5 --name "Gold Spot Feed" --pem ./key.pem'
-      />
       <CodeBlock
-        label="output"
+        label="npm run neargate -- wrap http://localhost:4010/feed --price 0.5 --name &quot;RWA FX &amp; Gold Oracle&quot; --mode mock"
         code={[
-          'service id:      5',
-          'public endpoint: https://gateway.example.org/svc/5',
-          'dashboard:       https://agentgate.example.org/services/5',
-          'register tx:     <txHash>',
+          'service id:      1',
+          'public endpoint: http://localhost:4021/svc/1',
+          'dashboard:       http://localhost:3000/services/1',
+          'register tx:     <tx hash>',
         ].join('\n')}
       />
-      <Callout tone="warn" title="The on-chain registration is never rolled back">
-        <P>
-          Step 1 (registration) and step 2 (gateway mapping) are independent. If the gateway
-          mapping fails, the service is already registered on-chain, and the success output
-          gains a final line:
-        </P>
-        <CodeBlock
-          code={'note: gateway upstream mapping FAILED — see the warning above for the retry curl.'}
-        />
-        <P>
-          The printed retry hint depends on the path: mock or self-hosted-admin wrap prints a
-          runnable curl referencing <M>$AGENTGATE_ADMIN_TOKEN</M>; live (<M>--pem</M>) wrap
-          prints no curl (the note&apos;s wording is shared with the admin path) — the mapping
-          must be re-created by re-POSTing a fresh owner-signed challenge to{' '}
-          <M>&lt;gateway&gt;/services/&lt;id&gt;/map</M>; see{' '}
-          <DocLink href="/docs/sellers#ts-admin-map-failed">recovering a failed mapping</DocLink>.
-          Do not re-run <M>wrap</M> — it registers a duplicate service. Until the mapping
-          exists, the <M>/svc/&lt;id&gt;</M> endpoint will 404.
-        </P>
+      <Callout tone="warn" title="IF THE MAPPING FAILS, DO NOT RE-RUN WRAP">
+        The registration is <em>not</em> rolled back when the gateway mapping fails: the service
+        exists on-chain and its endpoint answers <M>503</M> until it is mapped. <M>wrap</M> prints
+        the exact retry to stderr and notes the failure on stdout. Re-running <M>wrap</M> would
+        register a duplicate; use <DocLink href="#map">map</DocLink> instead.
       </Callout>
-      <H3 id="wrap-signer">Signer it reads</H3>
+
+      {/* ───────────────────────────── map ───────────────────────────── */}
+      <H2 id="map">map</H2>
       <P>
-        The seller signer is resolved from the environment by mode: <M>MOCK_SELLER_ACCOUNT</M>{' '}
-        in mock mode, <M>SELLER_SIGNER_PEM_PATH</M> in live mode. Either being empty throws{' '}
-        <M>SIGNER_MISSING</M>. When omitted, <M>--payment-target</M> defaults to the account
-        hash derived from this signer and <M>--attestor</M> defaults to its public key.
+        Re-sends only the signed mapping request of <M>wrap</M> for a service you already own; it
+        never registers. Live mode only: in mock mode it refuses with <M>LIVE_ONLY</M> and prints
+        the admin-route <M>curl</M> to use instead.
+      </P>
+      <CommandBlock wrap text="npm run neargate -- map <id> <upstreamUrl> --account <owner>" />
+      <P>
+        It reads the service on-chain, checks that your key’s account is its owner (
+        <M>NOT_SERVICE_OWNER</M>) and maps at the gateway the registry records for it, printing{' '}
+        <M>service id</M>, <M>gateway</M>, <M>public endpoint</M> and <M>mapping: ok</M>.
       </P>
 
       {/* ───────────────────────────── list ───────────────────────────── */}
       <H2 id="list">list</H2>
       <P>
-        List the on-chain service catalog joined with scores and trust tiers, in the order the
-        chain returns it. Takes no arguments and no command-specific options; the shared{' '}
-        <DocLink href="#config-flags">config flags</DocLink> (<M>--mode</M>, <M>--node-url</M>,{' '}
-        <M>--registry</M>) still apply.
+        The on-chain catalog with scores and trust tiers. No key. The table goes to stdout (header
+        included, so scripts can parse it); the empty-catalog hint goes to stderr.
       </P>
-      <CommandBlock text="npx @neargate/cli@latest list" />
+      <CommandBlock text="npm run neargate -- list" />
       <CodeBlock
-        label="output (illustrative — your table shows the live catalog)"
+        label="output"
         code={[
-          'ID  NAME                  PRICE     TIER      SCORE  ACTIVE  ENDPOINT',
-          '1   Gold Spot Feed        0.5 CSPR  reliable  9/10   yes     http://localhost:4021/svc/1',
-          '2   Sentiment Feed        1 CSPR    new       2/2    no      http://localhost:4021/svc/2',
+          'id  name                  price(NEAR)  calls  tier  active',
+          '1   RWA FX & Gold Oracle  0.5          1/1    new   yes',
         ].join('\n')}
       />
       <P>
-        Columns are <M>ID</M>, <M>NAME</M>, <M>PRICE</M>, <M>TIER</M>,{' '}
-        <M>SCORE</M> (<M>successCalls/totalCalls</M>), <M>ACTIVE</M> (<M>yes</M>/<M>no</M>) and
-        the computed <M>ENDPOINT</M>. When the registry is empty it prints a single hint line
-        instead of a table:
+        <M>price(NEAR)</M> is the service price (each call also attaches the <M>0.002 NEAR</M>{' '}
+        storage fee); <M>calls</M> is successful/total attested calls; <M>tier</M> is{' '}
+        <M>new</M>, <M>reliable</M> or <M>trusted</M>.
       </P>
-      <CodeBlock
-        code={'no services registered yet — wrap one with `agentgate wrap <upstreamUrl> --price 0.5 --name "My API"`'}
-      />
-      <Callout tone="info" title="Trust tiers">
-        Tiers are derived from the score (see <M>packages/shared/src/trust.ts</M>):{' '}
-        <M>new</M> when fewer than 5 total calls; <M>reliable</M> at 5+ calls with a{' '}
-        &ge; 90% success ratio; <M>trusted</M> at 25+ calls with a &ge; 95% success ratio.
-        Malformed scores stay <M>new</M>.
-      </Callout>
 
       {/* ───────────────────────────── buy ───────────────────────────── */}
       <H2 id="buy">buy</H2>
       <P>
-        Buy one call to a service: run the full x402 exchange — request, receive the{' '}
-        <M>402</M> invoice, pay it with a native CSPR transfer carrying the nonce as{' '}
-        <M>transfer_id</M>, retry with the <M>X-PAYMENT</M> proof — and print the result. The
-        response body goes to <strong className="text-white">stdout</strong> (pipeable);
-        payment metadata (service, price, payment hash, settlement, status) goes to{' '}
-        <strong className="text-white">stderr</strong>. No contract call is involved, and no
-        new deployment is needed — payment is a plain native transfer.
+        Buys one call: fetches the 402 invoice, pays it with a registry <M>pay</M> call (price + the
+        storage fee attached), retries with the transaction as proof and prints the result. The
+        response body goes to <strong className="text-white">stdout</strong> (pipeable); the receipt
+        goes to <strong className="text-white">stderr</strong>.
       </P>
-      <CommandBlock
-        wrap
-        text="npx @neargate/cli@latest buy <id> --pem <path> [--max <cspr>] [--method <m>] [--body <json>] [--gateway <url>]"
-      />
-      <DocTable
-        head={['Flag / arg', 'Required', 'Default', 'Meaning']}
-        rows={[
-          [
-            <M key="i">{'<id>'}</M>,
-            'yes',
-            '—',
-            'Positional. Service id (1-based, as shown by `agentgate list`).',
-          ],
-          [
-            <M key="m">--max {'<cspr>'}</M>,
-            'no',
-            'unlimited',
-            'Budget cap: refuse to pay any invoice priced above this many CSPR. Checked twice — against the on-chain price before any HTTP, and against the 402 invoice before paying (PRICE_EXCEEDED).',
-          ],
-          [
-            <M key="me">--method {'<m>'}</M>,
-            'no',
-            <M key="med">GET</M>,
-            'HTTP method for the paid request.',
-          ],
-          [
-            <M key="b">--body {'<json>'}</M>,
-            'no',
-            '—',
-            'JSON request body, sent with content-type application/json on both legs. Validated up front (INVALID_INPUT) — the gateway rejects non-JSON bodies before charging.',
-          ],
-          [
-            <M key="g">--gateway {'<url>'}</M>,
-            'no',
-            "the service's on-chain endpoint",
-            'Gateway base URL override; the paid request goes to <base>/svc/<id>.',
-          ],
-          [
-            <M key="pm">--pem {'<path>'}</M>,
-            'live mode',
-            <M key="pmd">BUYER_SIGNER_PEM_PATH</M>,
-            'Buyer signer PEM path. For buy, --pem means the buyer key — SELLER_SIGNER_PEM_PATH is never read.',
-          ],
+      <CommandBlock wrap text="npm run neargate -- buy <id> --account <buyer> --max <near>" />
+      <PropList
+        items={[
+          { name: '<id>', type: 'positive integer', required: true, desc: 'The service id (see list).' },
+          {
+            name: '--max <near>',
+            type: 'NEAR decimal',
+            required: false,
+            desc: (
+              <>
+                Budget cap on the <strong>total</strong> attached — price + <M>0.002 NEAR</M> —
+                checked before anything is paid (<M>BUDGET_EXCEEDED</M>). Without it there is no cap.
+              </>
+            ),
+          },
+          { name: '--method <method>', type: 'string', required: false, default: 'GET', desc: 'HTTP method of the paid request.' },
+          { name: '--body <json>', type: 'string', required: false, desc: 'JSON request body to send with the paid request.' },
+          {
+            name: '--gateway <url>',
+            type: 'url',
+            required: false,
+            default: 'the service’s on-chain endpoint',
+            desc: 'Gateway base URL; the request goes to <gateway>/svc/<id>.',
+          },
         ]}
       />
-      <P>
-        Fail-fast guards run <em>before</em> any payment: unknown service (
-        <M>SERVICE_NOT_FOUND</M>), paused service (<M>SERVICE_INACTIVE</M>), price above{' '}
-        <M>--max</M> (<M>PRICE_EXCEEDED</M>), malformed body (<M>INVALID_INPUT</M>).{' '}
-        <M>buy</M> pays exactly the invoice&apos;s <M>maxAmountRequired</M> and never overpays;
-        Casper&apos;s ~2.5 CSPR native-transfer floor therefore means invoices below it cannot
-        settle on this rail — target services priced ≥ 2.5 CSPR.
-      </P>
-      <H3 id="buy-example">Example</H3>
-      <CommandBlock wrap text="npx @neargate/cli@latest buy 5 --pem ./buyer.pem --max 3" />
+      <H3 id="buy-example">Example receipt</H3>
       <CodeBlock
-        label="stderr (payment metadata) — the response body arrives on stdout"
+        label="stderr"
         code={[
-          'service:  #5 RWA FX & Gold Oracle',
-          'url:      https://gateway.example.org/svc/5',
-          'paid:     2.5 CSPR',
-          'payment:  <deployHash>',
-          'explorer: https://testnet.cspr.live/transaction/<deployHash>',
-          'settled:  ok  (payer account-hash-…)',
+          'service:  #1 RWA FX & Gold Oracle',
+          'url:      http://localhost:4021/svc/1',
+          'paid:     0.5 NEAR + 0.002 NEAR storage',
+          'payment:  <tx hash>',
+          'explorer: <NEAR_EXPLORER_URL>/txns/<tx hash>      (live mode only)',
+          'settled:  ok  (payer buyer-1abba006.mock)',
           'status:   200',
         ].join('\n')}
       />
-      <H3 id="buy-signer">Signer it reads</H3>
       <P>
-        The buyer signer is resolved per mode: <M>MOCK_BUYER_ACCOUNT</M> in mock mode (run{' '}
-        <DocLink href="#demo-accounts">demo-accounts</DocLink> first), and{' '}
-        <M>--pem</M> or <M>BUYER_SIGNER_PEM_PATH</M> in live mode. Note that for <M>buy</M>{' '}
-        the <M>--pem</M> flag means the <em>buyer</em> key — it does not touch{' '}
-        <M>SELLER_SIGNER_PEM_PATH</M>.
+        <strong className="text-white">Never pay twice for one call.</strong> If the payment went
+        through but the gateway did not serve the call, <M>buy</M> fails with{' '}
+        <M>PAID_NOT_SERVED</M> naming the transaction and nonce; see{' '}
+        <DocLink href="#error-codes">Error codes</DocLink> before retrying.
       </P>
 
       {/* ───────────────────────────── status ───────────────────────────── */}
       <H2 id="status">status</H2>
       <P>
-        Show one service in depth: the full record, its score, trust tier and recent
-        attestations.
+        One service in full: record, price (with the storage fee), payment target, owner, attestor,
+        trust tier with the score, and its 10 latest attestations. No key.
       </P>
-      <CommandBlock text="npx @neargate/cli@latest status <id> [--api-key <key>]" />
-      <DocTable
-        head={['Argument / flag', 'Required', 'Rule']}
-        rows={[
-          [
-            <M key="i">{'<id>'}</M>,
-            'yes',
-            'Positive integer (1-based). A non-numeric or < 1 value throws INVALID_SERVICE_ID; an id with no on-chain record throws SERVICE_NOT_FOUND.',
-          ],
-          [
-            <M key="k">--api-key {'<key>'}</M>,
-            'no',
-            'CSPR.cloud key used only to fetch attestation history (overrides CSPR_CLOUD_API_KEY). Without it, the record, score and tier still print but attestation history is skipped.',
-          ],
-        ]}
-      />
-      <CodeBlock
-        label="output — default, no key (illustrative)"
-        code={[
-          'service:        #1 Gold Spot Feed',
-          'description:    USD spot gold with confidence',
-          'endpoint:       http://localhost:4021/svc/1',
-          'price:          0.5 CSPR',
-          'payment target: account-hash-<64hex>',
-          'owner:          account-hash-<64hex>',
-          'attestor:       account-hash-<64hex>',
-          'trust:          reliable (9/10 calls ok)',
-          'attestations:   (set CSPR_CLOUD_API_KEY or pass --api-key to view history)',
-        ].join('\n')}
-      />
-      <P>
-        In <M>mock</M> mode <M>owner</M> and <M>attestor</M> print as public-key hex; the live
-        contract stores addresses, so live mode prints <M>account-hash-…</M> for both.
-      </P>
-      <P>
-        The record, score and trust tier always print with no keys. Attestation history is the one
-        part that needs a <DocLink href="#config-flags">CSPR.cloud key</DocLink>: without{' '}
-        <M>--api-key</M> (or <M>CSPR_CLOUD_API_KEY</M>) the last line is the hint above and the
-        command stops. Pass the key to fetch the newest attestations:
-      </P>
-      <CodeBlock
-        label="output — with --api-key"
-        code={[
-          'trust:          reliable (9/10 calls ok)',
-          'attestations (latest 10):',
-          '  [ok  ] 2026-06-12T10:30:05.123Z  payment a1b2c3d4e5f6  tx b2c3d4e5f6a1',
-          '  [FAIL] 2026-06-12T09:14:44.001Z  payment 9f8e7d6c5b4a  tx 8e7d6c5b4a39',
-        ].join('\n')}
-      />
-      <P>
-        At most 10 attestations are shown (<M>STATUS_ATTESTATION_LIMIT</M>), newest first, each
-        prefixed <M>[ok  ]</M> or <M>[FAIL]</M>; with a key but no attestations yet it prints{' '}
-        <M>attestations:   none yet</M>. An inactive service is tagged <M>[INACTIVE]</M> after its
-        name, and the <M>description:</M> line is omitted when the description is empty.
-      </P>
+      <CommandBlock text="npm run neargate -- status <id>" />
 
-      {/* ───────────────────────────── pause ───────────────────────────── */}
+      {/* ───────────────────────────── pause / resume ───────────────────────────── */}
       <H2 id="pause">pause</H2>
       <P>
-        Pause a service you own: signs the registry&apos;s{' '}
-        <M>set_active(service_id, false)</M> on-chain (owner only), then re-fetches the record
-        and prints the new state. While paused the gateway answers 403 on{' '}
-        <M>/svc/&lt;id&gt;</M> and the catalog shows it as inactive. The score is untouched.
+        Owner only: calls <M>set_active(false)</M>. A paused service takes no new payments (the
+        registry’s <M>pay</M> panics <M>ERR_SERVICE_INACTIVE</M>) and its gateway answers{' '}
+        <M>403 service_inactive</M>. Prints the service, its new state and the transaction.
       </P>
-      <CommandBlock text="npx @neargate/cli@latest pause <id> --pem <path>" />
-      <DocTable
-        head={['Argument', 'Required', 'Rule']}
-        rows={[
-          [
-            <M key="i">{'<id>'}</M>,
-            'yes',
-            'Positive integer. Bad id → INVALID_SERVICE_ID; unknown id → SERVICE_NOT_FOUND; signed by a non-owner key → not_authorized (403).',
-          ],
-        ]}
-      />
-      <CodeBlock
-        label="output"
-        code={[
-          'service:       #2 Sentiment Feed',
-          'active:        no (paused)',
-          'set_active tx: <txHash>',
-        ].join('\n')}
-      />
-      <P>
-        Like <M>wrap</M>, <M>pause</M> resolves the owner signer from{' '}
-        <M>MOCK_SELLER_ACCOUNT</M> (mock) or <M>SELLER_SIGNER_PEM_PATH</M> / <M>--pem</M> (live). If the
-        signing key is not the service owner, the chain&apos;s 403 is reworded into a clear
-        owner-only <M>not_authorized</M> error.
-      </P>
-
-      {/* ───────────────────────────── resume ───────────────────────────── */}
+      <CommandBlock text="npm run neargate -- pause <id> --account <owner>" />
       <H2 id="resume">resume</H2>
       <P>
-        Resume a paused service you own: signs <M>set_active(service_id, true)</M> on-chain.
-        Same argument rules, owner-only check and signer resolution as <M>pause</M>. Calls flow
-        through the paywall again and discovery shows the service on the next catalog read.
+        Owner only: calls <M>set_active(true)</M>; calls flow again.
       </P>
-      <CommandBlock text="npx @neargate/cli@latest resume <id> --pem <path>" />
-      <DocTable
-        head={['Argument', 'Required', 'Rule']}
-        rows={[
-          [
-            <M key="i">{'<id>'}</M>,
-            'yes',
-            'Positive integer. Same rules as pause: INVALID_SERVICE_ID / SERVICE_NOT_FOUND / not_authorized.',
-          ],
-        ]}
-      />
-      <CodeBlock
-        label="output"
-        code={[
-          'service:       #2 Sentiment Feed',
-          'active:        yes',
-          'set_active tx: <txHash>',
-        ].join('\n')}
-      />
+      <CommandBlock text="npm run neargate -- resume <id> --account <owner>" />
+      <P>
+        Signing as anyone but the owner is rejected by the registry with{' '}
+        <M>ERR_NOT_AUTHORIZED</M>, which the CLI rewords into an owner-only message.
+      </P>
 
       {/* ───────────────────────────── demo-accounts ───────────────────────────── */}
       <H2 id="demo-accounts">demo-accounts</H2>
       <P>
-        Create faucet-funded buyer/seller demo accounts on the mock devnet. This command is{' '}
-        <strong className="text-white">mock mode only</strong>: in live mode it throws{' '}
-        <M>MOCK_ONLY</M>. It generates a buyer and a seller mock public key (<M>01</M> + 64
-        random hex chars from 32 CSPRNG bytes) and faucets 1000 CSPR to each via{' '}
-        <M>POST &lt;DEVNET_URL&gt;/faucet</M>, so it needs a local mock devnet running
-        (<M>npm run dev</M>). Since the CLI defaults to <M>live</M>, pass <M>--mode mock</M>.
+        Mock mode only (<M>MOCK_ONLY</M> otherwise): creates a buyer and a seller on the offline
+        devnet, funds each with 1000 NEAR from its faucet and prints their balances with ready-to-paste
+        export lines. The devnet must be running (<M>npm run dev</M>).
       </P>
-      <CommandBlock text="npx @neargate/cli@latest demo-accounts --mode mock" />
+      <CommandBlock text="npm run neargate -- demo-accounts --mode mock" />
       <CodeBlock
-        label="output"
+        label="output (abbreviated)"
         code={[
-          'buyer:  01<publicKeyHex>  (1000 CSPR)',
-          'seller: 01<publicKeyHex>  (1000 CSPR)',
+          'buyer:  buyer-1abba006.mock  (1000 NEAR)',
+          'seller: seller-1155b100.mock  (1000 NEAR)',
           '',
-          '# paste into your shell (used by the buyer agent and `agentgate wrap`):',
-          'export MOCK_BUYER_ACCOUNT=01<publicKeyHex>',
-          'export MOCK_SELLER_ACCOUNT=01<publicKeyHex>',
+          '# paste into your shell (used by the buyer agent and `neargate wrap`):',
+          'export MOCK_BUYER_ACCOUNT=buyer-1abba006.mock',
+          'export MOCK_SELLER_ACCOUNT=seller-1155b100.mock',
+          '# buyer public key: ed25519:…',
+          '# seller public key: ed25519:…',
         ].join('\n')}
       />
-      <P>
-        Paste the two <M>export</M> lines into your shell:{' '}
-        <M>MOCK_SELLER_ACCOUNT</M> is what <M>wrap</M>, <M>pause</M> and <M>resume</M> sign
-        with, and <M>MOCK_BUYER_ACCOUNT</M> is used by the buyer agent. The devnet must be
-        running (e.g. <M>npm run dev</M>); otherwise the faucet call fails with{' '}
-        <M>FAUCET_UNREACHABLE</M> or, on a hang, <M>GATEWAY_TIMEOUT</M>.
-      </P>
 
       {/* ───────────────────────────── mcp ───────────────────────────── */}
       <H2 id="mcp">mcp</H2>
       <P>
-        Serve AgentGate as a <strong className="text-white">Model Context Protocol</strong> stdio
-        server, so any MCP-capable agent (Claude Desktop, a custom client, an MCP-aware framework)
-        gets the discover → inspect → pay loop as native tools. It speaks JSON-RPC over
-        stdin/stdout and stays alive until the client closes the connection.
+        Serves NearGate as a Model Context Protocol <strong>stdio</strong> server, so any
+        MCP-capable agent (Claude Desktop, a custom client, an MCP-aware framework) gets NearGate
+        discovery and payment as native tools. stdout is the JSON-RPC channel, so the server prints
+        nothing else there; a readiness hint goes to stderr. It takes the config flags and the buyer{' '}
+        <DocLink href="#signer-flags">signer flags</DocLink>.
       </P>
-      <CommandBlock text="npx @neargate/cli@latest mcp [--pem <path>]" />
-      <P>
-        Four tools are registered. The three read tools need no key and — because the published
-        CLI defaults to live Testnet — work with zero configuration; only <M>agentgate_buy</M>{' '}
-        spends CSPR and needs a buyer signer.
-      </P>
+      <CommandBlock text="npm run neargate -- mcp --account <buyer>" />
+      <H3 id="mcp-tools">Tools</H3>
       <DocTable
-        head={['Tool', 'Arguments', 'What it does']}
+        head={['Tool', 'Does', 'Spends NEAR']}
         rows={[
           [
-            <M key="t1">agentgate_list_services</M>,
-            <M key="a1">—</M>,
-            'Discover the live on-chain catalog: every service with price, trust tier, payment-backed score, active flag and endpoint. Read-only, no key.',
+            <span key="t1">
+              <M>neargate_list_services</M>
+              <Sub>no input</Sub>
+            </span>,
+            'The live catalog: id, name, description, price (with storage fee), tier, score, active flag, endpoint.',
+            'no',
           ],
           [
-            <M key="t2">agentgate_get_service</M>,
-            <M key="a2">id</M>,
-            'Full on-chain detail for one service id — price, payment target, owner, attestor, active flag, score and tier. Read-only.',
+            <span key="t2">
+              <M>neargate_get_service</M>
+              <Sub>{'{ id }'}</Sub>
+            </span>,
+            'One service in full: price, payment target, owner, attestor, tier and score.',
+            'no',
           ],
           [
-            <M key="t3">agentgate_get_invoice</M>,
-            <M key="a3">id</M>,
-            'The machine-readable HTTP 402 invoice (price, nonce, payTo, network) WITHOUT paying, so an agent can decide before it spends. Read-only.',
+            <span key="t3">
+              <M>neargate_get_invoice</M>
+              <Sub>{'{ id }'}</Sub>
+            </span>,
+            'Fetches the 402 invoice without paying: price, storage fee, total to attach, payTo, network, nonce, expiry — so an agent can decide first.',
+            'no',
           ],
           [
-            <M key="t4">agentgate_buy</M>,
-            <M key="a4">id (+ maxCspr, method, body)</M>,
-            'Pay the service’s 402 invoice with a native CSPR transfer and return the response body. Spends real CSPR from the buyer key, capped by maxCspr; refuses unknown/paused services and over-cap invoices before any payment.',
+            <span key="t4">
+              <M>neargate_buy</M>
+              <Sub>{'{ id, maxNear?, method?, body? }'}</Sub>
+            </span>,
+            'Pays the invoice with a registry pay call and returns the response body. maxNear caps the total attached.',
+            <strong key="y" className="text-white">
+              yes
+            </strong>,
           ],
         ]}
       />
       <P>
-        <M>--pem</M> (or <M>BUYER_SIGNER_PEM_PATH</M>) supplies the <em>buyer</em> signer used only
-        by <M>agentgate_buy</M> — the read tools ignore it, so <M>mcp</M> starts fine with no key.
-        On start the server prints a readiness line — including its real package version — to{' '}
-        <strong className="text-white">stderr</strong>; <M>stdout</M> is the JSON-RPC channel, so
-        nothing else is ever written there.
+        The buyer key is resolved only when <M>neargate_buy</M> runs, so the three read tools work
+        with no key configured. A failing tool returns an error result that leads with the stable
+        code (<M>BUDGET_EXCEEDED</M>, <M>SERVICE_INACTIVE</M>, <M>PAID_NOT_SERVED</M>…), so an agent
+        can branch on it; the codes are the ones in <DocLink href="#error-codes">Error codes</DocLink>.
       </P>
       <H3 id="mcp-claude-desktop">Claude Desktop</H3>
       <P>
-        Wire it into <M>claude_desktop_config.json</M>. No <M>env</M> block is needed — the CLI
-        already defaults to live Testnet and the deployed registry:
+        Build the bundle once with <M>npm run build -w @neargate/cli</M>, then add the server to{' '}
+        <M>claude_desktop_config.json</M>, with the absolute path to your clone:
       </P>
       <CodeBlock
         label="claude_desktop_config.json"
-        code={'{ "mcpServers": { "agentgate": { "command": "npx", "args": ["-y", "@neargate/cli", "mcp"] } } }'}
+        code={JSON.stringify(
+          {
+            mcpServers: {
+              neargate: {
+                command: 'node',
+                args: ['/path/to/repo/packages/cli/dist/bin.js', 'mcp', '--account', 'buyer.testnet'],
+              },
+            },
+          },
+          null,
+          2,
+        )}
       />
-      <Callout tone="info" title="Inspect it in 30s — no MCP client">
-        From any shell you can drive the server directly: the repo ships{' '}
-        <M>scripts/mcp.sh</M> (<M>list</M> / <M>service &lt;id&gt;</M> / <M>invoice &lt;id&gt;</M>),
-        and the README&apos;s &ldquo;For judges / reviewers&rdquo; block has a copy-paste{' '}
-        <M>npx … mcp</M> one-liner that returns the live catalog with zero setup.
-      </Callout>
+      <P>
+        To try the read tools without a client, <M>scripts/mcp.sh</M> drives the server over stdio:{' '}
+        <M>scripts/mcp.sh tools</M>, <M>list</M>, <M>service &lt;id&gt;</M>, <M>invoice &lt;id&gt;</M>.
+      </P>
 
-      {/* ───────────────────────────── errors ───────────────────────────── */}
+      {/* ───────────────────────────── error codes ───────────────────────────── */}
       <H2 id="error-codes">Error codes</H2>
       <P>
-        Errors are printed as <M>error: &lt;CODE&gt;: &lt;message&gt;</M> and exit{' '}
-        <M>1</M>. The codes you are most likely to hit:
+        Failures reach you as <M>error: &lt;CODE&gt;: &lt;message&gt;</M> from the CLI, as an error
+        result from an MCP tool, and as an <M>AgentGateError</M> with a <M>code</M> from the
+        packages. A rejection by the registry keeps the contract’s own <M>ERR_*</M> code and starts
+        its message with it; those are listed on the{' '}
+        <DocLink href="/docs/contract#errors">contract page</DocLink>. The gateway’s HTTP answers
+        (<M>402</M> reasons, <M>403</M>, <M>503</M>) are on{' '}
+        <DocLink href="/docs/protocol#verification">How it works</DocLink>.
+      </P>
+
+      <H3 id="codes-input">Arguments, config and keys</H3>
+      <DocTable
+        head={['Code', 'Meaning']}
+        rows={[
+          [<M key="1">INVALID_INPUT</M>, 'A text flag is blank, has control characters or is over its byte limit (name 64, description 280).'],
+          [<M key="2">INVALID_URL</M>, 'A URL is not http(s), has a query string or fragment, or the gateway URL is over 200 bytes.'],
+          [<M key="3">INSECURE_URL</M>, 'Live wrap with a plain http:// gateway that is not localhost: the mapping request would travel in cleartext.'],
+          [<M key="4">INVALID_SERVICE_ID</M>, 'The <id> argument is not a positive integer.'],
+          [<M key="5">INVALID_ACCOUNT_ID</M>, 'An account flag is not a NEAR account id.'],
+          [<M key="6">INVALID_AMOUNT</M>, 'A NEAR amount (--price, --max, maxNear) is not a plain non-negative decimal of at most 24 places, or is above the u128 maximum.'],
+          [<M key="7">INVALID_PRICE</M>, '--price is below the registry minimum of 0.000001 NEAR.'],
+          [<M key="8">CONFIG_INVALID</M>, 'A flag or environment variable is invalid — for example live mode with no REGISTRY_CONTRACT_ID.'],
+          [<M key="9">SIGNER_MISSING</M>, 'No account for the command’s role: pass --account or set the role’s *_ACCOUNT_ID (mock: MOCK_*_ACCOUNT).'],
+          [<M key="10">SIGNER_KEY_INVALID</M>, 'A secret key or key file is not a valid ed25519 NEAR key. The message names the source, never the key.'],
+          [<M key="11">SIGNER_KEY_UNREADABLE</M>, 'The key file cannot be read.'],
+          [<M key="12">SIGNER_KEY_MISMATCH</M>, 'The key file is for a different account than the one you are signing as.'],
+          [<M key="13">ACCOUNT_NOT_FOUND</M>, 'wrap: the payment target does not exist on the network. Create it or pass --payment-target <existing account>; a missing one would strand every payment.'],
+          [<M key="14">LIVE_ONLY</M>, 'map in mock mode. The mock gateway maps through its admin route, which wrap does for you.'],
+          [<M key="15">MOCK_ONLY</M>, 'demo-accounts outside mock mode.'],
+          [<M key="16">NOT_SERVICE_OWNER</M>, 'map: your key’s account is not the service owner.'],
+          [<M key="17">MAPPING_FAILED</M>, 'The gateway did not map the upstream (non-2xx, a redirect, a network error or a timeout). The registration stays; retry with map.'],
+          [<M key="18">SERVICE_NOT_FOUND</M>, 'No service with that id on this registry.'],
+          [<M key="19">SERVICE_INACTIVE</M>, 'buy / neargate_get_invoice: the owner paused the service. Nothing is paid.'],
+          [<M key="20">FAUCET_UNREACHABLE</M>, 'demo-accounts cannot reach the devnet faucet. Start it with npm run dev. FAUCET_FAILED means the faucet answered an error; GATEWAY_TIMEOUT that it did not answer in time.'],
+        ]}
+      />
+
+      <H3 id="codes-client">Buying: invoice and payment</H3>
+      <P>
+        Raised by <M>buy</M>, <M>neargate_buy</M> and <M>fetchPaid</M> in <M>@agentgate/client</M>.
+        Every refusal below happens <em>before</em> a payment is sent, except{' '}
+        <M>PAID_NOT_SERVED</M>.
       </P>
       <DocTable
-        head={['Code', 'Status', 'Command(s)', 'Cause']}
+        head={['Code', 'Meaning, and what to do']}
         rows={[
-          [<M key="c0">CONFIG_INVALID</M>, '500', 'all commands', 'A config value failed validation before the command ran — e.g. --mode is neither mock nor live, or a port/URL env var is malformed.'],
-          [<M key="c15">INVALID_AMOUNT</M>, '400', 'wrap', '--price is not a plain decimal (non-numeric, negative, exponent, or more than 9 decimal places).'],
-          [<M key="c1">INVALID_PRICE</M>, '400', 'wrap', 'Price is not greater than 0 CSPR.'],
-          [<M key="c2">INVALID_INPUT</M>, '400', 'wrap / buy', 'wrap: empty/blank name, or text with control characters or over the length limit. buy: --body is not valid JSON.'],
-          [<M key="c3">INVALID_URL</M>, '400', 'wrap', 'upstreamUrl or gateway is not a valid http(s) URL; gateway additionally must not carry a query string or fragment (upstreamUrl may).'],
-          [<M key="c4">INSECURE_URL</M>, '400', 'wrap', 'Live mode + non-localhost gateway over http:// (the signed mapping request must not travel in cleartext).'],
-          [<M key="c5">INVALID_ACCOUNT_HASH</M>, '400', 'wrap', '--payment-target is not account-hash-<64 hex>.'],
-          [<M key="c6">INVALID_PUBLIC_KEY</M>, '400', 'wrap', '--attestor is not a valid Casper public key hex.'],
-          [<M key="c7">SIGNER_MISSING</M>, '400', 'wrap / buy / pause / resume', 'Seller commands: missing MOCK_SELLER_ACCOUNT (mock) or SELLER_SIGNER_PEM_PATH (live). buy: missing MOCK_BUYER_ACCOUNT (mock) or --pem / BUYER_SIGNER_PEM_PATH (live).'],
-          [<M key="c8">INVALID_SERVICE_ID</M>, '400', 'buy / status / pause / resume', 'Service id is not a positive integer.'],
-          [<M key="c9">SERVICE_NOT_FOUND</M>, '404', 'buy / status / pause / resume', 'No on-chain record for that id.'],
-          [<M key="c16">SERVICE_INACTIVE</M>, '403', 'buy', 'The service is paused by its owner — refused before any payment.'],
-          [<M key="c17">PRICE_EXCEEDED</M>, '402', 'buy', 'The on-chain price or the 402 invoice exceeds --max. No payment is sent.'],
-          [<M key="c10">not_authorized</M>, '403', 'pause / resume', 'Signing key is not the service owner.'],
-          [<M key="c11">MOCK_ONLY</M>, '400', 'demo-accounts', 'Invoked while the mode is live — pass --mode mock (or set AGENTGATE_MODE=mock).'],
-          [<M key="c12">FAUCET_UNREACHABLE</M>, '502', 'demo-accounts', 'Cannot reach the devnet faucet (devnet not running).'],
-          [<M key="c13">FAUCET_FAILED</M>, '502', 'demo-accounts', 'Faucet returned non-200, non-JSON, or a malformed balanceMotes.'],
-          [<M key="c14">GATEWAY_TIMEOUT</M>, '504', 'demo-accounts', 'Faucet request timed out.'],
+          [
+            <M key="1">BUDGET_EXCEEDED</M>,
+            <span key="1m">
+              The invoice total (price + the 0.002 NEAR storage fee) is above your cap (--max,
+              maxNear, or the buyer agent’s budget). Nothing was paid.
+              <Sub>Raise the cap or pick a cheaper service.</Sub>
+            </span>,
+          ],
+          [
+            <M key="2">BAD_URL</M>,
+            <span key="2m">
+              The endpoint read from the registry is not an http(s) URL.
+              <Sub>The seller registered a bad endpoint; do not use the service.</Sub>
+            </span>,
+          ],
+          [
+            <M key="3">FORBIDDEN_HOST</M>,
+            <span key="3m">
+              Live mode: the endpoint host is private, loopback or link-local, or resolves to one.
+              <Sub>The seller’s gateway URL is unusable from the public network.</Sub>
+            </span>,
+          ],
+          [
+            <M key="4">BAD_INVOICE</M>,
+            <span key="4m">
+              The 402 body is not a valid NearGate invoice: not JSON, wrong x402 version, an expired
+              invoice, or a price, fee or total that does not add up.
+              <Sub>Retry for a fresh invoice; if it persists the gateway is faulty.</Sub>
+            </span>,
+          ],
+          [
+            <M key="5">NETWORK_MISMATCH</M>,
+            <span key="5m">
+              The invoice offers no payment on this client’s network (for example a testnet client
+              and a mock gateway).
+              <Sub>Point the client and the gateway at the same network.</Sub>
+            </span>,
+          ],
+          [
+            <M key="6">REGISTRY_MISMATCH</M>,
+            <span key="6m">
+              The invoice’s payTo is not the registry this client settles on.
+              <Sub>Check --registry / REGISTRY_CONTRACT_ID.</Sub>
+            </span>,
+          ],
+          [
+            <M key="7">SERVICE_MISMATCH</M>,
+            <span key="7m">
+              The invoice is for a different service id than the one you asked for.
+              <Sub>Do not pay; the gateway answered for another service.</Sub>
+            </span>,
+          ],
+          [
+            <M key="8">REDIRECT_REFUSED</M>,
+            <span key="8m">
+              A gateway answered with an HTTP 3xx. NearGate never follows a redirect, because it
+              would carry the request past the URL guard.
+              <Sub>Use the final URL directly, if you trust it.</Sub>
+            </span>,
+          ],
+          [
+            <M key="9">UPSTREAM_TIMEOUT</M>,
+            <span key="9m">
+              The invoice request got no answer within 30 s. Nothing was paid.
+              <Sub>Safe to retry.</Sub>
+            </span>,
+          ],
+          [
+            <M key="10">PAID_NOT_SERVED</M>,
+            <span key="10m">
+              The registry <M>pay</M> went through — the deposit is spent — but the gateway did not
+              serve the call. The error names the transaction, the nonce, the service, the amount
+              and a reason: <M>refused</M>, <M>settlement_pending</M>, <M>redirect</M> or{' '}
+              <M>transport</M>.
+              <Sub>
+                Do not pay a fresh invoice for it. Re-present the same proof (an X-PAYMENT for that
+                transaction and nonce) once the gateway is reachable or the payment has settled.
+              </Sub>
+            </span>,
+          ],
+        ]}
+      />
+
+      <H3 id="codes-chain">Chain and RPC (live mode)</H3>
+      <DocTable
+        head={['Code', 'Meaning, and whether to retry']}
+        rows={[
+          [
+            <M key="1">RPC_TIMEOUT</M>,
+            <span key="1m">
+              The NEAR RPC did not answer in time and <strong className="text-white">nothing was
+              sent</strong>: a read, or a call that failed before its transaction was signed.
+              <Sub>Safe to retry.</Sub>
+            </span>,
+          ],
+          [
+            <M key="2">RPC_ERROR</M>,
+            <span key="2m">
+              The RPC is unreachable, answered an HTTP error (the message says rate-limited for a
+              429) or failed on the node side. Nothing was sent.
+              <Sub>Safe to retry.</Sub>
+            </span>,
+          ],
+          [
+            <M key="3">RPC_BAD_RESPONSE</M>,
+            <span key="3m">
+              The RPC, or the registry behind it, answered in a shape this client cannot use.
+              <Sub>Retry once, then check NEAR_RPC_URL.</Sub>
+            </span>,
+          ],
+          [
+            <M key="4">NOT_DEPLOYED</M>,
+            <span key="4m">
+              The registry account holds no neargate-registry contract (or one with a different
+              ABI).
+              <Sub>Not retryable: fix REGISTRY_CONTRACT_ID.</Sub>
+            </span>,
+          ],
+          [
+            <M key="5">TX_TIMEOUT</M>,
+            <span key="5m">
+              The transaction <strong className="text-white">was sent</strong>, but its outcome is
+              unknown: the RPC timed out or failed after the transaction went out. The message
+              names the transaction hash and its explorer page,{' '}
+              <M>&lt;explorer&gt;/txns/&lt;hash&gt;</M>.
+              <Sub>
+                Do not retry blindly: the transaction may still land. Check it on the explorer
+                first, or a retry can register or pay twice.
+              </Sub>
+            </span>,
+          ],
+          [
+            <M key="6">TX_FAILED</M>,
+            <span key="6m">
+              NEAR rejected the transaction, or an action in it failed, outside a contract panic.
+              The message carries NEAR’s reason and the transaction hash when there is one.
+              <Sub>Not as is: read the reason.</Sub>
+            </span>,
+          ],
+          [
+            <M key="7">CONTRACT_ERROR</M>,
+            <span key="7m">
+              The registry failed without one of its ERR_* codes (gas exhaustion, a wasm trap, a
+              panic with no code).
+              <Sub>Not as is.</Sub>
+            </span>,
+          ],
+          [
+            <M key="8">SIGNER_KEY_NOT_FOUND</M>,
+            <span key="8m">
+              The key you sign with is not an access key of the signer account on this network.
+              <Sub>Use the right key or network.</Sub>
+            </span>,
+          ],
+          [
+            <M key="9">SIGNER_ACCOUNT_NOT_FOUND</M>,
+            <span key="9m">
+              The signer account does not exist on this network.
+              <Sub>Create or fund it first.</Sub>
+            </span>,
+          ],
+          [
+            <M key="10">ERR_INSUFFICIENT_BALANCE</M>,
+            <span key="10m">
+              The signer cannot cover the deposit plus gas, or would be left unable to cover its
+              own storage.
+              <Sub>Fund the account.</Sub>
+            </span>,
+          ],
+          [
+            <M key="11">devnet_unreachable</M>,
+            <span key="11m">
+              Mock mode: the offline devnet is not running (devnet_timeout: it did not answer).
+              <Sub>Start it with npm run dev.</Sub>
+            </span>,
+          ],
         ]}
       />
 
       <NextLinks
         links={[
-          { href: '/docs/sellers', label: 'Wrap an API' },
-          { href: '/docs/api', label: 'HTTP API' },
+          { href: '/docs/protocol', label: 'How it works' },
+          { href: '/docs/contract', label: 'Registry contract' },
         ]}
       />
     </>

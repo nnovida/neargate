@@ -90,11 +90,14 @@ export function DocLink({ href, children }: { href: string; children: ReactNode 
   );
 }
 
-/** Panel-wrapped data table. Cells may be strings or rich nodes (M, DocLink…). */
+/**
+ * Panel-wrapped data table. Cells may be strings or rich nodes (M, DocLink…) and wrap, so a long
+ * description sits beside a short code; only an unbreakable identifier can make the panel scroll.
+ */
 export function DocTable({ head, rows }: { head: ReactNode[]; rows: ReactNode[][] }) {
   return (
     <div className="panel mt-5 overflow-x-auto">
-      <table className="w-full min-w-max border-collapse text-left">
+      <table className="w-full border-collapse text-left">
         <thead>
           <tr className="border-b border-line">
             {head.map((h, i) => (
@@ -118,6 +121,11 @@ export function DocTable({ head, rows }: { head: ReactNode[]; rows: ReactNode[][
       </table>
     </div>
   );
+}
+
+/** A small muted second line under a table cell's main value (a unit, a caller, a qualifier). */
+export function Sub({ children }: { children: ReactNode }) {
+  return <span className="mt-1 block text-[11px] leading-5 text-zinc-400">{children}</span>;
 }
 
 /** Non-interactive code/output panel (example responses, printed output, JSON). */
@@ -210,29 +218,6 @@ export function CardGrid({
           <p className="mt-2 text-sm leading-6 text-mut">{c.desc}</p>
         </Link>
       ))}
-    </div>
-  );
-}
-
-/** HTTP-method + path header for an API/endpoint reference entry. */
-export function ApiBadge({ method, path }: { method: string; path?: string }) {
-  const m = method.toUpperCase();
-  const tone =
-    m === 'GET'
-      ? 'border-ok/50 text-ok'
-      : m === 'DELETE'
-        ? 'border-warn/50 text-warn'
-        : 'border-accent/50 text-accent';
-  return (
-    <div className="mt-6 flex flex-wrap items-center gap-3">
-      <span
-        className={`border ${tone} px-2 py-0.5 font-mono text-[11px] font-bold uppercase tracking-[0.14em]`}
-      >
-        {m}
-      </span>
-      {path ? (
-        <code className="font-mono text-[13px] text-zinc-200">{path}</code>
-      ) : null}
     </div>
   );
 }

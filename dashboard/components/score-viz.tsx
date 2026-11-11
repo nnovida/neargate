@@ -55,7 +55,11 @@ export function ScoreViz({ score }: { score: ServiceScore }) {
           </div>
         </div>
         <p className="font-mono text-xs text-mut">
-          <span className="text-white">{formatInt(totalCalls)}</span> total attested calls
+          score{' '}
+          <span className="text-white">
+            {formatInt(successCalls)}/{formatInt(totalCalls)}
+          </span>{' '}
+          (success / total attested calls)
         </p>
       </div>
     </div>

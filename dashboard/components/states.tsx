@@ -18,8 +18,8 @@ export function ChainDownBanner() {
           chain unreachable
         </p>
         <p className="mt-1 text-sm text-mut">
-          The devnet / chain API is not responding. Showing last known data — retrying every 5
-          seconds.
+          The chain (the local devnet, or the NEAR RPC) is not responding. Showing last known data —
+          retrying every 5 seconds.
         </p>
       </div>
     </div>

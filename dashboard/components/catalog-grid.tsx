@@ -13,10 +13,10 @@ import { ChainDownBanner, EmptyState, ErrorState, Skeleton } from '@/components/
 import { LiveDot } from '@/components/live-dot';
 
 const WRAP_CMD =
-  'npx @neargate/cli@latest wrap https://api.example.com/gold --price 2.5 --name "Gold Spot Feed" --pem ./key.pem';
+  'npm run neargate -- wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --account alice.testnet';
 
 type View = 'grid' | 'list';
-const VIEW_KEY = 'agentgate:catalog-view';
+const VIEW_KEY = 'neargate:catalog-view';
 
 function ActiveDot({ active }: { active: boolean }) {
   return (

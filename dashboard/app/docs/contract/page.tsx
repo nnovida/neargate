@@ -1,546 +1,290 @@
 import type { Metadata } from 'next';
-import { CommandBlock } from '@/components/copy';
-import {
-  Callout,
-  CodeBlock,
-  DocHeader,
-  DocLink,
-  DocTable,
-  H2,
-  H3,
-  M,
-  NextLinks,
-  P,
-  PropList,
-} from '@/components/docs';
+import { DEFAULT_REGISTRY_CONTRACT_ID } from '@agentgate/shared';
+import { Callout, CodeBlock, DocHeader, DocLink, DocTable, H2, H3, M, NextLinks, P, Sub } from '@/components/docs';
+import { accountHref, explorerBaseFromEnv } from '@/lib/explorer';
 
 export const metadata: Metadata = {
   alternates: { canonical: '/docs/contract' },
-  title: 'Smart contracts',
+  title: 'Registry contract',
   description:
-    'Reference for the AgentGate Odra/Rust contracts: AgentGateRegistry (service registry + attestation reputation) and SpendGuard (x402 spend-firewall escrow) — storage, entrypoints, events, error codes, and build/deploy.',
+    'Reference for the neargate-registry NEAR contract (Rust, near-sdk): constants and limits, change methods, views and their JSON shapes, NEP-297 events and every ERR_* code.',
 };
 
+/** A field list that may wrap (unlike M, which never breaks). */
+function Fields({ children }: { children: string }) {
+  return <code className="break-words font-mono text-[12px] text-zinc-200">{children}</code>;
+}
+
+/** The registry's explorer page, once a default registry id is set; null until then. */
+function registryLink(): string | null {
+  if (DEFAULT_REGISTRY_CONTRACT_ID === '') return null;
+  // Real-network explorer link: the docs describe the testnet deployment.
+  return accountHref({
+    network: 'near-testnet',
+    explorerUrl: explorerBaseFromEnv(),
+    accountId: DEFAULT_REGISTRY_CONTRACT_ID,
+  });
+}
+
 export default function Page() {
+  const link = registryLink();
   return (
     <>
       <DocHeader
         kicker="REFERENCE"
-        title="Smart contracts"
-        lede="The on-chain layer of AgentGate: two Rust/Odra contracts — AgentGateRegistry (live, wired into the product) and SpendGuard (implemented and unit-tested, not yet wired in)."
+        title="Registry contract"
+        lede="neargate-registry is the on-chain layer of NearGate: a pay-through service registry with payment-backed attestations, written in Rust on near-sdk. This page is its ABI, from contracts/registry/src."
       />
 
       <H2 id="overview">Overview</H2>
       <P>
-        AgentGate ships two contracts under <M>contracts/</M>, each a standalone crate built with
-        Odra (Casper&rsquo;s Rust smart-contract framework), following the{' '}
-        <M>cargo odra new --template full</M> layout (one crate, an{' '}
-        <M>Odra.toml</M>, and the generated build/schema bins). Source:{' '}
-        <M>contracts/agentgate-registry/src/registry.rs</M> and{' '}
-        <M>contracts/spend-guard/src/spend_guard.rs</M>.
+        Buyers pay <em>through</em> the registry. <M>pay(service_id, nonce)</M> forwards exactly the
+        service price to the seller’s <M>payment_target</M>, keeps a small storage fee, refunds the
+        rest and stores a payment record. <M>record_attestation</M> is accepted only for a payment
+        this contract itself received, once, and never when the payer is the service owner or the
+        payment target — so a score can only come from real transfers between distinct parties (see
+        the <DocLink href="/docs/security#trust-model">trust model</DocLink>, including what it does
+        not prove).
       </P>
+      <P>
+        The contract has <strong className="text-white">no owner and no admin</strong>. The only
+        privileged roles are per service: its <M>owner</M> (the registering account: switches the
+        service on and off, rotates the attestor) and its <M>attestor</M> (records outcomes; the
+        owner may too). Every panic message starts with a stable <M>ERR_*</M> code, so clients map
+        errors by that prefix. Source: <M>contracts/registry/src/lib.rs</M> and{' '}
+        <M>types.rs</M>.
+      </P>
+      {link === null ? (
+        <Callout tone="warn" title="NOT DEPLOYED YET">
+          No default registry account is set, so the registry badge at the top of this page reads{' '}
+          <M>not deployed</M>. Deploy your own with <M>npm run near:deploy</M> (see the{' '}
+          <DocLink href="/docs/quickstart#testnet">quickstart</DocLink>) and point{' '}
+          <M>REGISTRY_CONTRACT_ID</M> or <M>--registry</M> at it.
+        </Callout>
+      ) : (
+        <Callout tone="ok" title="DEPLOYED">
+          The default registry is{' '}
+          <a href={link} target="_blank" rel="noopener noreferrer" className="text-accent underline underline-offset-4">
+            {DEFAULT_REGISTRY_CONTRACT_ID}
+          </a>
+          . Point <M>REGISTRY_CONTRACT_ID</M> or <M>--registry</M> elsewhere to use another one.
+        </Callout>
+      )}
+      <P>
+        All amounts are yoctoNEAR (1 NEAR = 10<sup>24</sup> yocto): <M>u128</M> in Rust, decimal
+        strings in JSON. Service ids are 1-based.
+      </P>
+
+      <H2 id="constants">Constants and limits</H2>
       <DocTable
-        head={['Contract', 'Role', 'Status']}
+        head={['Constant', 'Meaning']}
         rows={[
           [
-            <M key="c">AgentGateRegistry</M>,
-            'Service discovery catalog + per-service payment-attestation reputation ledger.',
-            <span key="st">
-              Deployed to Casper Testnet (casper-test, Casper 2.0) and wired into the off-chain
-              product (a live registry client). Package <M>hash-10f9&hellip;27e9</M> (full hash in
-              the <M>.env</M> block below).
-            </span>,
+            <span key="1"><M>MIN_PRICE_YOCTO</M><Sub>10^18 yocto · 0.000001 NEAR</Sub></span>,
+            'Floor for the "near" price option. Other assets are priced in their own base units: any amount above zero.',
           ],
           [
-            <M key="c">SpendGuard</M>,
-            'x402 spend-firewall: per-policy CSPR escrow with on-chain budget, per-call cap, rate-window and trust-tier enforcement.',
-            'Implemented and unit-tested only — NOT integrated into the running product (no off-chain client, middleware never calls debit).',
+            <span key="2"><M>PAYMENT_STORAGE_FEE_YOCTO</M><Sub>2 × 10^21 yocto · 0.002 NEAR</Sub></span>,
+            'Kept by the registry on every pay, to cover the payment record’s storage.',
           ],
+          [
+            <span key="3"><M>REGISTRATION_DEPOSIT_YOCTO</M><Sub>1.2 × 10^23 yocto · 0.12 NEAR</Sub></span>,
+            'Kept on every register_service (anything above is refunded). It prepays the service record and the storage for a full attestation list.',
+          ],
+          [<span key="4"><M>MAX_ATTESTATIONS</M><Sub>100</Sub></span>, 'Attestations kept per service, newest first.'],
+          [<span key="5"><M>ACTIVITY_CAP</M><Sub>200</Sub></span>, 'Events kept in the activity ring buffer.'],
+          [<span key="6"><M>NAME_MAX</M><Sub>64 bytes</Sub></span>, 'Service name. Also the limit of accepts[].asset and accepts[].symbol.'],
+          [<span key="7"><M>DESC_MAX</M><Sub>280 bytes</Sub></span>, 'Service description.'],
+          [<span key="8"><M>URL_MAX</M><Sub>200 bytes</Sub></span>, 'gateway_base_url.'],
+          [<span key="9"><M>ACCEPTS_MAX</M><Sub>4</Sub></span>, 'Price options per service.'],
+          [<span key="10"><M>TX_HASH_MAX</M><Sub>64 bytes</Sub></span>, 'payment_tx_hash of an attestation.'],
+          [<span key="11"><M>NONCE_MAX</M><Sub>20</Sub></span>, 'A nonce is 1 to 20 decimal digits.'],
+          [<span key="12"><M>LIST_LIMIT_MAX</M><Sub>50</Sub></span>, 'list_services page size (larger limits are clamped).'],
         ]}
       />
       <P>
-        Both contracts share the same idioms: <M>odra::prelude::*</M> for the storage primitives,{' '}
-        <M>U512</M> motes pulled from <M>odra::casper_types</M> (not the prelude), 1-based
-        sequential ids (the counter is bumped first, then assigned, so it always equals the latest
-        id and id <M>0</M> means &ldquo;absent&rdquo; to every off-chain reader), a{' '}
-        <M>seen_*</M> dedup mapping, <M>saturating_*</M> counter math, and a private{' '}
-        <M>load_*</M> helper that reverts when an id is unknown. On-chain money is always native CSPR
-        motes, never CEP-18 — the registry stores prices in motes and records only an opaque payment
-        hash. (The optional x402 facilitator rail settles CEP-18 off-contract; the registry stays
-        rail-agnostic and unchanged.)
+        Every length limit counts <strong>UTF-8 bytes</strong>, not characters: storage is paid per
+        byte, and one character can take four.
       </P>
 
-      <H2 id="registry">AgentGateRegistry</H2>
+      <H2 id="methods">Change methods</H2>
+      <H3 id="m-new">new()</H3>
       <P>
-        The registry is the catalog and the reputation source of truth. A seller calls{' '}
-        <M>register_service</M> to list a wrapped HTTP API; the caller becomes the service{' '}
-        <M>owner</M> and the service starts <M>active</M>. After each paid call the AgentGate
-        gateway (the service&rsquo;s <M>attestor</M>) calls <M>record_attestation</M>, which
-        bumps a <M>(total_calls, success_calls)</M> score and prepends to a capped, newest-first
-        attestation history. The contract has no constructor args and no privileged admin — there is no global
-        owner, only per-service owners.
+        One-time <M>#[init]</M> with no arguments, so there is nothing to front-run; it sets no
+        admin. It pre-writes every activity slot with a one-byte placeholder, so a later pay replaces
+        a record instead of creating one and its storage cost stays inside the fee.
       </P>
-      <P>
-        The full public endpoint is never stored on-chain: the contract keeps only{' '}
-        <M>gateway_base_url</M>, and every reader (devnet, chain client, dashboard) computes the
-        endpoint as <M>{'{gateway_base_url}/svc/{id}'}</M>.
-      </P>
-
-      <H3 id="registry-storage">Storage</H3>
-      <DocTable
-        head={['Field', 'Type', 'Holds']}
-        rows={[
-          [
-            <M key="s">services_count</M>,
-            <M key="t">Var&lt;u64&gt;</M>,
-            'Number of services registered (0 initially); equals the id of the most recently registered service. Ids run 1..=services_count.',
-          ],
-          [
-            <M key="s">services</M>,
-            <M key="t">Mapping&lt;u64, Service&gt;</M>,
-            'service_id → the stored Service record.',
-          ],
-          [
-            <M key="s">scores</M>,
-            <M key="t">Mapping&lt;u64, (u64, u64)&gt;</M>,
-            'service_id → (total_calls, success_calls). Keeps the FULL history even after the attestation list is capped.',
-          ],
-          [
-            <M key="s">seen_payments</M>,
-            <M key="t">Mapping&lt;(u64, String), bool&gt;</M>,
-            '(service_id, payment_deploy_hash) → attested? The per-service duplicate guard — one attestation per payment.',
-          ],
-          [
-            <M key="s">attestations</M>,
-            <M key="t">Mapping&lt;u64, Vec&lt;Attestation&gt;&gt;</M>,
-            'service_id → the last MAX_ATTESTATIONS (100) attestations, newest first (oldest dropped when the cap is hit).',
-          ],
-        ]}
-      />
-      <P>
-        Two module constants govern the policy: <M>MIN_PRICE_MOTES = 1000</M> (the floor for every{' '}
-        <M>accepts[]</M> option amount, 1e-6 CSPR, keeps dust out of the catalog) and{' '}
-        <M>MAX_ATTESTATIONS = 100</M> (the per-service attestation-list cap; the <M>scores</M>{' '}
-        counters are unbounded and keep full history).
-      </P>
-      <H3 id="registry-service-struct">Service record</H3>
-      <PropList
-        items={[
-          { name: 'name', type: 'String', desc: <>Human-readable service name; non-empty (enforced at registration).</> },
-          { name: 'description', type: 'String', desc: <>Short description shown in catalog listings.</> },
-          {
-            name: 'gateway_base_url',
-            type: 'String',
-            desc: (
-              <>
-                Base URL of the AgentGate gateway fronting this service, stored verbatim. Readers
-                compute the public endpoint as <M>{'{gateway_base_url}/svc/{id}'}</M>.
-              </>
-            ),
-          },
-          {
-            name: 'accepts',
-            type: 'Vec<PaymentOption>',
-            desc: (
-              <>
-                The authoritative per-asset price list (non-empty; registry v2). Readers derive the
-                x402 402 <M>accepts[]</M> directly from this — native CSPR and/or CEP-18 tokens.
-              </>
-            ),
-          },
-          { name: 'payment_target', type: 'Address', desc: <>Account that receives the 402 payments (the x402 payTo).</> },
-          {
-            name: 'owner',
-            type: 'Address',
-            desc: <>The registration caller. May toggle <M>active</M>, rotate the attestor, and record attestations.</>,
-          },
-          { name: 'attestor', type: 'Address', desc: <>Key allowed to record attestations (the AgentGate gateway signer).</> },
-          {
-            name: 'active',
-            type: 'bool',
-            desc: <>Discovery flag; <M>true</M> at registration. Inactive services reject attestations and are filtered out by buyers.</>,
-          },
-          { name: 'created_at', type: 'u64', desc: <>Block time in milliseconds at registration.</> },
-        ]}
-      />
-      <H3 id="registry-paymentoption-struct">PaymentOption record</H3>
-      <P>
-        One accepted payment rail. On the wire it is CLType{' '}
-        <M>{'Tuple2<Tuple3<String,U512,U8>, Tuple3<String,String,String>>'}</M> — six fields that
-        serialize as plain concatenation:
-      </P>
-      <PropList
-        items={[
-          {
-            name: 'asset',
-            type: 'String',
-            desc: <><M>&quot;native&quot;</M> for CSPR, or a CEP-18 contract package hash (<M>hash-&lt;64hex&gt;</M>) for a token (e.g. WCSPR).</>,
-          },
-          { name: 'amount', type: 'U512', desc: <>Price per call in the asset&apos;s atomic units (&ge; 1000).</> },
-          { name: 'decimals', type: 'u8', desc: <>Display decimals (9 for CSPR and WCSPR).</> },
-          { name: 'symbol', type: 'String', desc: <>Token symbol, e.g. <M>CSPR</M> / <M>WCSPR</M>.</> },
-          { name: 'name', type: 'String', desc: <>EIP-712 domain name the facilitator rail signs against (cosmetic for native).</> },
-          { name: 'version', type: 'String', desc: <>EIP-712 domain version (empty for native).</> },
-        ]}
-      />
-      <H3 id="registry-attestation-struct">Attestation record</H3>
-      <PropList
-        items={[
-          { name: 'payment_deploy_hash', type: 'String', desc: <>Deploy hash of the CSPR payment transfer this attestation settles.</> },
-          { name: 'success', type: 'bool', desc: <>Whether the upstream call was served successfully.</> },
-          { name: 'timestamp', type: 'u64', desc: <>Block time in milliseconds when the attestation was recorded.</> },
-        ]}
-      />
-
-      <H3 id="registry-entrypoints">Entrypoints</H3>
-      <DocTable
-        head={['Signature', 'Auth', 'Behavior & reverts']}
-        rows={[
-          [
-            <M key="s">register_service(name, description, gateway_base_url, accepts, payment_target, attestor) → u64</M>,
-            'anyone (caller becomes owner)',
-            <span key="b">
-              Bumps <M>services_count</M>, assigns it as the 1-based id, stores the record with{' '}
-              <M>active=true</M>, emits <M>ServiceRegistered</M>, returns the id. Reverts{' '}
-              <M>EmptyName</M> (6) if the name is empty/whitespace-only, <M>InvalidPrice</M> (5) if{' '}
-              <M>accepts</M> is empty or any option&apos;s <M>amount &lt; 1000</M>.
-            </span>,
-          ],
-          [
-            <M key="s">record_attestation(service_id, payment_deploy_hash, success)</M>,
-            'attestor OR owner',
-            <span key="b">
-              Marks <M>seen_payments</M>, saturating-bumps the <M>(total, success)</M> score,
-              prepends to the attestation list and truncates to 100, emits{' '}
-              <M>AttestationRecorded</M> (carrying the post-update counters). Reverts{' '}
-              <M>ServiceNotFound</M> (2), then <M>NotAuthorized</M> (1) for strangers,{' '}
-              <M>ServiceInactive</M> (3) if the service is inactive (<M>active=false</M> via{' '}
-              <M>set_active</M>), <M>DuplicateAttestation</M> (4) if this hash was already attested
-              for this service.
-            </span>,
-          ],
-          [
-            <M key="s">set_active(service_id, active)</M>,
-            'owner only',
-            <span key="b">
-              Toggles the <M>active</M> flag, emits <M>ServiceStatusChanged</M>. The attestor
-              explicitly may NOT toggle. Reverts <M>ServiceNotFound</M> (2) for unknown ids,{' '}
-              <M>NotAuthorized</M> (1) for non-owners.
-            </span>,
-          ],
-          [
-            <M key="s">set_attestor(service_id, attestor)</M>,
-            'owner only',
-            <span key="b">
-              Rotates the authorised attestor key, emits{' '}
-              <M>ServiceAttestorChanged</M>. Lets an owner replace a compromised/rotated gateway
-              signer without re-registering (which would mint a new id and reset the score) and
-              without disabling the service. Reverts <M>ServiceNotFound</M> (2),{' '}
-              <M>NotAuthorized</M> (1) for non-owners.
-            </span>,
-          ],
-          [
-            <M key="s">get_service(service_id) → Option&lt;Service&gt;</M>,
-            'read',
-            'Never reverts — None for unknown ids.',
-          ],
-          [
-            <M key="s">get_score(service_id) → (u64, u64)</M>,
-            'read',
-            'Never reverts — (0, 0) for unknown or never-attested ids; counters keep full history beyond the 100-entry attestation cap.',
-          ],
-          [
-            <M key="s">get_attestations(service_id) → Vec&lt;Attestation&gt;</M>,
-            'read',
-            'Never reverts — the last (up to) 100 attestations, newest first; empty for unknown ids.',
-          ],
-          [
-            <M key="s">services_count() → u64</M>,
-            'read',
-            'Never reverts — equals the id of the most recently registered service (0 if none).',
-          ],
-        ]}
-      />
-      <Callout tone="info" title="ATTESTATION CAP">
-        <M>record_attestation</M> prepends each new entry with <M>insert(0, …)</M> then{' '}
-        <M>truncate(100)</M>, so the stored list is newest-first and bounded — but the{' '}
-        <M>scores</M> mapping uses <M>saturating_add</M> and keeps the full count. After 105 calls,{' '}
-        <M>get_attestations</M> returns the most recent 100 while <M>get_score</M> reports all 105.
-      </Callout>
-      <P>
-        The contract stores raw counters only — the trust tier shown in the dashboard and read by
-        buyer agents is computed off-chain as the <M>success_calls / total_calls</M> ratio bucketed
-        by <M>trustTier()</M> in <M>packages/shared/src/trust.ts</M> (<M>new</M> / <M>reliable</M> /{' '}
-        <M>trusted</M>); see{' '}
-        <DocLink href="/docs/protocol#attestation">Attestation and trust score</DocLink>.
-      </P>
-
-      <H3 id="registry-events">Events</H3>
-      <P>
-        Emitted via the Casper Event Standard (through Odra). The module declares four events:
-      </P>
-      <DocTable
-        head={['Event', 'Fields', 'Emitted on']}
-        rows={[
-          [
-            <M key="e">ServiceRegistered</M>,
-            'service_id (== services_count after the call), owner, name, accepts, payment_target, attestor',
-            <M key="o">register_service</M>,
-          ],
-          [
-            <M key="e">AttestationRecorded</M>,
-            'service_id, payment_deploy_hash, success, total_calls (after), success_calls (after)',
-            <M key="o">record_attestation</M>,
-          ],
-          [
-            <M key="e">ServiceStatusChanged</M>,
-            'service_id, active (new value)',
-            <M key="o">set_active</M>,
-          ],
-          [
-            <M key="e">ServiceAttestorChanged</M>,
-            'service_id, attestor (the new authorised key)',
-            <M key="o">set_attestor</M>,
-          ],
-        ]}
-      />
-
-      <H3 id="registry-errors">Errors</H3>
-      <P>
-        Declared with <M>#[odra::odra_error]</M> (the Odra 2.x replacement for the legacy{' '}
-        <M>execution_error!</M> macro), user-error codes <M>1..=6</M>.
-      </P>
-      <DocTable
-        head={['Code', 'Variant', 'Trigger']}
-        rows={[
-          [<M key="c">1</M>, <M key="e">NotAuthorized</M>, 'Caller is neither attestor nor owner (record_attestation), or not the owner (set_active / set_attestor).'],
-          [<M key="c">2</M>, <M key="e">ServiceNotFound</M>, 'Unknown service_id.'],
-          [<M key="c">3</M>, <M key="e">ServiceInactive</M>, 'Attestation against a service with active=false.'],
-          [<M key="c">4</M>, <M key="e">DuplicateAttestation</M>, 'payment_deploy_hash already attested for this service (seen_payments guard; the guard is per-service).'],
-          [<M key="c">5</M>, <M key="e">InvalidPrice</M>, 'price < 1000 motes at registration.'],
-          [<M key="c">6</M>, <M key="e">EmptyName</M>, 'name empty or whitespace-only at registration.'],
-        ]}
-      />
-
-      <H2 id="spendguard">SpendGuard</H2>
-      <Callout tone="warn" title="NOT YET WIRED INTO THE PRODUCT">
-        SpendGuard is implemented and fully unit-tested, but it is <strong>not</strong> integrated
-        into the running AgentGate product. There is no off-chain <M>SpendGuardClient</M> (
-        <M>packages/chain/</M> ships only the registry client), the middleware{' '}
-        <strong>does not call <M>debit</M></strong> before proxying (<M>/svc/:id</M> in{' '}
-        <M>packages/middleware/src/app.ts</M> has no policy hook), and{' '}
-        <M>loadConfig()</M> does not read a <M>SPENDGUARD_CONTRACT_PACKAGE_HASH</M> (it is absent
-        from <M>.env.example</M>). Until that wiring exists, SpendGuard must not be presented as an
-        active spend-firewall — the contract is real and tested, but the live spend-control path it
-        would enable is not yet built. The roadmap lives in <M>contracts/DEPLOY-DAY1.md</M> §5.
-      </Callout>
-      <P>
-        Conceptually: an agent calls <M>open_policy</M> to mint a budget + rate + trust mandate,
-        pre-funds the per-policy escrow with <M>deposit</M>, and (in the intended design) before
-        serving a paid call the policy&rsquo;s <M>gate</M> calls <M>debit</M>. Every rule is
-        enforced on-chain; a violation <M>revert</M>s atomically so the escrow is untouched and the
-        payment never settles. On success the escrowed motes move to <M>pay_to</M> in the same
-        transaction. The owner can reclaim unspent escrow with <M>withdraw</M> and flip a
-        kill-switch with <M>pause</M>.
-      </P>
-
-      <H3 id="spendguard-storage">Storage</H3>
-      <DocTable
-        head={['Field', 'Type', 'Holds']}
-        rows={[
-          [
-            <M key="s">policies_count</M>,
-            <M key="t">Var&lt;u64&gt;</M>,
-            'Number of policies opened (0 initially); equals the id of the most recent one. Ids run 1..=policies_count.',
-          ],
-          [<M key="s">policies</M>, <M key="t">Mapping&lt;u64, Policy&gt;</M>, 'policy_id → the Policy record.'],
-          [
-            <M key="s">seen_refs</M>,
-            <M key="t">Mapping&lt;(u64, String), bool&gt;</M>,
-            '(policy_id, payment_ref) → debited? The per-policy replay guard.',
-          ],
-          [
-            <M key="s">call_times</M>,
-            <M key="t">Mapping&lt;u64, Vec&lt;u64&gt;&gt;</M>,
-            'policy_id → approved-debit timestamps inside the live rate window (pruned on each debit).',
-          ],
-        ]}
-      />
-      <P>
-        The <M>Policy</M> record carries: <M>owner</M> and <M>gate</M> (only the gate may{' '}
-        <M>debit</M>; only the owner may <M>pause</M> / <M>withdraw</M>), <M>budget</M> (cumulative
-        spend ceiling), <M>spent</M>, <M>balance</M> (escrowed motes available), <M>per_call_cap</M>
-        , <M>window_ms</M> + <M>max_calls_in_window</M> (the sliding rate limit),{' '}
-        <M>min_trust_tier</M> (a <M>u8</M> 0..=255 mandate — the tier value is supplied off-chain
-        by the gate on each <M>debit</M>, e.g. the registry success ratio bucketed into tiers),{' '}
-        <M>paused</M>, and <M>created_at</M>.
-      </P>
-
-      <H3 id="spendguard-entrypoints">Entrypoints</H3>
-      <DocTable
-        head={['Signature', 'Auth', 'Behavior & reverts']}
-        rows={[
-          [
-            <M key="s">open_policy(gate, budget, per_call_cap, window_ms, max_calls_in_window, min_trust_tier) → u64</M>,
-            'anyone (caller becomes owner)',
-            <span key="b">
-              Mints a 1-based policy with <M>spent=0</M>, <M>balance=0</M>, <M>paused=false</M>;
-              emits <M>PolicyOpened</M>. Reverts <M>InvalidConfig</M> (10) if{' '}
-              <M>per_call_cap == 0</M>, <M>max_calls_in_window == 0</M>, <M>budget == 0</M>, or{' '}
-              <M>per_call_cap &gt; budget</M>.
-            </span>,
-          ],
-          [
-            <M key="s">deposit(policy_id)</M>,
-            'anyone (payable)',
-            <span key="b">
-              Adds the attached CSPR (<M>attached_value</M>) to the escrow <M>balance</M>; emits{' '}
-              <M>Deposited</M>. Reverts <M>PolicyNotFound</M> (1), <M>ZeroAmount</M> (4).
-            </span>,
-          ],
-          [
-            <M key="s">debit(policy_id, service_id, amount, pay_to, payment_ref, trust_tier)</M>,
-            'gate only',
-            <span key="b">
-              The firewall. Enforces every rule, writes all state, then transfers atomically and
-              emits <M>DebitApproved</M>. Revert order: <M>PolicyNotFound</M> (1) →{' '}
-              <M>NotAuthorized</M> (2, caller ≠ gate) → <M>Paused</M> (3) → <M>ZeroAmount</M> (4) →{' '}
-              <M>PerCallExceeded</M> (5) → <M>UntrustedService</M> (6) → <M>DuplicateRef</M> (7) →{' '}
-              <M>OverBudget</M> (8, exceeds balance or pushes spent past budget) →{' '}
-              <M>RateExceeded</M> (9). A blocked debit reverts and emits nothing.
-            </span>,
-          ],
-          [
-            <M key="s">withdraw(policy_id, amount)</M>,
-            'owner only',
-            <span key="b">
-              Reclaims unspent escrow to the owner (works even while paused, so
-              funds are never locked); emits <M>Withdrawn</M>. Reverts <M>PolicyNotFound</M> (1),{' '}
-              <M>NotAuthorized</M> (2), <M>ZeroAmount</M> (4), <M>OverBudget</M> (8) if{' '}
-              <M>amount &gt; balance</M>.
-            </span>,
-          ],
-          [
-            <M key="s">pause(policy_id, paused)</M>,
-            'owner only',
-            <span key="b">
-              Flips the kill-switch; emits <M>PolicyPaused</M>. Reverts <M>PolicyNotFound</M> (1),{' '}
-              <M>NotAuthorized</M> (2).
-            </span>,
-          ],
-          [
-            <M key="s">get_policy(policy_id) → Option&lt;Policy&gt;</M>,
-            'read',
-            'Never reverts — None if never opened.',
-          ],
-          [
-            <M key="s">get_remaining(policy_id) → U512</M>,
-            'read',
-            'Never reverts — the escrow balance available; 0 for unknown ids.',
-          ],
-          [
-            <M key="s">policies_count() → u64</M>,
-            'read',
-            'Never reverts — equals the id of the most recent policy (0 if none).',
-          ],
-        ]}
-      />
-
-      <H3 id="spendguard-events-errors">Events &amp; errors</H3>
-      <P>
-        Events: <M>PolicyOpened</M>, <M>Deposited</M>, <M>DebitApproved</M> (only on an approved
-        debit — a blocked one reverts and emits nothing, so the failed deploy is itself the
-        on-chain &ldquo;blocked&rdquo; signal), <M>PolicyPaused</M>, <M>Withdrawn</M>.
-      </P>
-      <DocTable
-        head={['Code', 'Variant', 'Trigger']}
-        rows={[
-          [<M key="c">1</M>, <M key="e">PolicyNotFound</M>, 'Unknown policy_id.'],
-          [<M key="c">2</M>, <M key="e">NotAuthorized</M>, 'debit by a non-gate, or pause/withdraw by a non-owner.'],
-          [<M key="c">3</M>, <M key="e">Paused</M>, 'debit while the policy is paused.'],
-          [<M key="c">4</M>, <M key="e">ZeroAmount</M>, 'deposit/debit/withdraw amount was zero.'],
-          [<M key="c">5</M>, <M key="e">PerCallExceeded</M>, 'Single-call amount exceeds per_call_cap.'],
-          [<M key="c">6</M>, <M key="e">UntrustedService</M>, 'Counterparty trust_tier below the policy min_trust_tier.'],
-          [<M key="c">7</M>, <M key="e">DuplicateRef</M>, 'payment_ref already debited for this policy (replay guard).'],
-          [<M key="c">8</M>, <M key="e">OverBudget</M>, 'Amount exceeds escrow balance, or would push spent past budget (also: withdraw amount > balance).'],
-          [<M key="c">9</M>, <M key="e">RateExceeded</M>, 'Too many approved debits inside the current rate window.'],
-          [<M key="c">10</M>, <M key="e">InvalidConfig</M>, 'open_policy with zero per_call_cap / max_calls_in_window / budget, or per_call_cap > budget.'],
-        ]}
-      />
-
-      <H2 id="build-deploy">Build and deploy</H2>
-      <P>
-        Each contract is a standalone Rust workspace (not an npm workspace). All commands run from
-        the contract&rsquo;s crate directory. The pinned nightly toolchain and{' '}
-        <M>wasm32-unknown-unknown</M> target auto-install from <M>rust-toolchain.toml</M>{' '}
-        (channel <M>nightly-2026-01-01</M>) on first invocation — nightly is mandatory.
-      </P>
-      <CommandBlock text="cd contracts/agentgate-registry && cargo odra test" />
-      <P>
-        Runs the in-process OdraVM unit suite (no WASM, no network) — 20 tests for the registry
-        covering the register/get happy path, sequential ids and <M>services_count</M>,
-        empty/whitespace-name and below-minimum-price reverts (incl. the exact 1000-motes
-        boundary), default reads for unknown ids, attestor-or-owner auth (strangers revert), the
-        per-service duplicate guard, the inactive-flag freeze and reactivation, score math, the
-        100-entry cap dropping oldest entries while counters keep full history, owner-only{' '}
-        <M>set_active</M> / <M>set_attestor</M> (attestor rejected), and event emission. SpendGuard
-        has its own 25-test suite under <M>contracts/spend-guard/</M> (open/deposit/debit revert
-        matrix, rate window, withdraw, pause).
-      </P>
-      <CommandBlock text="cd contracts/agentgate-registry && cargo odra build" />
-      <P>
-        Writes <M>wasm/AgentGateRegistry.wasm</M> (~291 KiB after cargo-odra&rsquo;s automatic{' '}
-        <M>wasm-opt</M> + <M>wasm-strip</M> pass — the exact size varies with the binaryen version;
-        requires <M>cargo-odra</M> (<M>cargo install cargo-odra --locked</M>), wabt for{' '}
-        <M>wasm-strip</M>, and binaryen &ge; 121 for <M>wasm-opt</M> with{' '}
-        <M>--llvm-memory-copy-fill-lowering</M> support). <M>cargo odra schema</M> emits the
-        entrypoint/type/event JSON under <M>resources/casper_contract_schemas/</M>. Any committed
-        wasm in the repo is rebuilt at deploy time from source.
-      </P>
-      <Callout tone="info" title="DEPLOYED TO CASPER TESTNET">
-        AgentGateRegistry is live on Casper Testnet (network <M>casper-test</M>, Casper 2.0). The
-        full loop &mdash; <M>register_service</M> &rarr; pay (native CSPR transfer, transfer_id =
-        invoice nonce) &rarr; <M>record_attestation</M> &rarr; trust-score reads (1,1) &mdash; runs
-        on-chain. See the closing{' '}
-        <a
-          href="https://testnet.cspr.live/transaction/f9759829f536db00e981bcc53540455ef8141ff2ab3732909806b80da054ee01"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-accent underline underline-offset-4 hover:text-white"
-        >
-          record_attestation transaction
-        </a>{' '}
-        on the explorer; the install, register and payment links are in the{' '}
-        <a
-          href="https://example.invalid/AgentGate#deployed-addresses-casper-testnet"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-accent underline underline-offset-4 hover:text-white"
-        >
-          repo README
-        </a>{' '}
-        under &ldquo;Deployed addresses (Casper Testnet)&rdquo;, and the package is browsable on{' '}
-        <a
-          href="https://testnet.cspr.live/contract-package/e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-accent underline underline-offset-4 hover:text-white"
-        >
-          testnet.cspr.live
-        </a>
-        . The deploy runbook (keys, faucet,{' '}
-        <M>casper-client put-deploy</M> session args) is in <M>contracts/README.md</M> and{' '}
-        <M>contracts/DEPLOY-DAY1.md</M>.
-      </Callout>
+      <H3 id="m-register">register_service — payable</H3>
       <CodeBlock
-        label="root .env"
-        code={'REGISTRY_CONTRACT_PACKAGE_HASH=hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df'}
+        code={'register_service(name: String, description: String, gateway_base_url: String,\n                 accepts: Vec<PaymentOption>, payment_target: AccountId,\n                 attestor: AccountId) -> u64'}
+      />
+      <P>
+        Registers a service owned by the caller and returns its id. The name is trimmed and must not
+        be empty; the length limits apply; <M>accepts</M> holds 1 to 4 options, at most one with{' '}
+        <M>asset: "near"</M> (the only one <M>pay</M> settles), whose amount is at least{' '}
+        <M>MIN_PRICE_YOCTO</M>, every other amount above zero. Attach at least{' '}
+        <M>0.12 NEAR</M>; the registry keeps that and refunds the rest. The service starts{' '}
+        <M>active</M>. The call panics <M>ERR_STORAGE_EXCEEDED</M> if the registration plus the
+        attestation reserve would not fit in the deposit.
+      </P>
+      <H3 id="m-pay">pay — payable</H3>
+      <CodeBlock code="pay(service_id: u64, nonce: String)" />
+      <P>
+        Pays for one call. The service must exist, be active and have a <M>"near"</M> option at
+        price <M>p</M>. Attach at least <M>p + 0.002 NEAR</M>. The nonce must be 1 to 20 digits and
+        never seen before (single-use across the whole registry). Transfers exactly <M>p</M> to the
+        payment target, keeps the fee, refunds <M>attached − p − fee</M> to the payer, and stores
+        the payment with <M>self_paid = payer is the owner or the payment target</M>. The
+        measured storage cost must fit inside the fee.
+      </P>
+      <H3 id="m-attest">record_attestation</H3>
+      <CodeBlock code="record_attestation(service_id: u64, nonce: String, payment_tx_hash: String, success: bool)" />
+      <P>
+        Records the outcome of the call that followed a payment. The caller must be the service’s
+        attestor or owner and the service active. The payment must exist for that service, not yet
+        be attested and not be self-paid. It marks the payment attested, bumps the score (
+        <M>total + 1</M>, and <M>success + 1</M> when <M>success</M>), prepends the attestation (the
+        list is truncated at 100) and writes an activity entry. <M>payment_tx_hash</M> is
+        informational, at most 64 bytes. Not payable: its storage is prepaid by the registration
+        deposit.
+      </P>
+      <H3 id="m-set-active">set_active · set_attestor</H3>
+      <CodeBlock code={'set_active(service_id: u64, active: bool)\nset_attestor(service_id: u64, attestor: AccountId)'} />
+      <P>
+        Owner only. An inactive service accepts no new payments and no attestations.{' '}
+        <M>set_attestor</M> replaces the account that may attest (the owner always may).
+      </P>
+
+      <H2 id="views">Views</H2>
+      <DocTable
+        head={['View', 'Returns']}
+        rows={[
+          [<M key="1">get_service(service_id)</M>, <span key="1d"><M>ServiceView</M> or <M>null</M>.</span>],
+          [<M key="2">list_services(from_index, limit)</M>, <span key="2d"><M>ServiceView[]</M> with ids <M>from_index..</M> ascending (1-based; 0 starts at 1); <M>limit</M> is clamped to 50.</span>],
+          [<M key="3">services_count()</M>, <span key="3d">The number of services, which is also the newest id.</span>],
+          [<M key="4">get_score(service_id)</M>, <span key="4d"><M>{'{ total_calls, success_calls }'}</M>; zeros for an unknown id.</span>],
+          [<M key="5">get_attestations(service_id)</M>, <span key="5d"><M>AttestationView[]</M>, newest first, at most 100; empty for an unknown id.</span>],
+          [<M key="6">get_payment(nonce)</M>, <span key="6d"><M>PaymentView</M> or <M>null</M>. This is what the gateway verifies a proof against.</span>],
+          [<M key="7">get_recent_activity(limit)</M>, <span key="7d"><M>ActivityView[]</M>, newest first; <M>limit</M> is clamped to 200.</span>],
+        ]}
+      />
+      <H3 id="shapes">JSON shapes</H3>
+      <P>Views are snake_case JSON; <M>U128</M> amounts are decimal strings.</P>
+      <CodeBlock
+        label="ServiceView"
+        code={JSON.stringify(
+          {
+            id: 1,
+            name: 'RWA FX & Gold Oracle',
+            description: '…',
+            gateway_base_url: 'https://gateway.example.org',
+            accepts: [{ asset: 'near', amount: '500000000000000000000000', decimals: 24, symbol: 'NEAR' }],
+            payment_target: 'seller.testnet',
+            owner: 'seller.testnet',
+            attestor: 'gateway.testnet',
+            active: true,
+            created_at_ms: 1794407336851,
+          },
+          null,
+          2,
+        )}
+      />
+      <DocTable
+        head={['Type', 'Fields']}
+        rows={[
+          [<M key="1">PaymentOption</M>, <Fields key="1f">{'{ asset, amount, decimals, symbol }'}</Fields>],
+          [<M key="2">ScoreView</M>, <Fields key="2f">{'{ total_calls, success_calls }'}</Fields>],
+          [<M key="3">AttestationView</M>, <Fields key="3f">{'{ nonce, payment_tx_hash, success, timestamp_ms }'}</Fields>],
+          [<M key="4">PaymentView</M>, <Fields key="4f">{'{ nonce, service_id, payer, amount, timestamp_ms, block_height, self_paid, attested }'}</Fields>],
+          [
+            <M key="5">ActivityView</M>,
+            <span key="5f">
+              <Fields>{'{ kind, service_id, account, amount?, success?, nonce?, payment_tx_hash?, timestamp_ms, block_height }'}</Fields>
+              ; <M>kind</M> is <M>service_registered</M>, <M>payment</M> or <M>attestation</M>, and{' '}
+              <M>account</M> is the owner, the payer or the attestor accordingly.
+            </span>,
+          ],
+        ]}
+      />
+      <P>
+        The public endpoint is never stored: the contract keeps only <M>gateway_base_url</M>, and
+        every reader computes <M>{'<gateway_base_url>/svc/<id>'}</M>. An activity view cannot name its
+        own transaction, which is why the dashboard’s live feed links to the event’s block and the
+        gateway serves <DocLink href="/docs/protocol#receipts">receipts</DocLink>.
+      </P>
+
+      <H2 id="events">Events</H2>
+      <P>
+        Change methods emit NEP-297 events with <M>standard: "neargate"</M> and{' '}
+        <M>version: "1.0.0"</M>:
+      </P>
+      <DocTable
+        head={['Event', 'Data']}
+        rows={[
+          [<M key="1">service_registered</M>, <M key="1d">{'{ service_id, owner, name, payment_target, attestor }'}</M>],
+          [<M key="2">payment</M>, <M key="2d">{'{ service_id, nonce, payer, amount, self_paid }'}</M>],
+          [<M key="3">attestation</M>, <M key="3d">{'{ service_id, nonce, payment_tx_hash, success, caller }'}</M>],
+          [<M key="4">service_status</M>, <M key="4d">{'{ service_id, active }'}</M>],
+          [<M key="5">attestor_changed</M>, <M key="5d">{'{ service_id, attestor }'}</M>],
+        ]}
+      />
+
+      <H2 id="errors">Error codes</H2>
+      <P>
+        A panic message is <M>ERR_CODE: text</M>. The clients keep the code as the error’s{' '}
+        <M>code</M>, in mock and live mode alike. Failures that are not contract rejections
+        (transport, a sent transaction without an outcome, a missing key) have their own codes on the{' '}
+        <DocLink href="/docs/cli#error-codes">CLI page</DocLink>.
+      </P>
+      <DocTable
+        head={['Code', 'When']}
+        rows={[
+          [<span key="1"><M>ERR_EMPTY_NAME</M><Sub>register_service</Sub></span>, 'The trimmed name is empty.'],
+          [<span key="2"><M>ERR_FIELD_TOO_LONG</M><Sub>register_service, record_attestation</Sub></span>, 'A field is over its byte limit: name, description, gateway_base_url, accepts.asset, accepts.symbol, payment_tx_hash.'],
+          [<span key="3"><M>ERR_INVALID_PRICE</M><Sub>register_service</Sub></span>, 'accepts has fewer than 1 or more than 4 options, a "near" amount is below 10^18 yocto, another amount is zero, or more than one option is "near".'],
+          [<span key="4"><M>ERR_DEPOSIT_TOO_LOW</M><Sub>register_service, pay</Sub></span>, 'Attached below 0.12 NEAR (registration) or below price + 0.002 NEAR (pay). The message states the required yocto for pay.'],
+          [<span key="5"><M>ERR_STORAGE_EXCEEDED</M><Sub>register_service, pay</Sub></span>, 'The call’s measured storage cost is above its budget (the deposit, or the fee).'],
+          [<span key="6"><M>ERR_SERVICE_NOT_FOUND</M><Sub>pay, record_attestation, set_active, set_attestor</Sub></span>, 'No service with that id.'],
+          [<span key="7"><M>ERR_SERVICE_INACTIVE</M><Sub>pay, record_attestation</Sub></span>, 'The owner switched the service off.'],
+          [<span key="8"><M>ERR_NO_NATIVE_PRICE</M><Sub>pay</Sub></span>, 'The service has no "near" price option to settle.'],
+          [<span key="9"><M>ERR_INVALID_NONCE</M><Sub>pay</Sub></span>, 'The nonce is not 1 to 20 decimal digits.'],
+          [<span key="10"><M>ERR_NONCE_USED</M><Sub>pay</Sub></span>, 'The nonce was already paid. Nonces are single-use across the registry.'],
+          [<span key="11"><M>ERR_NOT_AUTHORIZED</M><Sub>record_attestation, set_active, set_attestor</Sub></span>, 'The caller is not the service owner (set_active, set_attestor) or the attestor or owner (record_attestation).'],
+          [<span key="12"><M>ERR_PAYMENT_NOT_FOUND</M><Sub>record_attestation</Sub></span>, 'The registry holds no payment with that nonce.'],
+          [<span key="13"><M>ERR_PAYMENT_WRONG_SERVICE</M><Sub>record_attestation</Sub></span>, 'The payment belongs to another service.'],
+          [<span key="14"><M>ERR_ALREADY_ATTESTED</M><Sub>record_attestation</Sub></span>, 'That payment was already attested. The gateway treats this as done, not failed.'],
+          [<span key="15"><M>ERR_SELF_PAYMENT</M><Sub>record_attestation</Sub></span>, 'The owner or the payment target paid; it cannot be attested.'],
+        ]}
+      />
+      <P>
+        One more code is NEAR’s, not the contract’s: <M>ERR_INSUFFICIENT_BALANCE</M> means the signer
+        cannot fund the deposit plus gas.
+      </P>
+
+      <H2 id="build">Build, test and deploy</H2>
+      <CodeBlock
+        label="from the repository root"
+        code={[
+          '(cd contracts/registry && cargo near build non-reproducible-wasm)',
+          '# -> contracts/target/near/neargate_registry/neargate_registry.wasm',
+          '(cd contracts && cargo test)',
+        ].join('\n')}
+      />
+      <P>
+        The toolchain is pinned in <M>contracts/rust-toolchain.toml</M>; <M>cargo-near</M> is a
+        separate install. <M>npm run near:deploy</M> builds and deploys the contract onto the
+        registry account and reads <M>services_count</M> back; see the{' '}
+        <DocLink href="/docs/quickstart#testnet">quickstart</DocLink>. Reads need no key:
+      </P>
+      <CodeBlock
+        label="with the near CLI"
+        code={`near contract call-function as-read-only <registry account> get_service json-args '{"service_id":1}' network-config testnet now`}
       />
 
       <NextLinks
         links={[
-          { href: '/docs/architecture', label: 'Architecture' },
-          { href: '/docs/errors', label: 'Error codes' },
+          { href: '/docs/protocol', label: 'How it works' },
+          { href: '/docs/cli', label: 'CLI & MCP' },
         ]}
       />
     </>

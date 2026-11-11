@@ -1,28 +1,29 @@
 import Link from 'next/link';
 import { StatsStrip } from '@/components/stats-strip';
 import { CommandBlock } from '@/components/copy';
+import { REPO_URL } from '@/lib/seo';
 
-const LIST_CMD = 'npx @neargate/cli@latest list';
+const LIST_CMD = 'npm run neargate -- list';
 const WRAP_CMD =
-  'npx @neargate/cli@latest wrap https://api.example.com/gold --price 2.5 --name "Gold Spot Feed" --pem ./key.pem';
+  'npm run neargate -- wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --account alice.testnet';
 
 const STEPS = [
   {
     n: '01',
     title: 'Wrap',
-    body: 'One command registers your API on the Casper registry contract and drops a 402 paywall in front of it. No billing code, no accounts, no keys to issue.',
-    code: 'npx @neargate/cli@latest wrap <url> --price 2.5 --pem ./key.pem',
+    body: 'One command registers your API on the NEAR registry contract and drops a 402 paywall in front of it. No billing code, no accounts, no keys to issue.',
+    code: 'npm run neargate -- wrap <url> --price 0.5 --name <name> --account <you>',
   },
   {
     n: '02',
     title: 'Discover',
     body: 'Agents read the on-chain catalog — price, endpoint, trust score — pick a service, and get an HTTP 402 invoice with a one-time payment nonce.',
-    code: 'GET /svc/1 → 402 { priceMotes, nonce }',
+    code: 'GET /svc/1 → 402 { maxAmountRequired, extra.nonce }',
   },
   {
     n: '03',
     title: 'Get paid',
-    body: 'The agent pays in native CSPR with transfer_id = nonce and retries with proof. Every served call writes a reputation attestation back on-chain.',
+    body: 'The agent calls the registry’s pay(service_id, nonce) with the price plus a 0.002 NEAR storage fee attached, then retries with the transaction hash as proof. Every served call writes a reputation attestation back on-chain.',
     code: '200 OK · attestation recorded ✓',
   },
 ] as const;
@@ -30,32 +31,20 @@ const STEPS = [
 const ROADMAP = [
   {
     tag: 'NOW',
-    title: 'Casper Testnet · Plan B settlement',
-    body: 'Native CSPR transfers carrying HTTP 402 semantics (transfer_id = invoice nonce), verified via CSPR.cloud. Registry + reputation contract live.',
+    title: 'NEAR testnet · registry-settled x402',
+    body: 'Buyers pay through the registry contract: the price goes straight to the seller, a flat 0.002 NEAR storage fee stays, and the payment is recorded on-chain so the gateway can verify it and attest the call. The CLI and an MCP server drive the whole loop.',
     done: true,
   },
   {
     tag: 'NEXT',
-    title: 'Casper Mainnet launch',
-    body: 'Audited registry deploy, real CSPR settlement, seller onboarding for the first indie data providers.',
+    title: 'Gasless payments (NEP-366)',
+    body: 'A buyer signs a NEP-366 delegate action and the gateway relays it, so the buyer never pays gas itself. The payment still settles through the registry’s pay.',
     done: false,
   },
   {
-    tag: 'Q3',
-    title: 'x402 Facilitator (Plan A)',
-    body: 'Swap the built-in verifier for the official Casper x402 Facilitator behind the existing PaymentVerifier seam — zero changes for sellers.',
-    done: false,
-  },
-  {
-    tag: 'Q3',
-    title: 'CSPR.cloud streaming',
-    body: 'Replace 5-second polling with push-based streaming for instant catalog, payment and attestation updates.',
-    done: false,
-  },
-  {
-    tag: 'Q4',
-    title: 'MCP server',
-    body: 'A Model Context Protocol server so Claude and other agents can query the registry and pay for services natively from any conversation.',
+    tag: 'LATER',
+    title: 'More payment assets',
+    body: 'NEP-141 token prices next to native NEAR. The registry already stores an accepts[] price list of up to four options per service.',
     done: false,
   },
 ] as const;
@@ -69,7 +58,7 @@ export default function Home() {
           className="microlabel animate-fade-up text-accent"
           style={{ animationDelay: '0ms' }}
         >
-          casper testnet · http 402 · on-chain reputation
+          near testnet · http 402 · on-chain reputation
         </p>
         <h1
           className="mt-5 max-w-3xl animate-fade-up font-display text-4xl font-bold leading-[1.05] tracking-tight text-white sm:text-6xl"
@@ -77,14 +66,14 @@ export default function Home() {
         >
           Stripe for AI agents
           <br />
-          on Casper<span className="text-accent">.</span>
+          on NEAR<span className="text-accent">.</span>
         </h1>
         <p
           className="mt-6 max-w-2xl animate-fade-up text-base leading-7 text-mut sm:text-lg"
           style={{ animationDelay: '180ms' }}
         >
-          AgentGate turns any API into a paid x402 service in one command — machine-to-machine
-          micropayments in native CSPR, with on-chain discovery and reputation. No cards, no KYC,
+          NearGate turns any API into a paid x402 service in one command — machine-to-machine
+          micropayments in native NEAR, with on-chain discovery and reputation. No cards, no KYC,
           no API keys.
         </p>
         <div
@@ -93,11 +82,11 @@ export default function Home() {
         >
           <CommandBlock text={WRAP_CMD} wrap typewriter />
           <p className="mt-3 font-mono text-[11px] text-mut">
-            one line, only your funded wallet key. Or read the live{' '}
+            one line, your NEAR account and its key (read from ~/.near-credentials). Or read the live{' '}
             <Link href="/catalog" className="text-accent underline underline-offset-4">
               on-chain catalog
             </Link>{' '}
-            with zero setup: <span className="text-white">{LIST_CMD}</span>
+            with no key: <span className="text-white">{LIST_CMD}</span>
           </p>
         </div>
         <div
@@ -117,7 +106,7 @@ export default function Home() {
             live activity
           </Link>
           <a
-            href="https://example.invalid/AgentGate"
+            href={REPO_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="px-2 py-2.5 font-mono text-xs uppercase tracking-[0.18em] text-mut transition-colors hover:text-accent"
@@ -162,9 +151,9 @@ export default function Home() {
               d: 'The paywall speaks the web’s own “Payment Required” status — any agent that can fetch can pay.',
             },
             {
-              k: '< 1¢',
+              k: '0.000001',
               t: 'True micropayments',
-              d: 'Per-call pricing in motes. No minimum fees, no monthly plans — price a call at half a cent if you want.',
+              d: 'Per-call pricing in NEAR, from 0.000001 NEAR up. No monthly plans — a buyer attaches the price plus a flat 0.002 NEAR storage fee per call.',
             },
             {
               k: 'TX×2',
@@ -185,7 +174,7 @@ export default function Home() {
       <section className="pb-20 sm:pb-28">
         <p className="microlabel">roadmap</p>
         <h2 className="mt-3 font-display text-2xl font-semibold tracking-tight text-white sm:text-3xl">
-          Built to outlive the hackathon.
+          What ships, and what is next.
         </h2>
         <ol className="mt-10 space-y-0">
           {ROADMAP.map((item, i) => (

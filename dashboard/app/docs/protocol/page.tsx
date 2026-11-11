@@ -12,13 +12,14 @@ import {
   P,
   PropList,
   StepFlow,
+  Sub,
 } from '@/components/docs';
 
 export const metadata: Metadata = {
   alternates: { canonical: '/docs/protocol' },
   title: 'How it works',
   description:
-    'A concepts walkthrough of the x402 V1 payment protocol: discovery, the 402 PaymentRequiredResponse challenge (accepts[] / PaymentRequirements), a native CSPR transfer carrying the nonce as transfer_id, the X-PAYMENT proof header, on-chain verification, single-use nonce burning, the upstream proxy, and the attestation that feeds a trust score.',
+    'The x402 payment flow on NEAR end to end: the 402 invoice, the registry pay call, the X-PAYMENT proof, verification, the single-use nonce, attestations and trust tiers, the gateway receipts endpoint and the gateway routes.',
 };
 
 export default function Page() {
@@ -27,563 +28,495 @@ export default function Page() {
       <DocHeader
         kicker="CONCEPTS"
         title="How it works"
-        lede="AgentGate is an HTTP-402 payment gateway for AI agents following the x402 V1 wire format. A buyer agent discovers a service, receives a machine-readable 402 PaymentRequiredResponse (accepts[] with PaymentRequirements), pays with a native CSPR transfer whose transfer_id is the invoice nonce, then retries with the X-PAYMENT proof header. The gateway verifies the transfer on-chain, burns the nonce, proxies to the upstream API, and records an attestation that updates the service's trust score."
+        lede="An x402 V1 flow settled through the neargate-registry contract: a 402 invoice, a registry pay call, an X-PAYMENT proof, an on-chain check, a single-use nonce and a payment-backed attestation. This page is the spec for a hand-rolled client or gateway."
       />
 
       <H2 id="flow">The flow at a glance</H2>
-      <P>
-        Every paid request follows the same three-leg exchange: an unpaid <M>402</M> challenge,
-        an on-chain payment, and a retry that carries proof of that payment. The gateway is a
-        reverse proxy in front of the seller&apos;s real API; buyers never need an API key, and
-        the upstream URL — which may embed the seller&apos;s own key — is stored only in the
-        gateway&apos;s private map and never appears in any response. The steps below are the
-        exact sequence the gateway
-        (<M>packages/middleware/src/app.ts</M>) and the buyer client
-        (<M>packages/client/src/index.ts</M>) implement.
-      </P>
       <StepFlow
         steps={[
           {
-            title: 'Discover',
+            title: 'Register',
             body: (
               <>
-                The buyer client (the agent-side SDK, <M>packages/client</M>) reads the on-chain
-                registry to find services and their{' '}
-                <DocLink href="/docs/protocol#attestation">trust scores</DocLink>, choosing one to call. Each
-                service record carries a public gateway URL (<M>/svc/:id</M>) — never the upstream.
+                The seller calls <M>register_service</M>. The registry stores the name, price list,
+                payment target, attestor and the gateway base URL; readers compute the endpoint{' '}
+                <M>&lt;gateway&gt;/svc/&lt;id&gt;</M>. The upstream URL never goes on-chain: it is
+                mapped on the gateway.
               </>
             ),
           },
           {
-            title: 'Request the service',
+            title: 'Challenge — HTTP 402',
             body: (
               <>
-                The buyer client issues the request to <M>GET /svc/:id</M> (any method is accepted via{' '}
-                <M>app.all</M>) with no payment headers. The gateway resolves the service from a
-                60-second cache, rejects it if inactive (<M>403 service_inactive</M>) or unmapped
-                (<M>503 service_unavailable</M>), and rejects non-JSON request bodies before
-                charging (<M>415</M>).
+                The buyer calls the endpoint with no proof. The gateway issues a fresh invoice with
+                a single-use nonce and answers <M>402</M> with a <M>PaymentRequiredResponse</M>.
               </>
             ),
           },
           {
-            title: 'Receive the 402 challenge (PaymentRequiredResponse)',
+            title: 'Pay through the registry',
             body: (
               <>
-                With no <M>X-PAYMENT</M> header, the gateway mints a fresh invoice — a random nonce
-                plus an <M>expiresAtMs</M> deadline — persists it, and replies <M>402</M> with a{' '}
-                <M>PaymentRequiredResponse</M> JSON body: <M>x402Version:1</M>,{' '}
-                <M>error:"X-PAYMENT header is required"</M>, and an <M>accepts[]</M> array containing
-                one <M>PaymentRequirements</M> entry.
-              </>
-            ),
-            code: 'HTTP/1.1 402 Payment Required\nContent-Type: application/json\n\n{"x402Version":1,"error":"X-PAYMENT header is required","accepts":[{"scheme":"exact","network":"casper-test",...}]}',
-          },
-          {
-            title: 'Pay with a native CSPR transfer',
-            body: (
-              <>
-                The buyer client validates the response (<M>parsePaymentRequired</M> — selects
-                the <M>accepts[]</M> entry matching the chain network and <M>scheme:"exact"</M>),
-                refuses prices above its cap (<M>PRICE_EXCEEDED</M>), then sends a native CSPR
-                transfer of exactly <M>maxAmountRequired</M> motes — so sub-2.5-CSPR invoices
-                cannot settle on this rail (see{' '}
-                <DocLink href="/docs/protocol#payment">Payment</DocLink>) — to <M>payTo</M> with{' '}
-                <M>transfer_id = extra.nonce</M>. The transfer&apos;s deploy hash becomes the
-                payment proof.
+                The buyer calls <M>pay(service_id, nonce)</M> on the registry with{' '}
+                <M>maxAmountRequired</M> attached (price + <M>0.002 NEAR</M>). The registry forwards
+                the price to the seller, keeps the fee, refunds any excess and records the payment
+                under the nonce.
               </>
             ),
           },
           {
-            title: 'Retry with proof',
+            title: 'Prove it',
             body: (
               <>
-                After a settle delay the buyer client retries the same request with the{' '}
-                <M>X-PAYMENT</M> header — a base64-encoded{' '}
-                <M>PaymentPayload</M>: <M>x402Version:1</M>, <M>scheme:"exact"</M>,{' '}
-                <M>network:"casper-test"</M>, and <M>payload.transaction</M> (the deploy hash),{' '}
-                <M>payload.transferId</M> (the nonce), <M>payload.from</M> (optional — ignored by
-                the gateway; payer identity is read from the on-chain transfer).
+                The buyer retries the request with an <M>X-PAYMENT</M> header naming the transaction,
+                the nonce and the payer.
               </>
             ),
           },
           {
-            title: 'Verify on-chain',
+            title: 'Verify, burn, serve',
             body: (
               <>
-                The gateway decodes the <M>X-PAYMENT</M> header, validates invoice state (nonce
-                must exist, be unused, and be within <M>expiresAtMs</M>), then calls{' '}
-                <M>chain.verifyTransfer</M> to check the transfer&apos;s target, amount, transfer
-                id, and age (see <DocLink href="/docs/protocol#verification">Verification rules</DocLink>). A
-                still-settling transfer returns <M>402</M> with <M>error:"settlement_pending"</M>{' '}
-                and a <M>Retry-After: 2</M> response header.
+                The gateway checks the registry’s payment record (and, live, the transaction),
+                burns the nonce, proxies to the upstream and returns the response with an{' '}
+                <M>X-PAYMENT-RESPONSE</M> header.
               </>
             ),
           },
           {
-            title: 'Burn the nonce (single-use)',
+            title: 'Attest and score',
             body: (
               <>
-                Before any upstream call, the nonce is marked used atomically. Exactly one
-                concurrent request wins the compare-and-set; every other holder of the same proof
-                gets a fresh <M>402 invoice_used</M>.
-              </>
-            ),
-          },
-          {
-            title: 'Proxy to the upstream',
-            body: (
-              <>
-                The gateway forwards the request to the mapped upstream URL (a strict header
-                whitelist; the <M>X-PAYMENT</M> proof header is stripped), passing the upstream
-                status and content-type back to the agent. Every paid response — whatever status
-                the upstream returned, and even a proxy failure — carries{' '}
-                <M>X-PAYMENT-RESPONSE</M> (base64 <M>SettlementResponse</M> with{' '}
-                <M>success:true</M> meaning the payment settled, plus <M>transaction</M>,{' '}
-                <M>network</M>, <M>payer</M>). The upstream URL never appears in any response.
-              </>
-            ),
-          },
-          {
-            title: 'Record an attestation',
-            body: (
-              <>
-                After responding, the gateway fires a non-blocking on-chain attestation —{' '}
-                <M>{'{ serviceId, paymentDeployHash, success }'}</M> where{' '}
-                <M>success</M> is true iff the upstream returned a 2xx — unless the payer is the
-                service&apos;s own owner/payout account, or the upstream never returned a
-                response. On failure it retries with exponential backoff (default 4 total
-                attempts: 5 s, 10 s, 20 s).
-              </>
-            ),
-          },
-          {
-            title: 'Update the trust score',
-            body: (
-              <>
-                Each attestation increments the service&apos;s on-chain counters
-                (<M>totalCalls</M>, and <M>successCalls</M> on success). Those counters map to a
-                trust tier the next discovering agent reads (see{' '}
-                <DocLink href="/docs/protocol#attestation">Attestation and trust score</DocLink>).
+                After answering, the gateway calls <M>record_attestation</M>. The registry accepts
+                it only for a real, not self-paid, not yet attested payment, then bumps the
+                service’s <M>(total, success)</M> score.
               </>
             ),
           },
         ]}
       />
 
-      <H2 id="invoice">The 402 challenge body (PaymentRequiredResponse)</H2>
+      <H2 id="invoice">The 402 challenge body</H2>
       <P>
-        The body of every <M>402</M> response is a <M>PaymentRequiredResponse</M> — the x402 V1
-        envelope that tells the agent exactly how to pay. It is defined in{' '}
-        <M>packages/shared/src/x402.ts</M> and built by the gateway in{' '}
-        <M>buildRequirements()</M>/<M>respond402Fresh()</M>. The protocol version number is fixed:{' '}
-        <M>x402Version: 1</M>.
+        An unpaid call to <M>/svc/:id</M> answers <M>402</M> with this JSON (<M>x402Version: 1</M>).
+        There is always exactly one <M>accepts[]</M> entry, paying in native NEAR. Amounts are{' '}
+        <M>yoctoNEAR</M> decimal strings (1 NEAR = 10<sup>24</sup> yocto).
       </P>
       <CodeBlock
-        label="402 response body (PaymentRequiredResponse)"
-        code={[
-          '{',
-          '  "x402Version": 1,',
-          '  "error": "X-PAYMENT header is required",',
-          '  "accepts": [',
-          '    {',
-          '      "scheme": "exact",',
-          '      "network": "casper-test",',
-          '      "maxAmountRequired": "2500000000",',
-          '      "asset": "CSPR",',
-          '      "payTo": "account-hash-19ff...b5f0",',
-          '      "resource": "https://gateway.example.org/svc/5",',
-          '      "description": "RWA FX & Gold Oracle",',
-          '      "maxTimeoutSeconds": 600,',
-          '      "extra": {',
-          '        "nonce": "4521903117755646",',
-          '        "serviceId": 5,',
-          '        "expiresAtMs": 1782966672306,',
-          '        "settlement": "casper-native-transfer",',
-          '        "transferIdEncoding": "u64-decimal"',
-          '      }',
-          '    }',
-          '  ]',
-          '}',
-        ].join('\n')}
+        label="402 response (example)"
+        code={JSON.stringify(
+          {
+            x402Version: 1,
+            error: 'X-PAYMENT header is required',
+            accepts: [
+              {
+                scheme: 'exact',
+                network: 'near-testnet',
+                maxAmountRequired: '502000000000000000000000',
+                asset: 'NEAR',
+                payTo: '<registry account id>',
+                resource: '<gateway>/svc/1',
+                description: 'RWA FX & Gold Oracle',
+                maxTimeoutSeconds: 300,
+                extra: {
+                  nonce: '3673826824572287',
+                  serviceId: 1,
+                  expiresAtMs: 1794407336851,
+                  settlement: 'neargate-registry-pay',
+                  contractId: '<registry account id>',
+                  method: 'pay',
+                  priceYocto: '500000000000000000000000',
+                  storageFeeYocto: '2000000000000000000000',
+                  seller: '<payment target account id>',
+                  caip2: 'near:testnet',
+                },
+              },
+            ],
+          },
+          null,
+          2,
+        )}
       />
-      <P>
-        <strong className="text-white">Settlement model:</strong>{' '}
-        <M>scheme:"exact"</M> with <M>extra.settlement:"casper-native-transfer"</M> is a
-        settled-transfer-proof variant — the buyer broadcasts the native CSPR transfer themselves
-        (using <M>extra.nonce</M> as the <M>transfer_id</M>) and the gateway verifies it, so this
-        rail uses no facilitator. AgentGate also speaks the{' '}
-        <strong className="text-white">official Casper x402</strong> (x402 v2, scheme <M>exact</M>) —
-        a <M>CEP-18</M> token settled via an <M>EIP-712</M> authorization through the CSPR.cloud{' '}
-        <M>facilitator</M> — for any service listed in <M>FACILITATOR_SERVICES</M>; see{' '}
-        <DocLink href="/docs/deployment">Deploy</DocLink>.
-      </P>
       <PropList
         items={[
           {
-            name: 'x402Version',
-            type: 'number (1)',
+            name: 'network',
             required: true,
-            desc: <>Fixed x402 protocol version. The client requires an exact match.</>,
-          },
-          {
-            name: 'error',
             type: 'string',
-            required: true,
             desc: (
               <>
-                Human-readable reason. Fresh challenge: <M>"X-PAYMENT header is required"</M>.
-                Rejected proof: one of the <M>PaywallErrorCode</M> strings (e.g.{' '}
-                <M>"amount_too_low"</M>). Pending: <M>"settlement_pending"</M>.
+                The gateway’s chain: <M>near-testnet</M>, <M>near-mainnet</M> or <M>near-mock</M>{' '}
+                (the offline devnet). A client refuses an invoice for another network (
+                <M>NETWORK_MISMATCH</M>).
               </>
             ),
           },
           {
-            name: 'accepts',
-            type: 'PaymentRequirements[]',
+            name: 'maxAmountRequired',
             required: true,
+            type: 'yocto string',
             desc: (
               <>
-                One or more acceptable payment methods. Clients select the entry whose{' '}
-                <M>network</M> matches the chain they are on and <M>scheme === "exact"</M>.
+                What the buyer attaches to <M>pay</M>: <M>priceYocto + storageFeeYocto</M>.
               </>
             ),
           },
           {
-            name: 'accepts[].scheme',
-            type: '"exact"',
+            name: 'payTo / extra.contractId',
             required: true,
-            desc: <>x402 payment scheme — always <M>"exact"</M> for AgentGate.</>,
+            type: 'NEAR account id',
+            desc: 'The registry contract. The buyer pays the registry, never the seller directly; both fields name the same account.',
           },
           {
-            name: 'accepts[].network',
-            type: 'string',
+            name: 'resource',
             required: true,
-            desc: (
-              <>
-                Chain name — <M>mock</M> or <M>casper-test</M>. The client throws{' '}
-                <M>NETWORK_MISMATCH</M> if no entry matches its own network.
-              </>
-            ),
+            type: 'url',
+            desc: 'Absolute URL of the paid endpoint.',
           },
           {
-            name: 'accepts[].maxAmountRequired',
-            type: 'string (motes)',
+            name: 'maxTimeoutSeconds / extra.expiresAtMs',
             required: true,
-            desc: (
-              <>
-                Price in motes of native CSPR as a decimal string. 1 CSPR = 1,000,000,000 motes.
-                U512-safe via bigint — never parse it as a JS number. Replaces the old{' '}
-                <M>priceMotes</M>.
-              </>
-            ),
-          },
-          {
-            name: 'accepts[].payTo',
-            type: 'string',
-            required: true,
-            desc: (
-              <>
-                Recipient account in <M>account-hash-&lt;64 hex&gt;</M> format. The CSPR transfer
-                must go here. Replaces the old <M>paymentTarget</M>.
-              </>
-            ),
-          },
-          {
-            name: 'accepts[].resource',
-            type: 'string (URL)',
-            required: true,
-            desc: <>Absolute URL of the protected resource (<M>/svc/:id</M>).</>,
-          },
-          {
-            name: 'accepts[].description',
-            type: 'string',
-            required: true,
-            desc: <>The service name from on-chain registration (non-empty).</>,
-          },
-          {
-            name: 'accepts[].maxTimeoutSeconds',
             type: 'number',
-            required: true,
             desc: (
               <>
-                <M>INVOICE_TTL_MS / 1000</M> — deadline in seconds from issuance. The default{' '}
-                <M>INVOICE_TTL_MS</M> is 300000 ms; the hosted gateway runs 600000, so live
-                responses show <M>600</M>.
+                How long the invoice lives (the gateway’s <M>INVOICE_TTL_MS</M>, default 5
+                minutes) and the moment it expires (unix ms). A client refuses an invoice already
+                expired.
               </>
             ),
           },
           {
-            name: 'accepts[].extra.nonce',
-            type: 'string (decimal ≤ 2^53−2)',
+            name: 'extra.nonce',
             required: true,
+            type: '1–20 digits',
+            desc: 'The single-use invoice nonce. It is passed to pay and echoed in the X-PAYMENT proof, and it keys the registry’s payment record.',
+          },
+          {
+            name: 'extra.serviceId',
+            required: true,
+            type: 'positive integer',
+            desc: 'The registry service id to pay (the first argument of pay).',
+          },
+          {
+            name: 'extra.settlement / method',
+            required: true,
+            type: 'string',
             desc: (
               <>
-                Per-invoice decimal string — a positive integer ≤ 2^53−2
-                (9,007,199,254,740,990; at most 16 digits), capped below{' '}
-                <M>Number.MAX_SAFE_INTEGER</M> because CSPR.cloud returns transfer ids as float64.
-                Used verbatim as the transfer&apos;s <M>transfer_id</M> and echoed back in{' '}
-                <M>payload.transferId</M> of the <M>X-PAYMENT</M> header.
+                Always <M>neargate-registry-pay</M> and <M>pay</M>: the one settlement rail.
               </>
             ),
           },
           {
-            name: 'accepts[].extra.expiresAtMs',
-            type: 'number',
+            name: 'extra.priceYocto / storageFeeYocto',
             required: true,
+            type: 'yocto string',
             desc: (
               <>
-                Unix-ms deadline, strictly greater than &quot;now&quot; when issued. Replaces the
-                old <M>expiresAt</M>.
+                The service price the seller receives, and the registry’s flat storage fee,
+                always <M>2000000000000000000000</M> (0.002 NEAR). A client refuses an invoice whose
+                fee or total does not match (<M>BAD_INVOICE</M>).
               </>
             ),
           },
           {
-            name: 'accepts[].extra.settlement',
-            type: '"casper-native-transfer"',
+            name: 'extra.seller',
             required: true,
+            type: 'NEAR account id',
+            desc: 'The service’s payment target: the account that receives exactly priceYocto.',
+          },
+          {
+            name: 'extra.caip2',
+            required: true,
+            type: 'string',
             desc: (
               <>
-                Identifies the settled-transfer-proof variant: the buyer broadcasts the transfer;
-                the gateway verifies the deploy hash.
+                The CAIP-2 id of the network: <M>near:testnet</M>, <M>near:mainnet</M> or{' '}
+                <M>near:mock</M>.
               </>
             ),
-          },
-          {
-            name: 'accepts[].asset',
-            type: '"CSPR"',
-            required: true,
-            desc: <>Native CSPR (no token contract). Always present; the reference client does not validate it.</>,
-          },
-          {
-            name: 'accepts[].extra.transferIdEncoding',
-            type: '"u64-decimal"',
-            required: true,
-            desc: <>How the nonce is encoded as the native transfer_id. Always present; the reference client does not validate it.</>,
           },
         ]}
       />
-      <H3 id="invoice-rejection-fields">Rejection fields in the 402 body</H3>
-      <P>
-        Every <M>402</M> response is a full <M>PaymentRequiredResponse</M>. The <M>error</M> field
-        always carries the reason. For a still-settling transfer the error is{' '}
-        <M>"settlement_pending"</M> and the response also carries a standard{' '}
-        <M>Retry-After: 2</M> response header (seconds) — the same invoice is kept alive. Every
-        other rejection re-issues a fresh <M>accepts[]</M> with a new nonce.
-      </P>
 
-      <H2 id="payment">Payment and proof headers</H2>
+      <H3 id="invoice-rejection-fields">Rejection reasons in the 402 body</H3>
       <P>
-        Payment is a <strong className="text-white">native CSPR transfer</strong>, not a token
-        transfer. The buyer client calls <M>chain.transfer</M> with <M>accepts[].payTo</M>,{' '}
-        <M>accepts[].maxAmountRequired</M>, and crucially{' '}
-        <M>transferId = accepts[].extra.nonce</M> — the invoice nonce is reused verbatim as the
-        Casper <M>transfer_id</M>, which binds the on-chain payment to this specific invoice.
-        The transfer returns a deploy hash. After a settle delay the client base64-encodes a{' '}
-        <M>PaymentPayload</M> and sends it as the <M>X-PAYMENT</M> request header.
+        The <M>error</M> field says why the gateway is challenging. After every reason except{' '}
+        <M>settlement_pending</M> the body carries a <em>fresh</em> invoice (a new nonce): pay that
+        one, do not reuse the old nonce.
       </P>
-      <Callout tone="warn" title="Network minimum: 2.5 CSPR per native transfer">
-        Casper rejects native transfers below 2.5 CSPR (<M>2500000000</M> motes) at submit.
-        Verification only requires <M>amount ≥ maxAmountRequired</M> — overpayment is accepted —
-        but the bundled buyers (<M>agentgate buy</M>, the SDK&apos;s <M>fetchPaid</M>, the LLM
-        agent) pay <em>exactly</em> the invoiced amount, so a service priced below 2.5 CSPR can
-        only be settled by a manual buyer that deliberately overpays. Price services at ≥ 2.5
-        CSPR.
-      </Callout>
       <DocTable
-        head={['Header', 'Direction', 'Carries']}
+        head={['error', 'Meaning']}
         rows={[
-          [
-            <M key="h1">X-PAYMENT</M>,
-            'request (retry)',
-            <>
-              base64(JSON): <M>x402Version:1</M>, <M>scheme:"exact"</M>,{' '}
-              <M>network:"casper-test"</M>, <M>payload.transaction</M> (deploy hash),{' '}
-              <M>payload.transferId</M> (nonce), <M>payload.from</M> (optional, ignored — the
-              gateway derives the payer from the transfer itself; the reference client omits it).
-            </>,
-          ],
-          [
-            <M key="h2">X-PAYMENT-RESPONSE</M>,
-            'response (any paid reply)',
-            <>
-              base64(JSON): <M>success:true</M>, <M>transaction</M> (deploy hash),{' '}
-              <M>network</M>, <M>payer</M> (account-hash). New in x402 V1.
-            </>,
-          ],
+          [<M key="1">X-PAYMENT header is required</M>, 'The first call: there was no proof.'],
+          [<M key="2">invalid_payment_header</M>, 'The header is not valid base64 JSON of the expected shape, or names a different network than the gateway.'],
+          [<M key="3">relayer_disabled</M>, 'The proof is a delegate (gasless) payload. That rail is off; pay with a tx proof.'],
+          [<M key="4">unknown_nonce</M>, 'The gateway issued no invoice with that nonce for this service (or forgot it after a restart without a persistent invoice store).'],
+          [<M key="5">invoice_used</M>, 'That invoice was already redeemed. A nonce serves one call.'],
+          [<M key="6">invoice_expired</M>, 'The invoice is older than its time to live.'],
+          [<M key="7">not_found</M>, 'The registry holds no payment for the nonce.'],
+          [<M key="8">wrong_service</M>, 'The payment under that nonce was made for another service.'],
+          [<M key="9">amount_too_low</M>, 'The price the registry forwarded is below the service price.'],
+          [<M key="10">expired</M>, 'The registry payment is older than the invoice time to live.'],
+          [<M key="11">already_attested</M>, 'The payment was already attested, which only follows a served call.'],
+          [<M key="12">tx_mismatch</M>, 'Live: the transaction is not a successful pay of this nonce and service on this registry, signed by the named payer.'],
+          [<M key="13">settlement_pending</M>, 'Live: the payment is not yet visible. The same invoice stays valid: retry the identical proof after the Retry-After seconds (2).'],
         ]}
       />
+
+      <H2 id="payment">Payment and proof</H2>
+      <H3 id="payment-pay">The pay call</H3>
       <P>
-        Header names are case-insensitive on the wire. The <M>X-PAYMENT</M> proof header is
-        consumed by the gateway and is never forwarded to the upstream API.
+        The buyer signs a call to the registry’s <M>pay</M> method with the invoice’s{' '}
+        <M>serviceId</M> and <M>nonce</M> and <M>maxAmountRequired</M> attached as the deposit. The
+        registry panics (<M>ERR_*</M>, see the <DocLink href="/docs/contract#errors">contract</DocLink>)
+        if the service is inactive, the deposit is below <M>price + 0.002 NEAR</M>, the nonce is
+        malformed, or the nonce was ever used before — a nonce is single-use across the whole
+        registry. Otherwise it forwards exactly the price to the payment target, keeps the fee,
+        refunds the excess to the payer and stores the payment, flagging it <M>self_paid</M> when
+        the payer is the service owner or payment target.
+      </P>
+      <H3 id="payment-header">The X-PAYMENT header</H3>
+      <P>
+        The proof is the base64 encoding of this JSON, sent on the retried request:
+      </P>
+      <CodeBlock
+        label="X-PAYMENT (decoded)"
+        code={JSON.stringify(
+          {
+            x402Version: 1,
+            scheme: 'exact',
+            network: 'near-testnet',
+            payload: {
+              kind: 'tx',
+              transaction: '<base58 tx hash of the pay call>',
+              nonce: '3673826824572287',
+              payer: '<buyer account id>',
+            },
+          },
+          null,
+          2,
+        )}
+      />
+      <P>
+        <M>transaction</M> is the base58 hash of the <M>pay</M> transaction; <M>payer</M> is the
+        account that signed it. A <M>kind: &quot;delegate&quot;</M> payload (a NEP-366 signed delegate
+        action the gateway would relay) is reserved for a gasless rail that is not enabled; the
+        gateway answers it <M>relayer_disabled</M>.
+      </P>
+      <H3 id="payment-response">The X-PAYMENT-RESPONSE header</H3>
+      <P>
+        A served call carries <M>X-PAYMENT-RESPONSE</M>: base64 JSON{' '}
+        <M>{'{ success, transaction, network, payer }'}</M> confirming which payment was redeemed.
+        It is set on every call the gateway processed after verifying the payment — including one
+        whose upstream then failed, because the buyer did pay.
       </P>
 
       <H2 id="verification">Verification rules</H2>
       <P>
-        When a retry arrives with proof headers, the gateway first checks the invoice behind the
-        presented nonce (it must exist, match the requested <M>serviceId</M>, be unused, and be
-        within <M>expiresAtMs</M>). It then verifies the transfer on-chain via{' '}
-        <M>
-          chain.verifyTransfer({'{'} deployHash, expectedTarget, minAmountMotes, expectedTransferId,
-          maxAgeMs {'}'})
-        </M>. The deploy must first exist and contain a native transfer (<M>not_found</M>{' '}
-        otherwise); then four checks — evaluated in the order target → transfer id → amount →
-        age — must all pass:
+        For a request carrying a proof the gateway checks, in this order, and answers a <M>402</M>{' '}
+        with the matching <DocLink href="#invoice-rejection-fields">reason</DocLink> at the first
+        failure:
       </P>
       <DocTable
-        head={['#', 'Check', 'Rule', 'On failure']}
+        head={['#', 'Check', 'Reason on failure']}
         rows={[
-          [
-            '0',
-            'Exists',
-            <span key="r0">
-              The deploy hash resolves to at least one native transfer.
-            </span>,
-            <M key="e0">not_found</M>,
-          ],
-          [
-            '1',
-            'Target',
-            <span key="r1">
-              <M>transfer.to</M> exactly equals the service&apos;s <M>paymentTarget</M>.
-            </span>,
-            <M key="e1">wrong_target</M>,
-          ],
-          [
-            '2',
-            'Transfer id',
-            <span key="r2">
-              <M>transfer.transfer_id</M> equals the invoice nonce.
-            </span>,
-            <M key="e2">wrong_transfer_id</M>,
-          ],
+          ['1', 'The header decodes to a tx proof for this gateway’s network.', 'invalid_payment_header, relayer_disabled'],
+          ['2', 'An invoice with that nonce exists, for this service, unused and unexpired.', 'unknown_nonce, invoice_used, invoice_expired'],
           [
             '3',
-            'Amount',
-            <span key="r3">
-              <M>transfer.amount ≥ priceMotes</M> (bigint comparison — overpayment is accepted).
+            <span key="3">
+              The registry’s <M>get_payment(nonce)</M> view (read at <M>optimistic</M> finality, so a
+              payment counts as soon as its transaction executes): exists, for this service, price at
+              least the service price, younger than the invoice time to live, not yet attested.
             </span>,
-            <M key="e3">amount_too_low</M>,
+            'not_found, wrong_service, amount_too_low, expired, already_attested',
           ],
           [
             '4',
-            'Age',
-            <span key="r4">
-              Deploy age is within <M>maxAgeMs</M> (the invoice TTL).
+            <span key="4">
+              Live only: the transaction itself. Via the RPC, it must be signed by the named payer,
+              received by the registry, hold a <M>pay</M> action with the same service id and nonce,
+              and have succeeded. While it cannot yet be shown the answer is pending.
             </span>,
-            <M key="e4">expired</M>,
+            'tx_mismatch, settlement_pending',
           ],
+          ['5', 'The nonce is burned (below).', 'invoice_used'],
         ]}
       />
       <P>
-        A transfer that exists but has not finalized yet returns <M>settlement_pending</M> rather than a
-        failure: the gateway keeps the same <M>accepts[]</M> alive (same nonce) and answers{' '}
-        <M>402</M> with <M>error:"settlement_pending"</M> and a standard{' '}
-        <M>Retry-After: 2</M> response header (seconds) so the buyer can re-present the identical
-        proof shortly. Every other verification failure re-sends a fresh{' '}
-        <M>PaymentRequiredResponse</M> (new nonce) so a client can re-pay.
+        Other statuses the paywall route can answer: <M>404 service_not_found</M>,{' '}
+        <M>403 service_inactive</M> (the owner paused it), <M>503 service_unavailable</M> (no
+        upstream is mapped on this gateway, or in live mode the upstream host is not public — and a
+        call that cannot be delivered is never charged), <M>415 unsupported_media_type</M> (a
+        request body that is not JSON, refused before any invoice) and <M>429 rate_limited</M> (60
+        requests per minute per client on <M>/svc</M>).
       </P>
 
       <H2 id="single-use">Single-use nonce and idempotency</H2>
       <P>
-        Once all four checks pass, the gateway burns the nonce{' '}
-        <strong className="text-white">before</strong> it proxies to the upstream. The invoice
-        store&apos;s <M>markUsed()</M> is a compare-and-set: exactly one concurrent request can
-        consume a given nonce. Any other request presenting the same proof loses the race and
-        receives a fresh <M>402 invoice_used</M>. A burned nonce stays burned even if the
-        upstream call then fails — proof is consumed at most once, so a buyer is charged for at
-        most one delivered call per invoice.
+        Once a proof verifies, the gateway <strong className="text-white">burns the nonce before it
+        proxies</strong>: the call is single-use even if the upstream then fails, and when several
+        requests race on one proof exactly one wins and the rest get <M>invoice_used</M>. The
+        registry enforces the same rule on-chain — <M>pay</M> refuses a reused nonce with{' '}
+        <M>ERR_NONCE_USED</M> — so a nonce can never be paid twice, anywhere.
       </P>
-      <DocTable
-        head={['Situation', 'Outcome']}
-        rows={[
-          [
-            'Proof replayed after a successful call',
-            <span key="o1">
-              <M>402 invoice_used</M> — the nonce is dead; re-pay against a new invoice.
-            </span>,
-          ],
-          [
-            'Two concurrent retries, same proof',
-            'One wins and is proxied; the other gets invoice_used.',
-          ],
-          [
-            'Transfer still settling',
-            <span key="o3">
-              <M>402</M> + <M>error:"settlement_pending"</M> + <M>Retry-After: 2</M> (header,
-              seconds) — same nonce stays alive; retry the same <M>X-PAYMENT</M> proof.
-            </span>,
-          ],
-          [
-            'Upstream fails after the burn',
-            'Nonce remains used; the buyer is not silently re-charged.',
-          ],
-        ]}
-      />
-      <Callout tone="info" title="Client-side pending retries">
-        The buyer client (<M>fetchPaid</M>) retries a <M>settlement_pending</M> response up to five
-        times, sleeping the <M>Retry-After</M> value in seconds (capped at 30,000 ms per wait), then
-        returns whatever the gateway last sent.
-      </Callout>
+      <P>
+        The consequence for a client: <strong className="text-white">after you have paid, a failed
+        call is not a reason to pay again</strong>. Re-present the same proof; if the gateway
+        answers <M>settlement_pending</M> wait and resend it; only an invoice the gateway never
+        issued or that expired unused needs a new payment. The client package turns a paid call that
+        was not served into <M>PAID_NOT_SERVED</M> carrying exactly that proof. Invoices live in the
+        gateway’s memory unless <M>INVOICE_STORE_PATH</M> points at a JSON file, so without one a
+        gateway restart forgets open invoices (<M>unknown_nonce</M>).
+      </P>
 
       <H2 id="attestation">Attestation and trust score</H2>
       <P>
-        After the buyer&apos;s response is sent, the gateway records an on-chain attestation
-        without blocking the request. The attestation input is{' '}
-        <M>{'{ serviceId, paymentDeployHash, success }'}</M>, where{' '}
-        <M>success</M> is true exactly when the upstream returned a 2xx (<M>isUpstreamSuccess</M>).
-        If the attestation transaction fails, the gateway retries with exponential backoff — base
-        delay 5,000 ms doubling per attempt (5 s, 10 s, 20 s), up to 4 total attempts. A final
-        failure is only logged and never affects the buyer; a call whose attempts all fail is
-        under-counted, never over-counted.
+        After it has answered the buyer, the gateway — the service’s <em>attestor</em> — calls{' '}
+        <M>record_attestation(service_id, nonce, payment_tx_hash, success)</M>. <M>success</M> is
+        whether the upstream answered with a 2xx. It never blocks the buyer: a failed attempt is
+        retried with exponential backoff (5 s, 10 s, 20 s — four attempts) and, with{' '}
+        <M>ATTESTATION_QUEUE_PATH</M> set, an attestation that never confirmed is replayed when the
+        gateway next boots.
       </P>
-      <P>
-        Two situations record <strong className="text-white">no attestation at all</strong>: a
-        gateway-level proxy failure (<M>upstream_unreachable</M>, <M>upstream_timeout</M>,{' '}
-        <M>upstream_response_too_large</M>, <M>upstream_request_too_large</M> — the upstream never
-        returned a usable response, so the call is not scored either way), and a self-payment — a
-        payer whose account is the service&apos;s own <M>owner</M> or <M>paymentTarget</M> never
-        earns trust (wash-trade guard).
-      </P>
-      <P>
-        Attestations accumulate into a per-service <M>ServiceScore</M> of two counters:{' '}
-        <M>totalCalls</M> and <M>successCalls</M>. <M>trustTier()</M> maps those integer counters
-        to a badge using exact integer math (no float boundaries):
-      </P>
+      <P>The gateway does not attest — the call is served but not scored — when:</P>
       <DocTable
-        head={['Tier', 'Condition']}
+        head={['Case', 'Why']}
         rows={[
           [
-            <M key="t1">new</M>,
-            <span key="c1">
-              <M>totalCalls &lt; 5</M>, or any score that does not meet a higher tier.
-            </span>,
+            'The upstream could not be reached, timed out or answered too large a body',
+            'That is the seller’s backend being down, not a service outcome: it is scored neither way. The receipt says skipped_upstream_failed.',
           ],
           [
-            <M key="t2">reliable</M>,
-            <span key="c2">
-              <M>totalCalls ≥ 5</M> and success ratio ≥ 0.9 (<M>successCalls × 10 ≥ totalCalls × 9</M>).
-            </span>,
-          ],
-          [
-            <M key="t3">trusted</M>,
-            <span key="c3">
-              <M>totalCalls ≥ 25</M> and success ratio ≥ 0.95 (<M>successCalls × 100 ≥ totalCalls × 95</M>).
-            </span>,
+            'The payer is the service owner or the payment target',
+            'A self-paid call can never raise a score. The registry itself rejects it (ERR_SELF_PAYMENT); the receipt says skipped_self_paid.',
           ],
         ]}
       />
       <P>
-        Malformed scores (negative counters, or <M>successCalls &gt; totalCalls</M>) never earn a
-        badge and fall back to <M>new</M>. A discovering agent reads this tier alongside the
-        service record, closing the loop: usage produces attestations, attestations produce a
-        score, and the score guides the next agent&apos;s choice.
+        The registry keeps <M>(total_calls, success_calls)</M> per service and the latest 100
+        attestations, newest first. The trust tier is derived from the score, with exact integer
+        arithmetic:
       </P>
+      <DocTable
+        head={['Tier', 'Rule']}
+        rows={[
+          [<M key="n">new</M>, 'fewer than 5 attested calls, or a success rate below 90%'],
+          [<M key="r">reliable</M>, 'at least 5 calls and at least 90% successful'],
+          [<M key="t">trusted</M>, 'at least 25 calls and at least 95% successful'],
+        ]}
+      />
+
+      <H2 id="receipts">Receipts: GET /receipts/:nonce</H2>
+      <P>
+        A contract view cannot know the transaction that produced its own event, so the registry’s
+        activity feed names a block, not a transaction. The only party that knows the transaction of
+        an attestation is the gateway that sent it, so the gateway serves what it did about each paid
+        call, keyed by the invoice nonce. This is where a buyer, a seed script or the{' '}
+        <M>waitForReceipt</M> helper in <M>@agentgate/client</M> learns the attestation’s transaction.
+      </P>
+      <CodeBlock label="curl <gateway>/receipts/3673826824572287" code={'(no payment, no header needed)'} />
+      <CodeBlock
+        label="200 response"
+        code={JSON.stringify(
+          {
+            nonce: '3673826824572287',
+            serviceId: 1,
+            paymentTxHash: '<the pay transaction the buyer presented>',
+            attestation: { status: 'recorded', txHash: '<the record_attestation transaction>' },
+          },
+          null,
+          2,
+        )}
+      />
+      <DocTable
+        head={['attestation.status', 'Meaning']}
+        rows={[
+          [<M key="1">pending</M>, 'The call was served; the attestation is still being sent or retried. Poll again.'],
+          [<M key="2">recorded</M>, 'The registry holds the attestation. txHash names the gateway’s transaction; it is absent when the registry already had it from another party (ERR_ALREADY_ATTESTED).'],
+          [<M key="3">skipped_self_paid</M>, 'The payer is the service owner or payment target: served, never attested.'],
+          [<M key="4">skipped_upstream_failed</M>, 'The gateway could not reach the upstream: not scored either way.'],
+          [<M key="5">failed</M>, 'Every attempt failed. A gateway with a persistent attestation queue retries on its next boot.'],
+        ]}
+      />
+      <Callout tone="info" title="WHAT TO RELY ON">
+        An unknown nonce answers <M>404 receipt_not_found</M>. Receipts live in the memory of one
+        gateway process, bounded to its last 1000 paid calls (the oldest goes first), and are gone
+        after a restart; a buyer needing a durable record should read the chain
+        (<M>get_payment</M>, <M>get_attestations</M>). The route is public, answers{' '}
+        a receipt with <M>Cache-Control: no-store</M> and allows 60 requests per minute; everything
+        in a receipt is already public on-chain.
+      </Callout>
+
+      <H2 id="routes">Gateway routes</H2>
+      <DocTable
+        head={['Route', 'Purpose']}
+        rows={[
+          [
+            <M key="1">ALL /svc/:id</M>,
+            <span key="1d">
+              The paywall: 402 challenge, then the proxied upstream response.
+              <Sub>Auth: the x402 proof</Sub>
+            </span>,
+          ],
+          [
+            <M key="2">GET /svc/:id/meta</M>,
+            <span key="2d">
+              The service record, its score and trust tier as JSON, unpaid.
+              <Sub>Auth: none</Sub>
+            </span>,
+          ],
+          [
+            <M key="3">GET /receipts/:nonce</M>,
+            <span key="3d">
+              The attestation receipt <DocLink href="#receipts">above</DocLink>.
+              <Sub>Auth: none</Sub>
+            </span>,
+          ],
+          [
+            <M key="4">GET /healthz</M>,
+            <span key="4d">
+              Liveness: <M>{'{ ok, network }'}</M>.<Sub>Auth: none</Sub>
+            </span>,
+          ],
+          [
+            <M key="5">GET /readyz</M>,
+            <span key="5d">
+              Readiness: the chain is reachable; <M>503 {'{ ready: false }'}</M> when it is not.
+              <Sub>Auth: none</Sub>
+            </span>,
+          ],
+          [
+            <M key="6">POST /services/:id/map</M>,
+            <span key="6d">
+              The service owner maps the private upstream with a signed request — see{' '}
+              <DocLink href="/docs/security#self-map">the self-map signature</DocLink>.
+              <Sub>Auth: the owner’s signature</Sub>
+            </span>,
+          ],
+          [
+            <M key="7">POST, GET /admin/services</M>,
+            <span key="7d">
+              Operator mapping of upstreams by token: how mock mode maps, and a self-hosted
+              fallback. Rate limited to 20 per minute.
+              <Sub>Auth: the admin bearer token</Sub>
+            </span>,
+          ],
+          [
+            <M key="8">DELETE /admin/services/:id</M>,
+            <span key="8d">
+              Removes a mapping.<Sub>Auth: the admin bearer token</Sub>
+            </span>,
+          ],
+        ]}
+      />
 
       <NextLinks
         links={[
-          { href: '/docs/architecture', label: 'Architecture' },
-          { href: '/docs/api', label: 'HTTP API reference' },
+          { href: '/docs/security', label: 'Security model' },
+          { href: '/docs/contract', label: 'Registry contract' },
         ]}
       />
     </>

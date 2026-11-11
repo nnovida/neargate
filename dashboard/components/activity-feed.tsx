@@ -146,7 +146,7 @@ function Pager({
 
 const HEADERS = ['Time', 'Type', 'Service', 'Event', 'Amount', 'Status', 'Tx'];
 
-function Row({ event, network }: { event: ActivityEvent; network: string }) {
+function Row({ event, network, explorerUrl }: { event: ActivityEvent; network: string; explorerUrl: string }) {
   const meta = kindMeta(event);
   return (
     <tr className="border-t border-line align-middle hover:bg-panel2/50">
@@ -187,11 +187,12 @@ function Row({ event, network }: { event: ActivityEvent; network: string }) {
         </span>
       </td>
       <td className="whitespace-nowrap py-3 pr-4 text-right">
-        {event.txHash !== null ? (
-          <TxHash hash={event.txHash} network={network} />
-        ) : (
-          <span className="font-mono text-xs text-mut">—</span>
-        )}
+        <TxHash
+          hash={event.txHash}
+          network={network}
+          explorerUrl={explorerUrl}
+          blockHeight={event.blockHeight}
+        />
       </td>
     </tr>
   );
@@ -318,7 +319,7 @@ export function ActivityFeed() {
             />
             <p className="microlabel flex items-center gap-2">
               network <span className="text-white">{data.network}</span>
-              <span className="text-line">·</span> polled every 5s
+              <span className="text-line">·</span> refreshed every 30s
               <LiveDot stalled={error !== undefined} />
             </p>
           </div>
@@ -348,7 +349,12 @@ export function ActivityFeed() {
                   </tr>
                 ) : (
                   pagedRows.map((event, i) => (
-                    <Row key={`${event.txHash}-${event.kind}-${i}`} event={event} network={data.network} />
+                    <Row
+                      key={`${event.blockHeight}-${event.kind}-${event.nonce ?? ''}-${i}`}
+                      event={event}
+                      network={data.network}
+                      explorerUrl={data.explorerUrl}
+                    />
                   ))
                 )}
               </tbody>

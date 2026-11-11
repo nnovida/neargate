@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+
 /** @type {import('next').NextConfig} */
 
 // Pragmatic CSP for a read-only, server-rendered dashboard with no
@@ -36,6 +38,9 @@ const securityHeaders = [
 ];
 
 const nextConfig = {
+  // The npm-workspace root (one level up), named explicitly so a stray lockfile in a parent
+  // directory cannot make Next infer a different one (it warns on every build when it does).
+  turbopack: { root: fileURLToPath(new URL('..', import.meta.url)) },
   transpilePackages: ['@agentgate/shared', '@agentgate/chain'],
   // Don't advertise the framework/version.
   poweredByHeader: false,

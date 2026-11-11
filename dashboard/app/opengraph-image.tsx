@@ -1,6 +1,6 @@
 import { ImageResponse } from 'next/og';
 
-export const alt = 'AgentGate — Stripe for AI agents on Casper';
+export const alt = 'NearGate — Stripe for AI agents on NEAR';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
@@ -30,14 +30,14 @@ export default function Image() {
             color: '#ff3b30',
           }}
         >
-          AGENTGATE
+          NEARGATE
         </div>
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           <div style={{ fontSize: 78, fontWeight: 800, lineHeight: 1.05 }}>
-            Stripe for AI agents on Casper
+            Stripe for AI agents on NEAR
           </div>
           <div style={{ display: 'flex', fontSize: 34, color: '#8B93A5', marginTop: 28, maxWidth: 940 }}>
-            Wrap any API into a paid x402 service in one command — per-call CSPR micropayments with
+            Wrap any API into a paid x402 service in one command — per-call NEAR micropayments with
             on-chain discovery and reputation.
           </div>
         </div>

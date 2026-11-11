@@ -48,7 +48,7 @@ export function isChainDown(err: unknown): boolean {
   return err instanceof ApiError && (err.code === 'chain_unreachable' || err.status === 0);
 }
 
-/** True when the upstream data provider (CSPR.cloud) rate-limited / hit its quota. */
+/** True when the NEAR RPC rate-limited the dashboard's reads (HTTP 429). */
 export function isRateLimited(err: unknown): boolean {
   return err instanceof ApiError && (err.code === 'rate_limited' || err.status === 429);
 }

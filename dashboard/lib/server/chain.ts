@@ -1,12 +1,12 @@
 /**
  * Server-only chain access for the dashboard API routes.
  *
- * The dashboard NEVER talks to the devnet / Casper directly from the browser —
+ * The dashboard NEVER talks to the devnet / the NEAR RPC directly from the browser —
  * every read goes through /api/* routes which wrap createChainClient(loadConfig()).
  *
  * IMPORTANT: nothing here runs at module load. `getChain()` is called inside
  * request handlers only, so importing a route file can never hit the chain
- * (next build stays side-effect free even while @agentgate/chain is stubbed).
+ * (next build stays side-effect free, with no registry configured and no devnet running).
  */
 import {
   createLogger,
@@ -38,6 +38,12 @@ export function getChain(): ChainHandle {
   return cached;
 }
 
+/**
+ * How the live client words an HTTP 429 from the NEAR RPC (near-errors.ts: "the NEAR RPC
+ * rate-limited <what>"); the chain package gives it the generic RPC_ERROR code.
+ */
+const RPC_RATE_LIMITED = /^the NEAR RPC rate-limited /;
+
 export interface ApiFailure {
   status: number;
   body: { error: string };
@@ -45,8 +51,9 @@ export interface ApiFailure {
 
 /**
  * Maps any error thrown while talking to the chain layer to a stable JSON
- * error shape. Devnet down / chain stub / SDK failures all surface as
- * 503 {error:"chain_unreachable"} so the UI can show one clear banner.
+ * error shape. Devnet down, an unreachable or erroring NEAR RPC and an undeployed
+ * registry all surface as 503 {error:"chain_unreachable"} so the UI can show one
+ * clear banner; a rate-limited RPC is its own 429 so the feed can serve its cache.
  */
 export function toApiFailure(err: unknown, route: string): ApiFailure {
   const message = err instanceof Error ? err.message : String(err);
@@ -54,8 +61,8 @@ export function toApiFailure(err: unknown, route: string): ApiFailure {
     log.error('config invalid', { route, message });
     return { status: 500, body: { error: 'config_invalid' } };
   }
-  if (isAgentGateError(err) && err.code === 'CSPR_CLOUD_RATE_LIMITED') {
-    log.warn('cspr.cloud rate limited', { route, message });
+  if (isAgentGateError(err) && err.code === 'RPC_ERROR' && RPC_RATE_LIMITED.test(err.message)) {
+    log.warn('NEAR RPC rate limited', { route, message });
     return { status: 429, body: { error: 'rate_limited' } };
   }
   log.warn('chain unreachable', { route, message });

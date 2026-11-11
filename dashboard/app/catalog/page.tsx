@@ -3,7 +3,7 @@ import { CatalogGrid } from '@/components/catalog-grid';
 
 export const metadata: Metadata = {
   title: 'Catalog',
-  description: 'On-chain catalog of paid x402 services on Casper.',
+  description: 'On-chain catalog of paid x402 services on NEAR.',
 };
 
 export default function CatalogPage() {

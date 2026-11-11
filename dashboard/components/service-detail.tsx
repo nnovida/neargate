@@ -1,40 +1,42 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import Link from 'next/link';
 import useSWR from 'swr';
-import { formatNear, yoctoToNear } from '@agentgate/shared';
+import { formatNear, formatPriceWithStorage, yoctoToNear } from '@agentgate/shared';
 import { fetcher, isChainDown, isNotFound } from '@/lib/fetcher';
-import { formatDateTime, formatInt, svcLabel, timeAgo, truncateMiddle } from '@/lib/format';
+import { formatDateTime, formatInt, svcLabel, timeAgo } from '@/lib/format';
+import { shellUrl } from '@/lib/links';
 import type { ServiceDetailResponse } from '@/lib/api-types';
+import { AccountLink } from '@/components/account-id';
 import { TrustBadge } from '@/components/trust-badge';
 import { ScoreViz } from '@/components/score-viz';
+import { SafeLink } from '@/components/safe-link';
 import { TxHash } from '@/components/tx-hash';
 import { CommandBlock, CopyButton } from '@/components/copy';
 import { ChainDownBanner, EmptyState, ErrorState, Skeleton } from '@/components/states';
 import { LiveDot } from '@/components/live-dot';
 
+/** One labelled row of the metadata panel; `children` is the value (text, a link, an account). */
 function MetaRow({
   label,
-  value,
   mono = true,
   copyValue,
-  title,
+  children,
 }: {
   label: string;
-  value: string;
   mono?: boolean;
   copyValue?: string;
-  title?: string;
+  children: ReactNode;
 }) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-line/60 py-3 last:border-b-0">
       <span className="microlabel shrink-0">{label}</span>
       <span className="flex min-w-0 items-center gap-2">
         <span
-          title={title ?? value}
           className={`truncate text-right text-sm ${mono ? 'font-mono text-[13px]' : ''} text-zinc-200`}
         >
-          {value}
+          {children}
         </span>
         {copyValue ? <CopyButton text={copyValue} /> : null}
       </span>
@@ -42,16 +44,28 @@ function MetaRow({
   );
 }
 
-function buildCurlSnippet(endpointUrl: string): string {
+/** The endpoint is seller-controlled bytes: it enters the copy-paste snippet only as one quoted shell word. */
+function buildCurlSnippet(
+  serviceId: number,
+  endpointUrl: string,
+  network: string,
+  mode: ServiceDetailResponse['mode'],
+): string {
+  const target = shellUrl(endpointUrl);
+  // The CLI defaults to live mode: against the offline devnet it needs --mode mock.
+  const modeFlag = mode === 'mock' ? ' --mode mock' : '';
   return [
+    '# the same flow in one command (budget cap in NEAR, on price + storage fee):',
+    `#   npm run neargate -- buy ${serviceId} --max <near> --account <your account>${modeFlag}`,
+    '',
     '# 1 — call without payment → HTTP 402 + PaymentRequiredResponse JSON',
-    `curl -i ${endpointUrl}`,
+    `curl -i ${target}`,
     '',
     '# 2 — call pay({service_id, nonce: accepts[0].extra.nonce}) on accepts[0].payTo,',
     '#     attaching accepts[0].maxAmountRequired yocto (price + storage fee); receive <txHash>.',
-    '#     Encode proof: base64({"x402Version":1,"scheme":"exact","network":"near-testnet",',
+    `#     Encode proof: base64({"x402Version":1,"scheme":"exact","network":"${network}",`,
     '#       "payload":{"kind":"tx","transaction":"<txHash>","nonce":"<nonce>","payer":"<account>"}})',
-    `curl -s ${endpointUrl} \\`,
+    `curl -s ${target} \\`,
     '  -H "X-PAYMENT: <base64-encoded-payload>"',
   ].join('\n');
 }
@@ -119,7 +133,7 @@ export function ServiceDetail({ id }: { id: number }) {
     return null;
   }
 
-  const { service, score, trustTier, attestations, revenueYocto, balanceYocto, network, mode } = data;
+  const { service, score, trustTier, attestations, revenueYocto, balanceYocto, network, explorerUrl, mode } = data;
 
   return (
     <>
@@ -159,31 +173,30 @@ export function ServiceDetail({ id }: { id: number }) {
             {service.description || 'No description provided.'}
           </p>
           <div className="mt-5">
-            <MetaRow
-              label="endpoint"
-              value={service.endpointUrl}
-              copyValue={service.endpointUrl}
-            />
-            <MetaRow label="price / call" value={formatNear(service.priceYocto)} />
-            <MetaRow
-              label="payment target"
-              value={truncateMiddle(service.paymentTarget, 22, 8)}
-              title={service.paymentTarget}
-              copyValue={service.paymentTarget}
-            />
-            <MetaRow
-              label="owner"
-              value={truncateMiddle(service.owner, 14, 8)}
-              title={service.owner}
-              copyValue={service.owner}
-            />
-            <MetaRow
-              label="attestor"
-              value={truncateMiddle(service.attestor, 14, 8)}
-              title={service.attestor}
-              copyValue={service.attestor}
-            />
-            <MetaRow label="registered" value={formatDateTime(service.createdAt)} mono={false} />
+            <MetaRow label="endpoint" copyValue={service.endpointUrl}>
+              {/* The registry stores any bytes here: link it only when it is http(s). */}
+              <SafeLink
+                href={service.endpointUrl}
+                title={service.endpointUrl}
+                className="hover:text-accent"
+              >
+                {service.endpointUrl}
+              </SafeLink>
+            </MetaRow>
+            <MetaRow label="price / call">{formatNear(service.priceYocto)}</MetaRow>
+            <MetaRow label="buyer attaches">{formatPriceWithStorage(service.priceYocto)}</MetaRow>
+            <MetaRow label="payment target" copyValue={service.paymentTarget}>
+              <AccountLink accountId={service.paymentTarget} network={network} explorerUrl={explorerUrl} />
+            </MetaRow>
+            <MetaRow label="owner" copyValue={service.owner}>
+              <AccountLink accountId={service.owner} network={network} explorerUrl={explorerUrl} />
+            </MetaRow>
+            <MetaRow label="attestor" copyValue={service.attestor}>
+              <AccountLink accountId={service.attestor} network={network} explorerUrl={explorerUrl} />
+            </MetaRow>
+            <MetaRow label="registered" mono={false}>
+              {formatDateTime(service.createdAt)}
+            </MetaRow>
           </div>
         </section>
 
@@ -225,7 +238,7 @@ export function ServiceDetail({ id }: { id: number }) {
         <div className="mb-3 flex items-center justify-between">
           <p className="microlabel">try it — the HTTP 402 flow</p>
         </div>
-        <CommandBlock text={buildCurlSnippet(service.endpointUrl)} prompt={null} />
+        <CommandBlock text={buildCurlSnippet(service.id, service.endpointUrl, network, mode)} prompt={null} />
       </section>
 
       {/* attestation feed */}
@@ -259,7 +272,7 @@ export function ServiceDetail({ id }: { id: number }) {
                   {timeAgo(a.timestamp)}
                 </span>
                 <span className="min-w-0 flex-1 font-mono text-[11px] text-mut">
-                  payment <TxHash hash={a.paymentTxHash} network={network} />
+                  payment <TxHash hash={a.paymentTxHash} network={network} explorerUrl={explorerUrl} />
                 </span>
                 <span className="shrink-0 font-mono text-[11px] text-mut">
                   nonce <code className="text-zinc-300">{a.nonce}</code>
