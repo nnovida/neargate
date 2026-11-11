@@ -14,14 +14,16 @@ export function Footer() {
           </p>
         </div>
         <div className="flex items-center gap-5 font-mono text-xs uppercase tracking-[0.18em]">
-          <a
-            href={REPO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-mut transition-colors hover:text-accent"
-          >
-            GitHub
-          </a>
+          {REPO_URL === null ? null : (
+            <a
+              href={REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-mut transition-colors hover:text-accent"
+            >
+              GitHub
+            </a>
+          )}
           <Link href="/docs" className="text-mut transition-colors hover:text-accent">
             Docs
           </Link>
@@ -29,7 +31,7 @@ export function Footer() {
       </div>
       <div className="border-t border-line/50">
         <p className="mx-auto max-w-6xl px-5 py-3 font-mono text-[10px] uppercase tracking-[0.18em] text-mut/60 sm:px-8">
-          MIT licensed · {REPO_URL.replace(/^https:\/\//, '')}
+          MIT licensed{REPO_URL === null ? '' : ` · ${REPO_URL.replace(/^https?:\/\//, '')}`}
         </p>
       </div>
     </footer>

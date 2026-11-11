@@ -23,13 +23,18 @@ packages/middleware/data
 **/*.log
 **/tsconfig.tsbuildinfo
 
+# Secrets never enter an image or its build context, at any depth: `dashboard/Dockerfile` copies the
+# whole dashboard/ tree, so a root-only rule would let dashboard/.env.local through.
+**/.env
+**/.env.*
+!**/.env.example
+**/*.pem
+**/.near-credentials*
+
 # Not part of any image.
 e2e
 docs
 scripts
-.env
-.env.*
-!.env.example
 .vercel
 .vercelignore
 vercel.json

@@ -37,9 +37,6 @@ services:
       REGISTRY_CONTRACT_ID: ${REGISTRY_CONTRACT_ID:?set REGISTRY_CONTRACT_ID in .env}
       GATEWAY_ACCOUNT_ID: ${GATEWAY_ACCOUNT_ID:?set GATEWAY_ACCOUNT_ID in .env}
       AGENTGATE_ADMIN_TOKEN: ${AGENTGATE_ADMIN_TOKEN:?set a strong AGENTGATE_ADMIN_TOKEN in .env}
-      INVOICE_TTL_MS: ${INVOICE_TTL_MS:-300000}
-      UPSTREAM_TIMEOUT_MS: ${UPSTREAM_TIMEOUT_MS:-30000}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
       # Issued invoices and pending attestations survive a restart (the volume below).
       INVOICE_STORE_PATH: /app/packages/middleware/data/gateway-invoices.json
       ATTESTATION_QUEUE_PATH: /app/packages/middleware/data/gateway-attestations.json
@@ -62,6 +59,8 @@ services:
         # Next inlines NEXT_PUBLIC_* at build time: set the origin the dashboard is served from
         # (https://<dashboard-host>) before building, or leave it empty for the built-in default.
         NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-}
+        # Optional: the GitHub links show only when this is set.
+        NEXT_PUBLIC_REPO_URL: ${NEXT_PUBLIC_REPO_URL:-}
     image: neargate-dashboard
     environment:
       AGENTGATE_MODE: live

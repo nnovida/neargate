@@ -13,7 +13,7 @@ import { ChainDownBanner, EmptyState, ErrorState, Skeleton, StaleNotice } from '
 import { LiveDot } from '@/components/live-dot';
 
 const WRAP_CMD =
-  'npm run neargate -- wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --account alice.testnet';
+  'npm run neargate -- wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --account alice.testnet --gateway https://<gateway-host>';
 
 type View = 'grid' | 'list';
 const VIEW_KEY = 'neargate:catalog-view';

@@ -21,6 +21,11 @@ Rules for every option:
   `~/.near-credentials/testnet/<account>.json` (`npm run near:bootstrap` writes it). Only that
   account id goes in `.env`.
 - **Keep both up through 2026-11-25.**
+- **No hostname is baked in.** Until `DEFAULT_GATEWAY_URL` and `DEFAULT_DASHBOARD_URL`
+  (`packages/shared/src/config.ts`) are set, together, once the hosts exist, a live `neargate wrap`
+  needs `--gateway https://<gateway-host>` and prints no dashboard link; the dashboard's own site
+  origin comes from `NEXT_PUBLIC_SITE_URL`. The GitHub links on the dashboard show only when
+  `NEXT_PUBLIC_REPO_URL` is set at build time.
 
 The root `.env` (copy `.env.example`) needs `AGENTGATE_MODE=live`, `REGISTRY_CONTRACT_ID`,
 `GATEWAY_ACCOUNT_ID` and a strong `AGENTGATE_ADMIN_TOKEN`.
@@ -29,7 +34,7 @@ The root `.env` (copy `.env.example`) needs `AGENTGATE_MODE=live`, `REGISTRY_CON
 
 ```bash
 npm install
-NEXT_PUBLIC_SITE_URL=https://<dashboard-host> npm run build   # the docs pages are built here, with this origin
+NEXT_PUBLIC_SITE_URL=https://<dashboard-host> npm run build   # the docs pages are built here, with this origin (add NEXT_PUBLIC_REPO_URL to show the GitHub links)
 pm2 start deploy/neargate.ecosystem.config.cjs                # neargate-gateway and neargate-dashboard
 pm2 save
 ```
@@ -37,9 +42,14 @@ pm2 save
 pm2 does not read `.env`. The gateway loads the root `.env` itself. The dashboard cannot (Next looks
 in `dashboard/`), so the ecosystem file copies `NEAR_NETWORK`, `NEAR_RPC_URL`, `NEAR_EXPLORER_URL`
 and `REGISTRY_CONTRACT_ID` from the root `.env` into the dashboard's env block and sets
-`AGENTGATE_MODE=live`. It never passes the admin token, an account id or a key. The copy happens when
+`AGENTGATE_MODE=live`. It never copies the admin token, an account id or a key. The copy happens when
 pm2 reads the file, so after editing `.env` run `pm2 delete neargate-dashboard` and start it again
 with `--only neargate-dashboard`.
+
+**Start pm2 from a shell where `.env` is not exported** (no `set -a; source .env`). pm2 hands the
+invoking shell's environment to every app it starts, and a value already in the environment wins
+over the file, so an exported `.env` would give the dashboard process the admin token and any key
+that file holds. Check with `env | grep -c ADMIN_TOKEN` (it should print `0`).
 
 Add two ingress lines to the tunnel's `config.yml`, above the catch-all rule, and route DNS for each
 host:
@@ -63,7 +73,7 @@ Then restart the tunnel service so it reloads the config.
 Import the repo into Vercel with the repo root as the project root: `vercel.json` sets the install
 and build commands. Vercel does not read `.env`; set these in the project settings:
 `AGENTGATE_MODE=live`, `NEAR_NETWORK=testnet`, `REGISTRY_CONTRACT_ID`, `NEXT_PUBLIC_SITE_URL`
-(`https://<dashboard-host>`), and optionally `NEAR_RPC_URL` and `NEAR_EXPLORER_URL`. No key and no
+(`https://<dashboard-host>`), and optionally `NEAR_RPC_URL`, `NEAR_EXPLORER_URL` and `NEXT_PUBLIC_REPO_URL`. No key and no
 admin token belong there. Each Vercel instance keeps its own response cache.
 
 Run only the gateway on this box and give it one ingress line:
@@ -81,7 +91,7 @@ docker compose -f docker-compose.hosting.yml up -d --build
 Compose fills its values from the root `.env`, mounts `~/.near-credentials` read-only into the
 gateway container (the key file must be readable by uid 1000) and publishes both ports on
 `127.0.0.1` only. Point the same tunnel ingress lines at them. Set `NEXT_PUBLIC_SITE_URL` in `.env`
-before `--build`.
+before `--build` (and `NEXT_PUBLIC_REPO_URL`, if the GitHub links should show).
 
 ## Check it
 

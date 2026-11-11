@@ -50,15 +50,17 @@ export function Nav() {
               </Link>
             );
           })}
-          <a
-            href={REPO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            title="NearGate on GitHub"
-            className="ml-1 hidden border border-line px-3 py-2 font-mono text-xs uppercase tracking-[0.18em] text-mut transition-colors hover:border-accent/60 hover:text-white sm:block"
-          >
-            GitHub
-          </a>
+          {REPO_URL === null ? null : (
+            <a
+              href={REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="NearGate on GitHub"
+              className="ml-1 hidden border border-line px-3 py-2 font-mono text-xs uppercase tracking-[0.18em] text-mut transition-colors hover:border-accent/60 hover:text-white sm:block"
+            >
+              GitHub
+            </a>
+          )}
         </nav>
       </div>
     </header>

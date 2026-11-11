@@ -10,16 +10,22 @@ export const fetchCache = 'force-no-store';
 
 const ATTESTATION_LIMIT = 50;
 
+class ServiceNotFoundError extends Error {}
+
 /**
  * Short server-side cache, one entry per validated service id: the detail page polls this route
  * and each miss is several views on the NEAR RPC, which rate-limits public clients. Only a
- * successful body is cached (a not-found id is thrown out of the loader, so it is never stored),
- * and the last good body is served (`stale: true`) through a failed refresh.
+ * successful body is cached (a not-found id is thrown out of the loader, so it is never stored and
+ * never backs the cache off: the chain is asked again every time), and the last good body is
+ * served (`stale: true`) through a failed refresh.
  */
 const CACHE_TTL_MS = 15_000;
-const cache = new TtlCache<ServiceDetailResponse>(CACHE_TTL_MS);
-
-class ServiceNotFoundError extends Error {}
+const MAX_IDS = 256;
+const cache = new TtlCache<ServiceDetailResponse>(
+  CACHE_TTL_MS,
+  MAX_IDS,
+  (err) => !(err instanceof ServiceNotFoundError),
+);
 
 async function loadDetail(id: number): Promise<ServiceDetailResponse> {
   const { chain, config } = getChain();

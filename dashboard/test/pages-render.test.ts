@@ -172,7 +172,7 @@ describe('the cached-data notice (stale: true, set when a route served its cache
     ];
     for (const { name, html, text } of surfaces) {
       expect(html(true), name).toContain(text);
-      expect(html(false), name).not.toContain('Retrying automatically');
+      expect(html(false), name).not.toContain(text);
     }
   });
 });

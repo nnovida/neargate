@@ -23,8 +23,11 @@ The read commands need no key.
 
 ```bash
 neargate wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" \
-  --account seller.testnet --key-file ~/.near-credentials/testnet/seller.testnet.json
+  --account seller.testnet --key-file ~/.near-credentials/testnet/seller.testnet.json \
+  --gateway https://<gateway-host>
 ```
+
+`--gateway` is the base URL your gateway is reached at. The registry stores it for good, and live mode has no hosted default yet, so `wrap` refuses to run without it (`GATEWAY_REQUIRED`).
 
 Before anything goes on chain, `wrap` resolves your key and checks that the payment target exists (it defaults to `--account`; a missing account would strand every payment). It then registers the service (registering attaches a 0.12 NEAR deposit) and maps your upstream on the gateway by **signing an ownership challenge with the same key** — no shared admin token. The upstream URL is only ever sent to the gateway. In mock mode the mapping goes through the gateway admin token instead.
 
@@ -67,7 +70,7 @@ Precedence is **flag > env var > built-in default**.
 | — | `SELLER_PRIVATE_KEY` · `BUYER_PRIVATE_KEY` | live writes: an `ed25519:…` secret key instead of a file |
 | `--price <near>` | — | wrap: price per call in NEAR (at least 0.000001; buyers also attach the 0.002 NEAR storage fee) |
 | `--max <near>` | — | buy: cap on the total a call attaches (price + storage fee) |
-| `--gateway <url>` | — | wrap (default: the hosted gateway in live, `http://localhost:4021` in mock) · buy (default: the service's on-chain endpoint) |
+| `--gateway <url>` | — | wrap (required in live mode; default `http://localhost:4021` in mock) · buy (default: the service's on-chain endpoint) |
 | `--admin-token <token>` | `AGENTGATE_ADMIN_TOKEN` | mock `wrap` only: the gateway admin mapping |
 
 **Key resolution** for live writes, first match wins:
@@ -99,4 +102,3 @@ On an invalid value the CLI fails fast with a one-line message — e.g. `error: 
 ## Notes
 
 - Node ≥ 22.22.2 required.
-- Source: https://example.invalid/AgentGate

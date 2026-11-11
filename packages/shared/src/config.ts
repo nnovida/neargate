@@ -21,19 +21,21 @@ export function isNearNetwork(value: unknown): value is NearNetwork {
 export const DEFAULT_REGISTRY_CONTRACT_ID = '';
 
 /**
- * Default hosted gateway the CLI targets in live mode when `--gateway` is unset.
- * The owner-signature self-map endpoint lives here; override with `--gateway`
- * for a local/self-hosted gateway.
- * TODO(Task 9): point at the NearGate hosted gateway.
+ * Default hosted gateway the CLI targets in live mode when `--gateway` is unset. Empty until the
+ * team hosts NearGate (see deploy/README.md; set this and DEFAULT_DASHBOARD_URL together): while it
+ * is empty, a live `neargate wrap` without `--gateway` is refused (GATEWAY_REQUIRED) before it
+ * touches the chain, because the registry stores the gateway URL for good. Override per call with
+ * `--gateway`.
  */
-export const DEFAULT_GATEWAY_URL = 'https://gateway.example.org';
+export const DEFAULT_GATEWAY_URL: string = '';
 
 /**
- * Default hosted dashboard the CLI links to in live mode when printing the
- * service detail URL; mock mode links to http://localhost:<DASHBOARD_PORT>.
- * TODO(Task 9): point at the NearGate hosted dashboard.
+ * Default hosted dashboard the CLI links to in live mode when printing the service detail URL;
+ * mock mode links to http://localhost:<DASHBOARD_PORT>. Empty until the team hosts NearGate (see
+ * deploy/README.md; set this and DEFAULT_GATEWAY_URL together): while it is empty, live `wrap`
+ * prints no dashboard link and the dashboard's own site origin falls back to localhost.
  */
-export const DEFAULT_DASHBOARD_URL = 'https://agentgate.example.org';
+export const DEFAULT_DASHBOARD_URL: string = '';
 
 /** Per-network RPC and explorer defaults (overridable via NEAR_RPC_URL / NEAR_EXPLORER_URL). */
 const NEAR_DEFAULTS: Record<NearNetwork, { rpcUrl: string; explorerUrl: string }> = {

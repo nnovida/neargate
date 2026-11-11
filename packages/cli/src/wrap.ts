@@ -8,6 +8,7 @@ import type {
 } from '@agentgate/shared';
 import {
   AgentGateError,
+  DEFAULT_GATEWAY_URL,
   MIN_PRICE_YOCTO,
   compareYocto,
   formatNear,
@@ -37,6 +38,39 @@ import {
 /** Where the dashboard detail link points when not overridden. */
 export const DEFAULT_DASHBOARD_BASE_URL = 'http://localhost:3000';
 
+/**
+ * GATEWAY_REQUIRED: a live `wrap` that names no gateway while no hosted default is set. The
+ * registry stores the gateway URL for good, so guessing one is never right.
+ */
+export function gatewayRequiredError(): AgentGateError {
+  return new AgentGateError(
+    'GATEWAY_REQUIRED',
+    "live mode has no default gateway yet: pass --gateway <your gateway's base URL> (the https:// base " +
+      'your NearGate gateway is reached at; the registry stores it for good, so it must be the final one)',
+    400,
+  );
+}
+
+/**
+ * The gateway base `neargate wrap` registers: `--gateway` when given; else, in live mode, the hosted
+ * default (GATEWAY_REQUIRED while there is none); in mock mode the local gateway on MIDDLEWARE_PORT.
+ * Throws before anything else happens, so the CLI calls it ahead of the chain and the signer.
+ */
+export function resolveWrapGateway(args: {
+  flag: string | undefined;
+  mode: AgentGateMode;
+  middlewarePort: number;
+  /** The hosted default; the shared constant unless a test injects one. */
+  hostedDefault?: string;
+}): string {
+  const given = args.flag?.trim();
+  if (given !== undefined && given !== '') return given;
+  if (args.mode !== 'live') return `http://localhost:${args.middlewarePort}`;
+  const hosted = (args.hostedDefault ?? DEFAULT_GATEWAY_URL).trim();
+  if (hosted === '') throw gatewayRequiredError();
+  return hosted;
+}
+
 export interface WrapServiceOpts {
   /** Upstream API URL to wrap. Kept private — only ever sent to the gateway admin API. */
   upstreamUrl: string;
@@ -50,7 +84,10 @@ export interface WrapServiceOpts {
   paymentTarget?: string;
   /** NEAR account id allowed to record attestations; defaults to the signer's account. */
   attestor?: string;
-  /** Base URL for the printed dashboard link (default http://localhost:3000). */
+  /**
+   * Base URL for the printed dashboard link (default http://localhost:3000). An empty string means
+   * there is no dashboard to link to: the result's `dashboardUrl` is null.
+   */
   dashboardBaseUrl?: string;
   chain: ChainClient;
   /**
@@ -77,8 +114,8 @@ export interface WrapServiceResult {
   txHash: string;
   /** Canonical public endpoint: `<gateway>/svc/<serviceId>`. */
   publicUrl: string;
-  /** Dashboard detail page, e.g. http://localhost:3000/services/<id>. */
-  dashboardUrl: string;
+  /** Dashboard detail page, e.g. http://localhost:3000/services/<id>; null when there is no dashboard base. */
+  dashboardUrl: string | null;
   /** false when the gateway upstream mapping failed (registration is still live on-chain). */
   adminOk: boolean;
   /** Present when adminOk is false: what failed + the exact retry (`neargate map`, or the admin curl in mock). */
@@ -114,10 +151,10 @@ export async function wrapService(opts: WrapServiceOpts): Promise<WrapServiceRes
     requireHttpsInLiveMode: true,
     maxBytes: MAX_GATEWAY_URL_BYTES,
   });
-  const dashboardBase = normalizeBaseUrl(
-    opts.dashboardBaseUrl ?? DEFAULT_DASHBOARD_BASE_URL,
-    'dashboardBaseUrl',
-  );
+  const dashboardBase =
+    opts.dashboardBaseUrl === ''
+      ? null
+      : normalizeBaseUrl(opts.dashboardBaseUrl ?? DEFAULT_DASHBOARD_BASE_URL, 'dashboardBaseUrl');
   // near signer → owner-signature self-map (no admin token); mock signer → admin token.
   // (In production near ⟺ live and mock ⟺ mock; keying off the signer keeps a mock
   //  signer out of the self-map path even when mode is forced to 'live'.)
@@ -174,7 +211,7 @@ export async function wrapService(opts: WrapServiceOpts): Promise<WrapServiceRes
   const { serviceId, txHash } = await opts.chain.registerService(input, nearKey?.signer ?? opts.signer);
 
   const publicUrl = `${gatewayBase}/svc/${serviceId}`;
-  const dashboardUrl = `${dashboardBase}/services/${serviceId}`;
+  const dashboardUrl = dashboardBase === null ? null : `${dashboardBase}/services/${serviceId}`;
 
   // -- step 2: gateway upstream mapping ---------------------------------------
   const fetchImpl: FetchLike = opts.fetchImpl ?? ((u, i) => fetch(u, i));

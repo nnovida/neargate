@@ -5,14 +5,14 @@ import { REPO_URL } from '@/lib/seo';
 
 const LIST_CMD = 'npm run neargate -- list';
 const WRAP_CMD =
-  'npm run neargate -- wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --account alice.testnet';
+  'npm run neargate -- wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --account alice.testnet --gateway https://<gateway-host>';
 
 const STEPS = [
   {
     n: '01',
     title: 'Wrap',
     body: 'One command registers your API on the NEAR registry contract and drops a 402 paywall in front of it. No billing code, no accounts, no keys to issue.',
-    code: 'npm run neargate -- wrap <url> --price 0.5 --name <name> --account <you>',
+    code: 'npm run neargate -- wrap <url> --price 0.5 --name <name> --account <you> --gateway <url>',
   },
   {
     n: '02',
@@ -111,14 +111,16 @@ export default function Home() {
           >
             live activity
           </Link>
-          <a
-            href={REPO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-2 py-2.5 font-mono text-xs uppercase tracking-[0.18em] text-mut transition-colors hover:text-accent"
-          >
-            github ↗
-          </a>
+          {REPO_URL === null ? null : (
+            <a
+              href={REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-2 py-2.5 font-mono text-xs uppercase tracking-[0.18em] text-mut transition-colors hover:text-accent"
+            >
+              github ↗
+            </a>
+          )}
         </div>
       </section>
 

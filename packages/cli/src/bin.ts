@@ -4,7 +4,6 @@ import { LiveNearClient, createChainClient } from '@agentgate/chain';
 import {
   AgentGateError,
   DEFAULT_DASHBOARD_URL,
-  DEFAULT_GATEWAY_URL,
   formatError,
   formatNear,
   formatPriceWithStorage,
@@ -28,7 +27,7 @@ import { adminRetryCurl, mapLiveOnlyError, mapService } from './map';
 import { setServiceActive } from './pause';
 import { serviceStatus, STATUS_ATTESTATION_LIMIT } from './status';
 import { parseServiceIdArg } from './validate';
-import { wrapService } from './wrap';
+import { resolveWrapGateway, wrapService } from './wrap';
 import { startAgentGateMcpServer } from './mcp';
 import { resolveCliEnv, type CliConfigFlags } from './cli-env';
 
@@ -105,7 +104,7 @@ withConfigFlags(
       .requiredOption('--price <near>', 'price per call in NEAR (e.g. 0.5; buyers also attach a 0.002 NEAR storage fee)')
       .requiredOption('--name <name>', 'service name (at most 64 bytes)')
       .option('--description <d>', 'service description (at most 280 bytes)', '')
-      .option('--gateway <url>', 'gateway base URL (default: the hosted gateway in live, http://localhost:<MIDDLEWARE_PORT|4021> in mock)')
+      .option('--gateway <url>', 'gateway base URL (required in live mode; default in mock: http://localhost:<MIDDLEWARE_PORT|4021>)')
       .option('--payment-target <accountId>', 'account that receives the price (default: the seller account)')
       .option('--attestor <accountId>', 'account allowed to record attestations (default: the seller account)')
       .option('--admin-token <token>', 'gateway admin bearer token, mock mode (leaks into shell history/ps)'),
@@ -113,11 +112,14 @@ withConfigFlags(
   ),
 ).action(async (upstreamUrl: string, opts: WrapCmdOpts) => {
   const config = cliConfig(opts);
+  // Settled before the chain client or the key: a live wrap with no gateway must not get that far.
+  const gateway = resolveWrapGateway({
+    flag: opts.gateway,
+    mode: config.mode,
+    middlewarePort: config.middlewarePort,
+  });
   const chain = createChainClient(config);
   const signer = await cliSigner(config, 'seller', signerFlags(opts));
-  const gateway =
-    opts.gateway ??
-    (config.mode === 'live' ? DEFAULT_GATEWAY_URL : `http://localhost:${config.middlewarePort}`);
   const result = await wrapService({
     upstreamUrl,
     priceNear: opts.price,
@@ -126,6 +128,7 @@ withConfigFlags(
     gateway,
     paymentTarget: opts.paymentTarget,
     attestor: opts.attestor,
+    // Empty (live, no hosted dashboard yet) means no link is printed.
     dashboardBaseUrl:
       config.mode === 'live' ? DEFAULT_DASHBOARD_URL : `http://localhost:${config.dashboardPort}`,
     chain,
@@ -138,7 +141,7 @@ withConfigFlags(
   });
   console.log(`service id:      ${result.serviceId}`);
   console.log(`public endpoint: ${result.publicUrl}`);
-  console.log(`dashboard:       ${result.dashboardUrl}`);
+  if (result.dashboardUrl !== null) console.log(`dashboard:       ${result.dashboardUrl}`);
   console.log(`register tx:     ${result.txHash}`);
   if (!result.adminOk) {
     // wrapService already printed the detailed warning (and the retry) to stderr.

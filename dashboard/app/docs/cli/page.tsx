@@ -199,8 +199,17 @@ export default function Page() {
             desc: (
               <>
                 Mock mode only: the default <M>wrap --gateway</M> is{' '}
-                <M>http://localhost:&lt;MIDDLEWARE_PORT&gt;</M>. In live mode it is the shared{' '}
-                <M>{DEFAULT_GATEWAY_URL}</M>.
+                <M>http://localhost:&lt;MIDDLEWARE_PORT&gt;</M>.{' '}
+                {DEFAULT_GATEWAY_URL === '' ? (
+                  <>
+                    In live mode there is no hosted default yet: pass <M>--gateway</M> (without it{' '}
+                    <M>wrap</M> stops with <M>GATEWAY_REQUIRED</M>).
+                  </>
+                ) : (
+                  <>
+                    In live mode it is the shared <M>{DEFAULT_GATEWAY_URL}</M>.
+                  </>
+                )}
               </>
             ),
           },
@@ -212,8 +221,14 @@ export default function Page() {
             desc: (
               <>
                 Mock mode only: the dashboard link <M>wrap</M> prints is{' '}
-                <M>http://localhost:&lt;DASHBOARD_PORT&gt;/services/&lt;id&gt;</M>. In live mode it
-                points at the shared <M>{DEFAULT_DASHBOARD_URL}</M>.
+                <M>http://localhost:&lt;DASHBOARD_PORT&gt;/services/&lt;id&gt;</M>.{' '}
+                {DEFAULT_DASHBOARD_URL === '' ? (
+                  <>In live mode there is no hosted dashboard yet, so <M>wrap</M> prints no link.</>
+                ) : (
+                  <>
+                    In live mode it points at the shared <M>{DEFAULT_DASHBOARD_URL}</M>.
+                  </>
+                )}
               </>
             ),
           },
@@ -277,7 +292,9 @@ export default function Page() {
               <>
                 Gateway base URL, stored on-chain (at most 200 bytes, no query string or fragment);
                 readers derive the endpoint <M>&lt;gateway&gt;/svc/&lt;id&gt;</M>. Live mode needs{' '}
-                <M>https://</M> unless the host is localhost (<M>INSECURE_URL</M>).
+                <M>https://</M> unless the host is localhost (<M>INSECURE_URL</M>), and, while no
+                hosted gateway default is set, the flag itself (<M>GATEWAY_REQUIRED</M>). Mock mode
+                defaults to the local gateway.
               </>
             ),
           },
@@ -718,6 +735,7 @@ export default function Page() {
         rows={[
           [<M key="1">INVALID_INPUT</M>, 'A text flag is blank, has control characters or is over its byte limit (name 64, description 280).'],
           [<M key="2">INVALID_URL</M>, 'A URL is not http(s), has a query string or fragment, or the gateway URL is over 200 bytes.'],
+          [<M key="21">GATEWAY_REQUIRED</M>, 'Live wrap with no --gateway while there is no hosted gateway default. Nothing is sent: pass --gateway <your gateway’s base URL>.'],
           [<M key="3">INSECURE_URL</M>, 'Live wrap with a plain http:// gateway that is not localhost: the mapping request would travel in cleartext.'],
           [<M key="4">INVALID_SERVICE_ID</M>, 'The <id> argument is not a positive integer.'],
           [<M key="5">INVALID_ACCOUNT_ID</M>, 'An account flag is not a NEAR account id.'],

@@ -16,6 +16,7 @@ import {
   setServiceActive,
   wrapService,
 } from '../src/index';
+import { resolveWrapGateway } from '../src/wrap';
 
 // ---------------------------------------------------------------------------
 // fakes
@@ -292,6 +293,17 @@ describe('wrapService', () => {
     expect(result.adminWarning).toContain('ECONNREFUSED');
     expect(result.adminWarning).toContain('curl -X POST');
     expect(chain.registered).toHaveLength(1); // registration untouched
+  });
+
+  it('an empty dashboardBaseUrl means no dashboard link, not a localhost one', async () => {
+    const chain = makeFakeChain();
+    const { impl } = makeFakeFetch(() => new Response(null, { status: 204 }));
+
+    const result = await wrapService({ ...baseWrapOpts(chain, impl), dashboardBaseUrl: '' });
+
+    expect(result.dashboardUrl).toBeNull();
+    expect(result.publicUrl).toBe('http://gw.example:4021/svc/7');
+    expect(chain.registered).toHaveLength(1);
   });
 
   // -------------------------------------------------------------------------
@@ -706,5 +718,52 @@ describe('setServiceActive', () => {
     await expect(
       setServiceActive({ chain, signer: SIGNER, id: 2, active: false }),
     ).rejects.toMatchObject({ code: 'SERVICE_NOT_FOUND', httpStatus: 404 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveWrapGateway: which gateway `wrap` registers
+// ---------------------------------------------------------------------------
+
+describe('resolveWrapGateway', () => {
+  const MOCK_PORT = 4021;
+
+  it('uses --gateway when it is given, in either mode', () => {
+    expect(resolveWrapGateway({ flag: 'https://gw.example', mode: 'live', middlewarePort: MOCK_PORT })).toBe(
+      'https://gw.example',
+    );
+    expect(resolveWrapGateway({ flag: 'http://gw.example:9', mode: 'mock', middlewarePort: MOCK_PORT })).toBe(
+      'http://gw.example:9',
+    );
+  });
+
+  it('mock mode defaults to the local gateway on MIDDLEWARE_PORT', () => {
+    expect(resolveWrapGateway({ flag: undefined, mode: 'mock', middlewarePort: 4099 })).toBe('http://localhost:4099');
+    expect(resolveWrapGateway({ flag: '  ', mode: 'mock', middlewarePort: 4099 })).toBe('http://localhost:4099');
+  });
+
+  it('live mode has no hosted default yet: a missing or blank --gateway is GATEWAY_REQUIRED, naming the flag', () => {
+    for (const flag of [undefined, '', '   ']) {
+      let thrown: unknown;
+      try {
+        resolveWrapGateway({ flag, mode: 'live', middlewarePort: MOCK_PORT });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(AgentGateError);
+      expect(thrown).toMatchObject({ code: 'GATEWAY_REQUIRED' });
+      expect((thrown as Error).message).toContain("--gateway <your gateway's base URL>");
+    }
+  });
+
+  it('live mode falls back to the hosted default once one is set', () => {
+    expect(
+      resolveWrapGateway({
+        flag: undefined,
+        mode: 'live',
+        middlewarePort: MOCK_PORT,
+        hostedDefault: 'https://gateway.example',
+      }),
+    ).toBe('https://gateway.example');
   });
 });

@@ -33,11 +33,11 @@ COPY packages/shared packages/shared
 COPY packages/chain packages/chain
 COPY dashboard dashboard
 
-# 4. Build. Next inlines NEXT_PUBLIC_* here, so the site origin is fixed at build time. An empty
-#    value would override the built-in default with "", hence the unset.
+# 4. Build. Next inlines NEXT_PUBLIC_* here, so the site origin and the repository link are fixed at
+#    build time; an empty value counts as unset.
 ARG NEXT_PUBLIC_SITE_URL=
-RUN [ -n "$NEXT_PUBLIC_SITE_URL" ] || unset NEXT_PUBLIC_SITE_URL; \
-  npm run build -w dashboard \
+ARG NEXT_PUBLIC_REPO_URL=
+RUN npm run build -w dashboard \
   && chown -R node:node dashboard/.next
 USER node
 

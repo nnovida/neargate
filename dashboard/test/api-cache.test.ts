@@ -133,7 +133,7 @@ describe('dashboard /api routes: server TTL cache', () => {
       expect(await res.json()).toEqual({ ...good, stale: true });
     });
 
-    it('answers a failure with nothing cached as the usual 503, and caches nothing', async () => {
+    it('answers a failure with nothing cached as the usual 503, caches nothing and retries after the window', async () => {
       const { GET } = await import('@/app/api/services/route');
       chainMock.chain.listServices.mockRejectedValueOnce(rpcDown());
 
@@ -142,9 +142,32 @@ describe('dashboard /api routes: server TTL cache', () => {
       expect(await failed.json()).toEqual({ error: 'chain_unreachable' });
       expect(failed.headers.get('x-cache')).toBeNull();
 
+      // Inside the window the failure is repeated without another fan-out to the chain.
+      expect((await GET()).status).toBe(503);
+      expect(chainMock.chain.listServices).toHaveBeenCalledTimes(1);
+
+      age(SERVICES_TTL_MS + 1);
       const recovered = await GET();
       expect(recovered.status).toBe(200);
       expect(recovered.headers.get('x-cache')).toBe('miss');
+    });
+
+    it('serves stale through a failed refresh without asking the chain again until the window is over', async () => {
+      const { GET } = await import('@/app/api/services/route');
+      const good = (await (await GET()).json()) as ServicesResponse;
+      age(SERVICES_TTL_MS + 1);
+      chainMock.chain.listServices.mockRejectedValue(rpcDown());
+
+      for (let poll = 0; poll < 3; poll++) {
+        const res = await GET();
+        expect(res.headers.get('x-cache')).toBe('stale');
+        expect(await res.json()).toEqual({ ...good, stale: true });
+      }
+      expect(chainMock.chain.listServices).toHaveBeenCalledTimes(2); // the good load, one failed refresh
+
+      age(SERVICES_TTL_MS + 1);
+      chainMock.chain.listServices.mockResolvedValue([service]);
+      expect((await GET()).headers.get('x-cache')).toBe('miss'); // recovered
     });
   });
 
@@ -238,6 +261,18 @@ describe('dashboard /api routes: server TTL cache', () => {
       const found = await detailGet('99');
       expect(found.status).toBe(200);
       expect(found.headers.get('x-cache')).toBe('miss');
+    });
+
+    it('backs off a failing id for the window, so pollers do not re-run the fan-out', async () => {
+      chainMock.chain.getService.mockRejectedValue(rpcDown());
+
+      expect((await detailGet('1')).status).toBe(503);
+      expect((await detailGet('1')).status).toBe(503);
+      expect(chainMock.chain.getService).toHaveBeenCalledTimes(1);
+
+      age(SERVICES_TTL_MS + 1);
+      chainMock.chain.getService.mockResolvedValue(service);
+      expect((await detailGet('1')).status).toBe(200);
     });
 
     it('rejects a malformed id with 400 before it touches the chain or the cache', async () => {

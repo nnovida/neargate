@@ -139,6 +139,61 @@ describe('deploy/neargate.ecosystem.config.cjs', () => {
   });
 });
 
+describe('.dockerignore: secrets stay out of every image', () => {
+  /** Docker's rule set: a later pattern overrides an earlier one, `!` re-includes, `**\/` spans directories. */
+  function ignoreRules(): Array<{ negate: boolean; re: RegExp }> {
+    return readFileSync(path.join(REPO_ROOT, '.dockerignore'), 'utf8')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l !== '' && !l.startsWith('#'))
+      .map((line) => {
+        const negate = line.startsWith('!');
+        const glob = negate ? line.slice(1) : line;
+        const source = glob
+          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+          .replace(/\*\*\//g, '\u0000')
+          .replace(/\*/g, '[^/]*')
+          .replace(/\u0000/g, '(?:.*/)?');
+        return { negate, re: new RegExp(`^${source}$`) };
+      });
+  }
+
+  /** Whether the build context leaves `file` out: the path itself or any parent directory is ignored. */
+  function isIgnored(file: string): boolean {
+    const rules = ignoreRules();
+    const parts = file.split('/');
+    return parts.some((_, i) => {
+      const candidate = parts.slice(0, i + 1).join('/');
+      let ignored = false;
+      for (const { negate, re } of rules) if (re.test(candidate)) ignored = !negate;
+      return ignored;
+    });
+  }
+
+  it('drops env files, keys and near credentials at the root and at any depth', () => {
+    for (const file of [
+      '.env',
+      '.env.local',
+      'dashboard/.env',
+      'dashboard/.env.local',
+      'dashboard/.env.production.local',
+      'packages/middleware/.env',
+      'keys/seller.pem',
+      'dashboard/certs/tls.pem',
+      '.near-credentials/testnet/seller.testnet.json',
+      'packages/cli/.near-credentials-backup/key.json',
+    ]) {
+      expect(isIgnored(file), file).toBe(true);
+    }
+  });
+
+  it('keeps the env template and ordinary dashboard sources', () => {
+    for (const file of ['.env.example', 'dashboard/.env.example', 'dashboard/lib/server/chain.ts', 'dashboard/package.json']) {
+      expect(isIgnored(file), file).toBe(false);
+    }
+  });
+});
+
 describe('hosting files: copy guard', () => {
   /**
    * The words the NEAR port retired. The config contract still spells two variables with the old

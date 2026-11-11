@@ -17,15 +17,6 @@
     "node": ">=22.22.2"
   },
   "license": "MIT",
-  "homepage": "https://example.invalid/AgentGate#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://example.invalid/AgentGate.git",
-    "directory": "packages/cli"
-  },
-  "bugs": {
-    "url": "https://example.invalid/AgentGate/issues"
-  },
   "keywords": [
     "near",
     "x402",
