@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import {
+  base58Encode,
   compareYocto,
+  isSelfPaid,
+  nativeNearOption,
   type ActivityEvent,
   type AnySigner,
   type AttestationRecord,
@@ -13,23 +16,6 @@ import {
   type VerifyResult,
   type Yocto,
 } from '@agentgate/shared';
-
-const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-
-/** Base58 of a 32-byte digest — the shape of a NEAR tx hash (43–44 chars). */
-function base58(bytes: Uint8Array): string {
-  let n = BigInt(`0x${Buffer.from(bytes).toString('hex')}`);
-  let out = '';
-  while (n > 0n) {
-    out = BASE58[Number(n % 58n)] + out;
-    n /= 58n;
-  }
-  for (const b of bytes) {
-    if (b !== 0) break;
-    out = `1${out}`;
-  }
-  return out;
-}
 
 interface FakePayment {
   txHash: string;
@@ -62,7 +48,7 @@ export class FakeChainClient implements ChainClient {
 
   private nextHash(seed: string): string {
     this.counter += 1;
-    return base58(createHash('sha256').update(`${seed}:${this.counter}`).digest());
+    return base58Encode(createHash('sha256').update(`${seed}:${this.counter}`).digest());
   }
 
   addService(partial: Partial<ServiceRecord> & { id: number }): ServiceRecord {
@@ -77,7 +63,7 @@ export class FakeChainClient implements ChainClient {
       attestor: 'attestor.mock',
       active: true,
       createdAt: Date.now(),
-      accepts: [{ asset: 'near', amount: priceYocto, decimals: 24, symbol: 'NEAR' }],
+      accepts: [nativeNearOption(priceYocto)],
       ...partial,
     };
     this.services.set(record.id, record);
@@ -135,7 +121,7 @@ export class FakeChainClient implements ChainClient {
       amountYocto: p.amountYocto,
       timestamp: p.timestamp,
       blockHeight: 0,
-      selfPaid: service !== undefined && (p.payer === service.owner || p.payer === service.paymentTarget),
+      selfPaid: service !== undefined && isSelfPaid(p.payer, service),
       attested: this.attestations.some((a) => a.nonce === p.nonce),
     });
   }
@@ -162,7 +148,7 @@ export class FakeChainClient implements ChainClient {
       amountYocto: p.amountYocto,
       payer: p.payer,
       timestamp: p.timestamp,
-      selfPaid: service !== undefined && (p.payer === service.owner || p.payer === service.paymentTarget),
+      selfPaid: service !== undefined && isSelfPaid(p.payer, service),
     });
   }
 

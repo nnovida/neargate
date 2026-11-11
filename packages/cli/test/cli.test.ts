@@ -7,7 +7,7 @@ import type {
   ServiceRecord,
   ServiceScore,
 } from '@agentgate/shared';
-import { AgentGateError } from '@agentgate/shared';
+import { AgentGateError, nativeNearOption } from '@agentgate/shared';
 import {
   createDemoAccounts,
   listServices,
@@ -43,7 +43,7 @@ function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceReco
     attestor: 'owner.mock',
     active: true,
     createdAt: 1_700_000_000_000,
-    accepts: [{ asset: 'near', amount: PRICE, decimals: 24, symbol: 'NEAR' }],
+    accepts: [nativeNearOption(PRICE)],
     ...over,
   };
 }
@@ -567,7 +567,9 @@ describe('setServiceActive', () => {
       name: 'AgentGateError',
       code: 'not_authorized',
       httpStatus: 403,
-      message: expect.stringContaining('only the service owner can pause/resume service 2'),
+      message: expect.stringMatching(
+        /only the service owner can pause\/resume service 2 .*live: SELLER_KEY_PATH or SELLER_PRIVATE_KEY/,
+      ),
     });
   });
 

@@ -5,7 +5,7 @@ export function roundTo(value: number, dp: number): number {
 }
 
 /**
- * Confidence across available source values (SPEC §7):
+ * Confidence across available source values:
  * `max(0, 1 - (maxDev/mean) * 10)` rounded to 2dp; a single source → 0.5.
  */
 export function confidenceOf(values: readonly number[]): number {

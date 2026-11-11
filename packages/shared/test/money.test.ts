@@ -6,6 +6,8 @@ import {
   formatToken,
   formatUnits,
   MIN_PRICE_YOCTO,
+  NEAR_NATIVE_ASSET,
+  nativeNearOption,
   nearToYocto,
   parseYocto,
   PAYMENT_STORAGE_FEE_YOCTO,
@@ -115,12 +117,51 @@ describe('addYocto', () => {
   it('adds without float precision loss', () => {
     expect(addYocto('1', '2')).toBe('3');
     expect(addYocto('500000000000000000000000', PAYMENT_STORAGE_FEE_YOCTO)).toBe('502000000000000000000000');
-    expect(addYocto('340282366920938463463374607431768211455', '1')).toBe('340282366920938463463374607431768211456');
+    expect(addYocto('340282366920938463463374607431768211454', '1')).toBe('340282366920938463463374607431768211455');
   });
 
   it('rejects invalid operands', () => {
     expect(() => addYocto('1.5', '1')).toThrow(AgentGateError);
     expect(() => addYocto('1', '-1')).toThrow(AgentGateError);
+  });
+});
+
+describe('u128 ceiling (the contract stores amounts as u128)', () => {
+  const U128_MAX = '340282366920938463463374607431768211455'; // 2^128 − 1
+  const U128_OVER = '340282366920938463463374607431768211456'; // 2^128
+
+  it('parseYocto accepts 2^128 − 1 and rejects 2^128 with INVALID_AMOUNT', () => {
+    expect(parseYocto(U128_MAX)).toBe((1n << 128n) - 1n);
+    expect(errorCode(() => parseYocto(U128_OVER))).toBe('INVALID_AMOUNT');
+    expect(errorCode(() => parseYocto('9'.repeat(60)))).toBe('INVALID_AMOUNT');
+  });
+
+  it('nearToYocto accepts 2^128 − 1 yocto and rejects one yocto more', () => {
+    expect(nearToYocto('340282366920938.463463374607431768211455')).toBe(U128_MAX);
+    expect(errorCode(() => nearToYocto('340282366920938.463463374607431768211456'))).toBe('INVALID_AMOUNT');
+    expect(errorCode(() => nearToYocto('1' + '0'.repeat(20)))).toBe('INVALID_AMOUNT');
+  });
+
+  it('addYocto rejects a sum above 2^128 − 1', () => {
+    expect(addYocto(U128_MAX, '0')).toBe(U128_MAX);
+    expect(errorCode(() => addYocto(U128_MAX, '1'))).toBe('INVALID_AMOUNT');
+  });
+
+  it('the yocto formatters share the ceiling', () => {
+    expect(yoctoToNear(U128_MAX)).toBe('340282366920938.463463374607431768211455');
+    expect(errorCode(() => yoctoToNear(U128_OVER))).toBe('INVALID_AMOUNT');
+  });
+});
+
+describe('nativeNearOption', () => {
+  it('builds the native NEAR payment option at yocto precision', () => {
+    expect(NEAR_NATIVE_ASSET).toBe('near');
+    expect(nativeNearOption('10000000000000000000000')).toEqual({
+      asset: 'near',
+      amount: '10000000000000000000000',
+      decimals: 24,
+      symbol: 'NEAR',
+    });
   });
 });
 

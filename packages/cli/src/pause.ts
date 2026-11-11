@@ -42,7 +42,7 @@ export async function setServiceActive(
     if (isAgentGateError(err) && err.code === 'not_authorized') {
       throw new AgentGateError(
         'not_authorized',
-        `only the service owner can pause/resume service ${id} — sign with the owner key (mock: MOCK_SELLER_ACCOUNT, live: SELLER_SIGNER_PEM_PATH)`,
+        `only the service owner can pause/resume service ${id} — sign with the owner key (mock: MOCK_SELLER_ACCOUNT, live: SELLER_KEY_PATH or SELLER_PRIVATE_KEY)`,
         403,
       );
     }

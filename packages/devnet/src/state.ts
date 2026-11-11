@@ -4,6 +4,7 @@ import {
   formatNear,
   isNearAccountId,
   MIN_PRICE_YOCTO,
+  nativeNearOption,
   stripTrailingSlashes,
 } from '@agentgate/shared';
 import type {
@@ -17,9 +18,9 @@ import type {
 // TODO(Task 3): mirror the neargate-registry pay-through rules (pay / payments by
 // nonce / storage fee / self-paid) instead of plain value transfers.
 
-/** Activity feed retains at most this many events (oldest dropped). SPEC §3. */
+/** Activity feed retains at most this many events (oldest dropped). */
 export const ACTIVITY_LOG_CAP = 500;
-/** Mirrors the on-chain contract: last 100 attestations per service. SPEC §10. */
+/** Mirrors the on-chain contract: last 100 attestations per service. */
 export const ATTESTATIONS_PER_SERVICE_CAP = 100;
 /**
  * Transfer-lookup ring buffer cap (oldest tx hash dropped). The mock chain's
@@ -329,7 +330,7 @@ export class DevnetState {
       attestor: service.attestor,
       active: service.active,
       createdAt: service.createdAt,
-      accepts: [{ asset: 'near', amount: service.priceYocto, decimals: 24, symbol: 'NEAR' }],
+      accepts: [nativeNearOption(service.priceYocto)],
     };
   }
 

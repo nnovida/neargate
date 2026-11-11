@@ -10,8 +10,7 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@agentgate/shared": "*",
-    "@noble/hashes": "^1.2.0"
+    "@agentgate/shared": "*"
   },
   "devDependencies": {
     "@agentgate/devnet": "*"

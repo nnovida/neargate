@@ -3,7 +3,10 @@ import { bootGateway, startUpstream, type TestGateway, type TestUpstream } from 
 
 // TODO(Task 4): NEAR-key self-map — 204 for a valid signature by the owner's
 // full-access key; 403 not_service_owner / key_not_full_access; 401 for a bad
-// signature or a replay to another service id; 400 stale_timestamp.
+// signature or a replay to another service id; 400 stale_timestamp; 409 replayed
+// (an older-or-equal timestamp on the same service); 400 for an SSRF-invalid
+// upstreamUrl (e.g. http://127.0.0.1/, maps nothing); 404 for an unknown service
+// id; 400 for a malformed body.
 describe('self-service mapping POST /services/:id/map (disabled until the NEAR-key flow)', () => {
   let gw: TestGateway;
   let upstream: TestUpstream;

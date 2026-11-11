@@ -3,6 +3,15 @@ import type { ServiceScore } from './types';
 export type TrustTier = 'new' | 'reliable' | 'trusted';
 
 /**
+ * A payment is self-paid when the payer is the service's owner or its payment
+ * target. Self-paid calls never earn an attestation, so a seller cannot inflate
+ * its own score. NEAR account ids are canonical lowercase, so this is an exact match.
+ */
+export function isSelfPaid(payer: string, service: { owner: string; paymentTarget: string }): boolean {
+  return payer === service.owner || payer === service.paymentTarget;
+}
+
+/**
  * Score → trust badge (used by dashboard + buyer agent).
  * - 'new'      if totalCalls < 5
  * - 'trusted'  if totalCalls >= 25 AND success ratio >= 0.95

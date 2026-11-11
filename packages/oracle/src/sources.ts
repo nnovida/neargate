@@ -2,7 +2,7 @@ import type { Logger } from '@agentgate/shared';
 import type { FetchLike } from './types';
 import { roundTo } from './math';
 
-/** Per-source fetch timeout (SPEC §7: 5s per source). */
+/** Per-source fetch timeout: 5s per source. */
 export const SOURCE_TIMEOUT_MS = 5_000;
 
 /** What one upstream source yielded after parsing (null = pair not provided). */
@@ -34,7 +34,7 @@ function invert(perUsd: number | null): number | null {
 }
 
 /**
- * The two free, no-key sources (SPEC §7). Both quote rates per 1 USD;
+ * The two free, no-key sources. Both quote rates per 1 USD;
  * gold (XAU) is inverted into XAU/USD where the source provides it.
  */
 export const SOURCES: readonly SourceDef[] = [

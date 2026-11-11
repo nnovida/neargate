@@ -8,7 +8,7 @@ export const DEFAULT_DECISIONS_LOG = 'logs/decisions.jsonl';
 export type PrintFn = (text: string) => void;
 
 /**
- * Appends one structured decision per line to logs/decisions.jsonl (SPEC §8).
+ * Appends one structured decision per line to logs/decisions.jsonl.
  * Failures to write never crash the agent run — they degrade to a logger warning.
  */
 export class DecisionLog {

@@ -1,4 +1,6 @@
+import { base58Decode } from './base58';
 import { AgentGateError } from './errors';
+import { isValidNonce } from './nonce';
 import type { Yocto } from './types';
 
 export const X402_VERSION = 1;
@@ -71,10 +73,8 @@ export interface SettlementResponse {
   errorReason?: string;
 }
 
-/** Same rule as the registry contract: `^[0-9]{1,20}$`. */
-const NONCE_RE = /^[0-9]{1,20}$/;
-/** A NEAR tx hash: base58 of 32 bytes (43–44 chars). */
-const TX_HASH_RE = /^[1-9A-HJ-NP-Za-km-z]{43,44}$/;
+/** Longest base58 encoding of 32 bytes; anything longer is rejected before decoding. */
+const TX_HASH_MAX_CHARS = 44;
 /** Strict, padded standard base64. */
 const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 /** Upper bound on a relayed SignedDelegate (base64 chars); far above a single `pay` action. */
@@ -90,6 +90,20 @@ const ACCOUNT_PART_RE = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
 export function isNearAccountId(s: unknown): s is string {
   if (typeof s !== 'string' || s.length < 2 || s.length > 64) return false;
   return s.split('.').every((part) => ACCOUNT_PART_RE.test(part));
+}
+
+/**
+ * A NEAR tx hash is the base58 encoding of a 32-byte digest. Validity is "decodes to
+ * exactly 32 bytes", not a length range: leading zero bytes shorten the string
+ * (each becomes one '1'), and some 44-char strings decode to 33 bytes.
+ */
+export function isNearTxHash(s: unknown): s is string {
+  if (typeof s !== 'string' || s.length > TX_HASH_MAX_CHARS) return false;
+  try {
+    return base58Decode(s).length === 32;
+  } catch {
+    return false;
+  }
 }
 
 /** CAIP-2 id for a chain network: `near-testnet` → `near:testnet`. Idempotent for CAIP-2 input. */
@@ -115,13 +129,13 @@ function decodePayload(payload: Record<string, unknown>): NearExactPayload {
   const kind = payload['kind'];
   if (kind !== 'tx' && kind !== 'delegate') throw badPayment('payload.kind must be "tx" or "delegate"');
   const nonce = payload['nonce'];
-  if (typeof nonce !== 'string' || !NONCE_RE.test(nonce)) throw badPayment('payload.nonce must be 1–20 decimal digits');
+  if (typeof nonce !== 'string' || !isValidNonce(nonce)) throw badPayment('payload.nonce must be 1–20 decimal digits');
   const payer = payload['payer'];
   if (!isNearAccountId(payer)) throw badPayment('payload.payer must be a NEAR account id');
   if (kind === 'tx') {
     const transaction = payload['transaction'];
-    if (typeof transaction !== 'string' || !TX_HASH_RE.test(transaction)) {
-      throw badPayment('payload.transaction must be a base58 tx hash (43–44 chars)');
+    if (!isNearTxHash(transaction)) {
+      throw badPayment('payload.transaction must be a base58 tx hash of 32 bytes');
     }
     return { kind, transaction, nonce, payer };
   }

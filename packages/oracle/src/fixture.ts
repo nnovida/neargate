@@ -1,7 +1,7 @@
 import type { FeedResponse, PairFeed } from './types';
 
 /**
- * Deterministic fixture data (SPEC §7) — served when `ORACLE_STATIC=1` or when
+ * Deterministic fixture data — served when `ORACLE_STATIC=1` or when
  * every live source is unavailable (best-effort, never-throw behavior).
  */
 export const FIXTURE_USD_IDR = 16250.5;

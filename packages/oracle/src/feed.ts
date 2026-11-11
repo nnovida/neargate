@@ -4,7 +4,7 @@ import { FIXTURE_USD_IDR, FIXTURE_XAU_USD, STATIC_ATTRIBUTION, fixtureFeed, fixt
 import { SOURCES, fetchSource, type SourceResult } from './sources';
 import { confidenceOf, roundTo } from './math';
 
-/** In-memory cache TTL (SPEC §7: 60s). */
+/** In-memory cache TTL: 60s. */
 export const CACHE_TTL_MS = 60_000;
 
 export interface FeedProviderOpts {

@@ -1,5 +1,5 @@
 /**
- * Public response shapes for the AgentGate oracle (SPEC §7) plus the minimal
+ * Public response shapes for the AgentGate oracle plus the minimal
  * structural fetch contract used for dependency injection in tests.
  */
 
@@ -31,7 +31,7 @@ export interface PairFeed {
   confidence: number;
 }
 
-/** `GET /feed` body (SPEC §7). */
+/** `GET /feed` body. */
 export interface FeedResponse {
   pairs: {
     usd_idr: PairFeed;

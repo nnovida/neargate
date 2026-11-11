@@ -8,6 +8,7 @@ import type {
   ServiceRecord,
   ServiceScore,
 } from '@agentgate/shared';
+import { nativeNearOption } from '@agentgate/shared';
 import { buildAgentGateMcpServer, type McpServerDeps } from '../src/mcp';
 
 /** A base58 string of NEAR tx-hash length. */
@@ -28,7 +29,7 @@ function makeService(id: number, over: Partial<ServiceRecord> = {}): ServiceReco
     attestor: 'owner.mock',
     active: true,
     createdAt: 1_700_000_000_000,
-    accepts: [{ asset: 'near', amount: PRICE, decimals: 24, symbol: 'NEAR' }],
+    accepts: [nativeNearOption(PRICE)],
     ...over,
   };
 }

@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { PaymentRequiredResponse, ServiceRecord } from '@agentgate/shared';
-import { isSelfPayment } from '../src/app';
+import { isSelfPaid, type PaymentRequiredResponse, type ServiceRecord } from '@agentgate/shared';
 import { bootGateway, startUpstream, adminMap, proofHeaders, sleep } from './helpers';
 
 const svc = (over: Partial<ServiceRecord> = {}): ServiceRecord => ({
@@ -18,18 +17,21 @@ const svc = (over: Partial<ServiceRecord> = {}): ServiceRecord => ({
   ...over,
 });
 
-describe('isSelfPayment — F1 wash-trade guard', () => {
-  it('true when the payer is the payout account (case-insensitive)', () => {
-    expect(isSelfPayment('SELLER.mock', svc())).toBe(true);
+describe('isSelfPaid (shared rule the gateway applies) — F1 wash-trade guard', () => {
+  it('true when the payer is the payout account', () => {
+    expect(isSelfPaid('seller.mock', svc())).toBe(true);
   });
   it('true when the payer is the service owner', () => {
-    expect(isSelfPayment('owner.mock', svc())).toBe(true);
+    expect(isSelfPaid('owner.mock', svc())).toBe(true);
   });
   it('false for a distinct third-party payer', () => {
-    expect(isSelfPayment('buyer.mock', svc())).toBe(false);
+    expect(isSelfPaid('buyer.mock', svc())).toBe(false);
   });
   it('false for an empty/unknown payer', () => {
-    expect(isSelfPayment('', svc())).toBe(false);
+    expect(isSelfPaid('', svc())).toBe(false);
+  });
+  it('is an exact match: NEAR account ids are lowercase-only, so no other spelling exists', () => {
+    expect(isSelfPaid('SELLER.mock', svc())).toBe(false);
   });
 });
 

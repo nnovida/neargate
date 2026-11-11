@@ -157,6 +157,36 @@ describe('paywall flow (mock mode)', () => {
     expect(body.x402Version).toBe(1);
   });
 
+  it("kind 'delegate' → 402 relayer_disabled; the nonce is not burned and its tx proof still pays", async () => {
+    const seenBefore = upstream.seen.length;
+    const proof = await payInvoice(gw, 1);
+    const delegate = await fetch(`${gw.baseUrl}/svc/1`, {
+      headers: {
+        'x-payment': encodeXPayment({
+          x402Version: 1,
+          scheme: 'exact',
+          network: proof.network,
+          payload: {
+            kind: 'delegate',
+            signedDelegate: Buffer.from('borsh SignedDelegate bytes', 'utf8').toString('base64'),
+            nonce: proof.nonce,
+            payer: proof.payer,
+          },
+        }),
+      },
+    });
+    expect(delegate.status).toBe(402);
+    const body = (await delegate.json()) as PaymentRequiredResponse;
+    expect(body.error).toBe('relayer_disabled');
+    expect(body.accepts[0]!.extra.relayer).toBeUndefined(); // no gasless rail offered
+    expect(upstream.seen.length).toBe(seenBefore); // never proxied
+
+    // The invoice behind the nonce is still open: the tx proof for it is served and attested.
+    const paid = await fetch(`${gw.baseUrl}/svc/1`, { headers: proofHeaders(proof) });
+    expect(paid.status).toBe(200);
+    await until(() => gw.fake.attestations.some((a) => a.nonce === proof.nonce));
+  });
+
   it('unknown nonce → 402 unknown_nonce; no x-payment header → fresh challenge; malformed x-payment → invalid_payment_header', async () => {
     const proof = await payInvoice(gw, 1);
 
@@ -185,12 +215,12 @@ describe('paywall flow (mock mode)', () => {
     const challenge = await fetch(`${gw.baseUrl}/svc/1`);
     const challengeBody = (await challenge.json()) as PaymentRequiredResponse;
     const nonce = challengeBody.accepts[0]!.extra.nonce;
-    // Build a syntactically valid proof but with a different network.
+    // Build a syntactically valid proof (a 32-byte base58 tx hash) but with a different network.
     const wrongNetworkProof = encodeXPayment({
       x402Version: 1,
       scheme: 'exact',
       network: 'some-other-net',
-      payload: { kind: 'tx', transaction: '1'.repeat(44), nonce, payer: 'buyer.mock' },
+      payload: { kind: 'tx', transaction: 'F'.repeat(44), nonce, payer: 'buyer.mock' },
     });
     const res = await fetch(`${gw.baseUrl}/svc/1`, {
       headers: { 'x-payment': wrongNetworkProof },

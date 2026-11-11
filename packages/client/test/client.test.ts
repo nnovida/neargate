@@ -225,6 +225,12 @@ describe('createAgentGateClient · fetchPaid', () => {
     ['missing nonce',         { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, nonce: undefined } }] }],
     ['non-numeric nonce',     { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, nonce: 'abc' } }] }],
     ['nonce above u64',       { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, nonce: '99999999999999999999' } }] }],
+    ['missing serviceId',     { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, serviceId: undefined } }] }],
+    ['serviceId 0',           { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, serviceId: 0 } }] }],
+    ['negative serviceId',    { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, serviceId: -1 } }] }],
+    ['fractional serviceId',  { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, serviceId: 1.5 } }] }],
+    ['unsafe serviceId',      { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, serviceId: 2 ** 53 } }] }],
+    ['string serviceId',      { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, serviceId: '1' } }] }],
     ['bad maxAmountRequired', { ...validReq, accepts: [{ ...validAccept, maxAmountRequired: '0.5' }] }],
     ['bad payTo',             { ...validReq, accepts: [{ ...validAccept, payTo: 'Not A NEAR id' }] }],
     ['expired expiresAtMs',   { ...validReq, accepts: [{ ...validAccept, extra: { ...validExtra, expiresAtMs: Date.now() - 1000 } }] }],
@@ -326,6 +332,34 @@ describe('createAgentGateClient · fetchPaid', () => {
     if (isAgentGateError(err)) expect(err.code).toBe('BAD_URL');
   });
 
+  it('rejects a signer whose accountId is not a NEAR account id at construction time (BAD_OPTS)', () => {
+    for (const accountId of ['', 'Buyer.testnet', 'buyer..testnet', 'a', 'x'.repeat(65), undefined, 42]) {
+      let thrown: unknown;
+      try {
+        createAgentGateClient({
+          chain: makeChain(),
+          signer: { kind: 'mock', accountId } as unknown as typeof SIGNER,
+          fetchImpl: queuedFetch([]).impl,
+        });
+      } catch (e) {
+        thrown = e;
+      }
+      expect(isAgentGateError(thrown), JSON.stringify(accountId)).toBe(true);
+      if (isAgentGateError(thrown)) {
+        expect(thrown.code).toBe('BAD_OPTS');
+        expect(thrown.message).toMatch(/accountId must be a NEAR account id/);
+      }
+    }
+    // A near signer is checked the same way.
+    expect(() =>
+      createAgentGateClient({
+        chain: makeChain(),
+        signer: { kind: 'near', accountId: 'Not A NEAR id' },
+        fetchImpl: queuedFetch([]).impl,
+      }),
+    ).toThrowError(/accountId must be a NEAR account id/);
+  });
+
   it('rejects garbage maxPriceYocto at construction time', () => {
     expect(() =>
       createAgentGateClient({
@@ -409,6 +443,21 @@ describe('parsePaymentRequired', () => {
     const req = requirements('42', 'mock');
     const badReq = { ...req, accepts: [{ ...req.accepts[0]!, scheme: 'upto' }] };
     expect(() => parsePaymentRequired(badReq, 'mock')).toThrowError(/invalid 402 invoice/);
+  });
+
+  it('rejects an extra.serviceId that is not a positive safe integer (BAD_INVOICE)', () => {
+    const req = requirements('42', 'mock');
+    for (const serviceId of [undefined, null, 0, -1, 1.5, 2 ** 53, Number.NaN, '1']) {
+      const badReq = {
+        ...req,
+        accepts: [{ ...req.accepts[0]!, extra: { ...req.accepts[0]!.extra, serviceId } }],
+      };
+      expect(() => parsePaymentRequired(badReq, 'mock'), String(serviceId)).toThrowError(
+        /invalid 402 invoice: extra\.serviceId must be a positive integer/,
+      );
+    }
+    const ok = { ...req, accepts: [{ ...req.accepts[0]!, extra: { ...req.accepts[0]!.extra, serviceId: 7 } }] };
+    expect(parsePaymentRequired(ok, 'mock').extra.serviceId).toBe(7);
   });
 
   it('rejects expiresAtMs: NaN (BAD_INVOICE)', () => {

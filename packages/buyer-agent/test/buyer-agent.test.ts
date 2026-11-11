@@ -405,6 +405,43 @@ describe('runBuyerAgent', () => {
     expect(report.attestationTxHash).toBeNull();
   });
 
+  it('keeps the paid report (attestationTxHash null) when the activity read fails', async () => {
+    const gold = makeService();
+    const attestation: AttestationRecord = {
+      serviceId: 1,
+      nonce: '424242',
+      paymentTxHash: PAYMENT_TX,
+      success: true,
+      timestamp: Date.now(),
+    };
+    const chain = makeChain({ services: [gold], attestations: [attestation] });
+    chain.listRecentActivity = vi.fn(async () => {
+      throw new Error('activity feed unavailable');
+    });
+    const logPath = tmpLogPath();
+
+    const report = await runBuyerAgent({
+      task: 'gold price',
+      budgetNear: '5',
+      chain,
+      signer: SIGNER,
+      llm: new MockLlm(),
+      fetchImpl: paywallFetch(gold, { xau_usd: 3310.25 }),
+      decisionLogPath: logPath,
+      attestationTimeoutMs: 500,
+      attestationPollIntervalMs: 10,
+      print: silent,
+    });
+
+    expect(chain.listRecentActivity).toHaveBeenCalledTimes(1);
+    expect(report.paid).toBe(true);
+    expect(report.paymentTxHash).toBe(PAYMENT_TX);
+    expect(report.attestationTxHash).toBeNull();
+    expect(report.summary).toContain('3310.25');
+    const steps = readFileSync(logPath, 'utf8').trim().split('\n').map((l) => (JSON.parse(l) as { step: string }).step);
+    expect(steps).toEqual(expect.arrayContaining(['attestation', 'run_end']));
+  });
+
   it('produces the exact BuyerRunReport shape', async () => {
     const gold = makeService();
     const chain = makeChain({ services: [gold] });

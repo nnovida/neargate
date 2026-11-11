@@ -1,14 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, expectTypeOf } from 'vitest';
 import {
   X402_VERSION, X402_SCHEME, X402_ASSET_NEAR,
   encodeXPayment, decodeXPayment, encodeXPaymentResponse, decodeXPaymentResponse,
-  isNearAccountId, caip2For,
-  type PaymentPayload, type PaymentRequirements, type SettlementResponse,
+  isNearAccountId, isNearTxHash, caip2For,
+  type NearPaymentExtra, type PaymentPayload, type PaymentRequirements, type SettlementResponse,
 } from '../src/x402';
-import { AgentGateError } from '../src/index';
+import { AgentGateError, base58Encode, type Yocto } from '../src/index';
 
 const TX_44 = 'Eky1UaWkroENJrfa2yjf8PR7pFbznerFT7UDpUBuodUd';
 const TX_43 = 'WmErKxQ1tQRUZcGT9Cdi4TfXreqYR78BWrKR7e7gvJc';
+/** A real 42-char NEAR tx hash: its first byte is zero, so it is shorter but still 32 bytes. */
+const TX_42 = '1tJ93RwaVfE1PEMxd5rpZZuPtLCwbEaDCrNBhAy8Cw';
 const SIGNED_DELEGATE = Buffer.from('borsh-encoded SignedDelegate bytes', 'utf8').toString('base64');
 
 const txPayment: PaymentPayload = {
@@ -26,8 +28,19 @@ function rawHeader(body: unknown): string {
   return Buffer.from(JSON.stringify(body), 'utf8').toString('base64');
 }
 
-function withPayload(payload: Record<string, unknown>): string {
+function withPayload(payload: unknown): string {
   return rawHeader({ x402Version: 1, scheme: 'exact', network: 'near-testnet', payload });
+}
+
+/** Returns the AgentGateError `decodeXPayment` throws for `header` (fails the test otherwise). */
+function decodeError(header: string): AgentGateError {
+  try {
+    decodeXPayment(header);
+  } catch (err) {
+    expect(err).toBeInstanceOf(AgentGateError);
+    return err as AgentGateError;
+  }
+  return expect.unreachable('expected decodeXPayment to throw');
 }
 
 describe('x402 constants', () => {
@@ -38,7 +51,24 @@ describe('x402 constants', () => {
   });
 
   it('PaymentRequirements carries the NEAR registry extra (type-level shape)', () => {
-    const req: PaymentRequirements = {
+    // Type-level assertions: `npm run typecheck` covers test files, so a renamed,
+    // retyped, dropped or added field fails the build.
+    expectTypeOf<PaymentRequirements['extra']>().toEqualTypeOf<NearPaymentExtra>();
+    expectTypeOf<NearPaymentExtra>().toEqualTypeOf<{
+      nonce: string;
+      serviceId: number;
+      expiresAtMs: number;
+      settlement: 'neargate-registry-pay';
+      contractId: string;
+      method: 'pay';
+      priceYocto: Yocto;
+      storageFeeYocto: Yocto;
+      seller: string;
+      caip2: string;
+      relayer?: string;
+    }>();
+    expectTypeOf<PaymentRequirements['maxAmountRequired']>().toEqualTypeOf<Yocto>();
+    const req = {
       scheme: X402_SCHEME,
       network: 'near-testnet',
       maxAmountRequired: '502000000000000000000000',
@@ -59,8 +89,9 @@ describe('x402 constants', () => {
         seller: 'seller.testnet',
         caip2: caip2For('near-testnet'),
       },
-    };
-    expect(req.extra.relayer).toBeUndefined();
+    } satisfies PaymentRequirements;
+    expect(req.extra.settlement).toBe('neargate-registry-pay');
+    expect('relayer' in req.extra).toBe(false);
   });
 });
 
@@ -73,9 +104,11 @@ describe('x402 codec', () => {
     expect(decodeXPayment(encodeXPayment(delegatePayment))).toEqual(delegatePayment);
   });
 
-  it('accepts a 43-char base58 tx hash', () => {
-    const decoded = decodeXPayment(withPayload({ kind: 'tx', transaction: TX_43, nonce: '1', payer: 'buyer.testnet' }));
-    expect(decoded.payload).toEqual({ kind: 'tx', transaction: TX_43, nonce: '1', payer: 'buyer.testnet' });
+  it('accepts 43- and 42-char base58 tx hashes that decode to 32 bytes', () => {
+    for (const transaction of [TX_43, TX_42, base58Encode(new Uint8Array(32))]) {
+      const decoded = decodeXPayment(withPayload({ kind: 'tx', transaction, nonce: '1', payer: 'buyer.testnet' }));
+      expect(decoded.payload).toEqual({ kind: 'tx', transaction, nonce: '1', payer: 'buyer.testnet' });
+    }
   });
 
   it('drops unknown payload fields', () => {
@@ -94,8 +127,16 @@ describe('x402 codec', () => {
     expect(() => decodeXPayment(encodeXPayment({ ...txPayment, network: ' ' }))).toThrow(/network/);
   });
 
-  it('rejects a tx hash that is not base58 of 43–44 chars', () => {
-    for (const transaction of ['a'.repeat(64), '0'.repeat(44), 'O'.repeat(44), 'l'.repeat(43), TX_44 + 'A', TX_43.slice(0, 42), '', 42]) {
+  it('rejects a tx hash that is not base58 of exactly 32 bytes', () => {
+    const rejected = [
+      'z'.repeat(44), // 44 chars but 33 bytes
+      '1'.repeat(44), // 44 zero bytes
+      '0' + TX_43, 'O' + TX_43, 'I' + TX_43, 'l' + TX_43, // chars outside the alphabet
+      TX_44.slice(0, 20) + '0' + TX_44.slice(21),
+      'a'.repeat(64), '0'.repeat(44), 'O'.repeat(44), 'l'.repeat(43),
+      TX_44 + 'A', TX_43.slice(0, 42), '', 42,
+    ];
+    for (const transaction of rejected) {
       expect(
         () => decodeXPayment(withPayload({ kind: 'tx', transaction, nonce: '42', payer: 'buyer.testnet' })),
         `should reject ${JSON.stringify(transaction)}`,
@@ -139,6 +180,27 @@ describe('x402 codec', () => {
         () => decodeXPayment(withPayload({ kind: 'delegate', signedDelegate, nonce: '42', payer: 'buyer.testnet' })),
         `should reject ${JSON.stringify(signedDelegate)}`,
       ).toThrow(/signedDelegate/);
+    }
+  });
+
+  it('rejects missing fields and non-object payloads or bodies with INVALID_PAYMENT', () => {
+    const cases: Array<[string, string, RegExp]> = [
+      ['missing nonce', withPayload({ kind: 'tx', transaction: TX_44, payer: 'buyer.testnet' }), /nonce/],
+      ['missing transaction', withPayload({ kind: 'tx', nonce: '42', payer: 'buyer.testnet' }), /transaction/],
+      ['missing payer', withPayload({ kind: 'tx', transaction: TX_44, nonce: '42' }), /payer/],
+      ['string payload', withPayload('tx'), /payload must be an object/],
+      ['array payload', withPayload([txPayment.payload]), /payload must be an object/],
+      ['null payload', withPayload(null), /payload must be an object/],
+      ['missing payload', rawHeader({ x402Version: 1, scheme: 'exact', network: 'near-testnet' }), /payload must be an object/],
+      ['top-level JSON array', rawHeader([txPayment]), /not a JSON object/],
+      ['top-level null', rawHeader(null), /not a JSON object/],
+      ['top-level number', rawHeader(42), /not a JSON object/],
+    ];
+    for (const [name, header, why] of cases) {
+      const err = decodeError(header);
+      expect(err.code, name).toBe('INVALID_PAYMENT');
+      expect(err.httpStatus, name).toBe(402);
+      expect(err.message, name).toMatch(why);
     }
   });
 
@@ -189,6 +251,29 @@ describe('isNearAccountId', () => {
     }
     expect(isNearAccountId(42)).toBe(false);
     expect(isNearAccountId(undefined)).toBe(false);
+  });
+});
+
+describe('isNearTxHash', () => {
+  it('accepts base58 strings that decode to exactly 32 bytes', () => {
+    for (const h of [TX_44, TX_43, TX_42, '1'.repeat(32), 'H'.repeat(44)]) {
+      expect(isNearTxHash(h), h).toBe(true);
+    }
+  });
+
+  it('accepts the encoding of any 32-byte value', () => {
+    for (let i = 0; i < 64; i++) {
+      const bytes = new Uint8Array(32);
+      globalThis.crypto.getRandomValues(bytes);
+      bytes.fill(0, 0, i % 3);
+      expect(isNearTxHash(base58Encode(bytes))).toBe(true);
+    }
+  });
+
+  it('rejects other lengths, chars outside the alphabet and non-strings', () => {
+    for (const h of ['z'.repeat(44), 'J'.repeat(44), '1'.repeat(31), '1'.repeat(33), TX_44 + '1', TX_44.replace('k', 'l'), 'I' + TX_43, '', 'a'.repeat(10_000), 42, null, undefined]) {
+      expect(isNearTxHash(h), JSON.stringify(h)?.slice(0, 50)).toBe(false);
+    }
   });
 });
 

@@ -346,12 +346,21 @@ export async function runBuyerAgent(opts: RunBuyerAgentOpts): Promise<BuyerRunRe
     if (found !== undefined) {
       // An AttestationRecord carries no tx hash of its own: the attestation tx is
       // the matching `attestation` event (same service + nonce) in the activity feed.
+      // The payment has already gone through, so a failing feed read only loses the hash.
+      // TODO(Task 6): the live activity feed must carry nonce and txHash for this lookup
       const nonce = found.nonce;
-      const activity = await chain.listRecentActivity(50);
-      const event = activity.find(
-        (e) => e.kind === 'attestation' && e.serviceId === chosen.service.id && e.nonce === nonce,
-      );
-      attestationTxHash = event?.txHash ?? null;
+      try {
+        const activity = await chain.listRecentActivity(50);
+        const event = activity.find(
+          (e) => e.kind === 'attestation' && e.serviceId === chosen.service.id && e.nonce === nonce,
+        );
+        attestationTxHash = event?.txHash ?? null;
+      } catch (err) {
+        attestationTxHash = null;
+        logger.warn('attestation tx lookup failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       print(
         renderBlock('STEP 6 · RECEIPT', [
           `payment tx: ${paymentTxHash}`,

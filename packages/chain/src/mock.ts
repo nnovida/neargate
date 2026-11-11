@@ -1,4 +1,4 @@
-import { AgentGateError, stripTrailingSlashes } from '@agentgate/shared';
+import { AgentGateError, isSelfPaid, isValidNonce, stripTrailingSlashes } from '@agentgate/shared';
 import type {
   ActivityEvent,
   AnySigner,
@@ -15,8 +15,6 @@ import type {
 } from '@agentgate/shared';
 
 const YOCTO_RE = /^(0|[1-9]\d*)$/;
-/** Same nonce rule as the registry contract. */
-const NONCE_RE = /^[0-9]{1,20}$/;
 
 /** Shape of the devnet's GET /chain/transfers/:txHash response. */
 interface DevnetTransfer {
@@ -198,7 +196,7 @@ export class MockChainHttpClient implements ChainClient {
    * `already_attested` and `selfPaid` from the contract rules.
    */
   async verifyPayment(q: VerifyPaymentQuery): Promise<VerifyResult> {
-    if (typeof q.nonce !== 'string' || !NONCE_RE.test(q.nonce)) {
+    if (typeof q.nonce !== 'string' || !isValidNonce(q.nonce)) {
       throw invalid('nonce must be 1–20 decimal digits');
     }
     assertServiceId(q.serviceId);
@@ -233,7 +231,7 @@ export class MockChainHttpClient implements ChainClient {
       amountYocto: transfer.amountYocto,
       payer: transfer.from,
       timestamp: transfer.timestamp,
-      selfPaid: transfer.from === service.owner || transfer.from === service.paymentTarget,
+      selfPaid: isSelfPaid(transfer.from, service),
     };
   }
 
@@ -289,7 +287,7 @@ export class MockChainHttpClient implements ChainClient {
   ): Promise<{ txHash: string }> {
     const mockSigner = requireMockSigner(signer);
     assertServiceId(input.serviceId);
-    if (typeof input.nonce !== 'string' || !NONCE_RE.test(input.nonce)) {
+    if (typeof input.nonce !== 'string' || !isValidNonce(input.nonce)) {
       throw invalid('nonce must be 1–20 decimal digits');
     }
     if (typeof input.depositYocto !== 'string' || !YOCTO_RE.test(input.depositYocto)) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { trustTier } from '../src/index';
+import { isSelfPaid, trustTier } from '../src/index';
 
 describe('trustTier', () => {
   it('is "new" below 5 total calls regardless of ratio', () => {
@@ -40,5 +40,21 @@ describe('trustTier', () => {
     expect(trustTier({ totalCalls: 10, successCalls: 11 })).toBe('new');
     expect(trustTier({ totalCalls: Number.NaN, successCalls: 0 })).toBe('new');
     expect(trustTier({ totalCalls: 10.5, successCalls: 10 })).toBe('new');
+  });
+});
+
+describe('isSelfPaid', () => {
+  const service = { owner: 'seller.testnet', paymentTarget: 'payouts.seller.testnet' };
+
+  it('is true when the payer is the owner or the payment target', () => {
+    expect(isSelfPaid('seller.testnet', service)).toBe(true);
+    expect(isSelfPaid('payouts.seller.testnet', service)).toBe(true);
+    expect(isSelfPaid('seller.testnet', { owner: 'seller.testnet', paymentTarget: 'seller.testnet' })).toBe(true);
+  });
+
+  it('is false for any other payer, including near-miss ids', () => {
+    for (const payer of ['buyer.testnet', 'seller.testnet.x', 'x.seller.testnet', 'seller', '']) {
+      expect(isSelfPaid(payer, service), JSON.stringify(payer)).toBe(false);
+    }
   });
 });

@@ -17,6 +17,7 @@ import {
   createLogger,
   decodeXPayment,
   encodeXPaymentResponse,
+  isSelfPaid,
   PAYMENT_STORAGE_FEE_YOCTO,
   randomNonce,
   trustTier,
@@ -122,19 +123,6 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ha, hb);
 }
 
-/**
- * True when the payer is the service's own owner or its payout account — a
- * self-paid call that must NOT feed the trust score (wash-trade guard, F1).
- * Account ids compare case-insensitively after trimming.
- * TODO(Task 4): skip attestation on the registry's `selfPaid` verdict instead.
- */
-export function isSelfPayment(payer: string, service: ServiceRecord): boolean {
-  const norm = (s: string): string => s.trim().toLowerCase();
-  const from = norm(payer);
-  if (from === '') return false;
-  return from === norm(service.paymentTarget) || from === norm(service.owner);
-}
-
 /** Express 4 does not catch async handler rejections — wrap them. */
 function wrap(fn: (req: Request, res: Response) => Promise<void>): RequestHandler {
   return (req, res, next) => {
@@ -143,7 +131,7 @@ function wrap(fn: (req: Request, res: Response) => Promise<void>): RequestHandle
 }
 
 /**
- * Builds the 402 paywall reverse proxy + admin API (SPEC §5).
+ * Builds the 402 paywall reverse proxy + admin API.
  * Pure factory — no listen(); startServer() wires it to a port.
  */
 export function createApp(deps: MiddlewareDeps): Express {
@@ -238,8 +226,7 @@ export function createApp(deps: MiddlewareDeps): Express {
 
   /**
    * The x402 requirement for one invoice: pay `price + storage fee` through the
-   * registry's `pay(service_id, nonce)`.
-   * TODO(Task 4): port the paywall tests to this body; `relayer` lands in Task 10.
+   * registry's `pay(service_id, nonce)`. `relayer` lands in Task 10.
    */
   function buildRequirements(
     service: ServiceRecord, nonce: string, expiresAt: number, resource: string,
@@ -604,7 +591,8 @@ export function createApp(deps: MiddlewareDeps): Express {
       // is the seller's backend being unreachable, not a service outcome, so it
       // is not scored either way. And never let a self-paid call earn trust
       // (F1): a payer that is the owner or the payout account is wash-trading.
-      const selfPaid = isSelfPayment(verdict.payer, service);
+      // TODO(Task 4): skip attestation on the registry's `selfPaid` verdict instead.
+      const selfPaid = isSelfPaid(verdict.payer, service);
       if (outcome.kind === 'response' && !selfPaid) {
         scheduleAttestation(service, nonceHeader, txHashHeader, success);
       } else {

@@ -76,12 +76,16 @@ describe('createChainClient', () => {
     expect(chain.registryId).toBe('registry.mock');
   });
 
-  it('refuses live mode until the live NEAR client lands (Task 6)', () => {
-    expect(() =>
-      createChainClient(
-        loadConfig({ AGENTGATE_MODE: 'live', AGENTGATE_ADMIN_TOKEN: 'strong-token-for-tests' }),
-      ),
-    ).toThrow(/Task 6/);
+  it('refuses live mode with CONFIG_INVALID until the live NEAR client lands (Task 6)', () => {
+    const config = loadConfig({ AGENTGATE_MODE: 'live', AGENTGATE_ADMIN_TOKEN: 'strong-token-for-tests' });
+    let thrown: unknown;
+    try {
+      createChainClient(config);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(AgentGateError);
+    expect(thrown).toMatchObject({ code: 'CONFIG_INVALID', message: expect.stringMatching(/Task 6/) });
   });
 });
 
@@ -162,14 +166,14 @@ describe('MockChainHttpClient — full surface against an in-process devnet', ()
     expect(await chain.getScore(serviceId)).toEqual({ totalCalls: 1, successCalls: 1 });
 
     await chain.recordAttestation(
-      { serviceId, nonce: '2', paymentTxHash: 'f'.repeat(44), success: false },
+      { serviceId, nonce: '2', paymentTxHash: 'G'.repeat(44), success: false },
       OWNER, // owner is also authorized
     );
     expect(await chain.getScore(serviceId)).toEqual({ totalCalls: 2, successCalls: 1 });
 
     const attestations = await chain.listAttestations(serviceId);
     expect(attestations).toHaveLength(2);
-    expect(attestations[0]?.paymentTxHash).toBe('f'.repeat(44));
+    expect(attestations[0]?.paymentTxHash).toBe('G'.repeat(44));
     expect(attestations[1]).toMatchObject({
       serviceId,
       nonce,
@@ -258,7 +262,7 @@ describe('MockChainHttpClient.verifyPayment — every failure reason', () => {
       serviceId,
       minAmountYocto: PRICE,
       maxAgeMs: 60_000,
-      txHash: '1'.repeat(44),
+      txHash: 'F'.repeat(44), // well-formed (32 bytes) but unknown
     });
     expect(verdict).toEqual({ ok: false, reason: 'not_found' });
   });

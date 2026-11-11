@@ -1,5 +1,5 @@
 /**
- * @agentgate/middleware — 402 paywall reverse proxy + admin API (SPEC §5).
+ * @agentgate/middleware — 402 paywall reverse proxy + admin API.
  *
  * - createApp({ config, chain, logger? }): pure express factory, no listen()
  * - startServer(opts): boots the server, returns { port, close() }

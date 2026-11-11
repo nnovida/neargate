@@ -1,5 +1,5 @@
 import type { AnySigner, ChainClient, Logger, Yocto } from '@agentgate/shared';
-import { AgentGateError, compareYocto, isNearAccountId, parseYocto } from '@agentgate/shared';
+import { AgentGateError, compareYocto, isNearAccountId, isValidNonce, parseYocto } from '@agentgate/shared';
 import {
   encodeXPayment, decodeXPaymentResponse,
   X402_VERSION, X402_SCHEME,
@@ -58,7 +58,6 @@ const MAX_PENDING_RETRIES = 5;
 /** Never sleep longer than this per pending retry, regardless of what the server asks for. */
 const MAX_RETRY_AFTER_MS = 30_000;
 
-const NONCE_RE = /^\d{1,20}$/;
 const U64_MAX = 18_446_744_073_709_551_615n; // 2^64 - 1
 
 function badInvoice(why: string): AgentGateError {
@@ -73,7 +72,8 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  * Strict runtime validation of a PaymentRequiredResponse body. Finds the first
  * accepts[] entry matching scheme==="exact" and network===chainNetwork, then
  * validates maxAmountRequired (yocto), payTo (NEAR account id),
- * extra.nonce (u64 decimal) and extra.expiresAtMs (future unix ms).
+ * extra.serviceId (positive safe integer), extra.nonce (u64 decimal) and
+ * extra.expiresAtMs (future unix ms).
  * Throws AgentGateError('BAD_INVOICE') on any violation.
  * TODO(Task 5): validate the NEAR registry extra (contractId, method, priceYocto, storageFeeYocto).
  */
@@ -99,8 +99,13 @@ export function parsePaymentRequired(
   if (!isNearAccountId(req.payTo)) {
     throw badInvoice('payTo must be a NEAR account id');
   }
+  // `serviceId` goes straight into the registry `pay` call; registry ids start at 1.
+  const serviceId: unknown = req.extra?.serviceId;
+  if (typeof serviceId !== 'number' || !Number.isSafeInteger(serviceId) || serviceId < 1) {
+    throw badInvoice('extra.serviceId must be a positive integer');
+  }
   const nonce = req.extra?.nonce;
-  if (typeof nonce !== 'string' || !NONCE_RE.test(nonce) || BigInt(nonce) > U64_MAX) {
+  if (typeof nonce !== 'string' || !isValidNonce(nonce) || BigInt(nonce) > U64_MAX) {
     throw badInvoice('extra.nonce must be a u64 decimal string');
   }
   if (typeof req.extra?.expiresAtMs !== 'number' || !Number.isFinite(req.extra.expiresAtMs) || req.extra.expiresAtMs <= now) {
@@ -172,6 +177,10 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
   }
   if (!signer || (signer.kind !== 'mock' && signer.kind !== 'near')) {
     throw new AgentGateError('BAD_OPTS', 'opts.signer must be a mock or near signer', 500);
+  }
+  // The signer's account id is the payer named in every X-PAYMENT proof.
+  if (!isNearAccountId(signer.accountId)) {
+    throw new AgentGateError('BAD_OPTS', 'opts.signer.accountId must be a NEAR account id', 500);
   }
   if (maxPriceYocto !== undefined) {
     parseYocto(maxPriceYocto); // throws AgentGateError('INVALID_AMOUNT') on garbage

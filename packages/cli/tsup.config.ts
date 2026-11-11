@@ -8,7 +8,7 @@ export default defineConfig({
   // Inline the private workspace packages so the published artifact is self-contained.
   noExternal: ['@agentgate/shared', '@agentgate/chain', '@agentgate/client'],
   // Real npm packages stay external (declared in dependencies).
-  external: ['commander', '@noble/hashes'],
+  external: ['commander'],
   clean: true,
   dts: false,
   sourcemap: false,

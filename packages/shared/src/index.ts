@@ -1,4 +1,5 @@
 export * from './types';
+export * from './base58';
 export * from './money';
 export * from './nonce';
 export * from './config';

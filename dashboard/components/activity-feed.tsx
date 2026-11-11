@@ -232,8 +232,8 @@ function RateLimited() {
         Live history is temporarily rate-limited
       </p>
       <p className="mx-auto mt-3 max-w-md text-sm text-mut">
-        The on-chain history provider (CSPR.cloud) hit its request quota. This view refreshes
-        automatically once the quota window resets — on-chain data and payments are unaffected.
+        The chain RPC hit its rate limit. This view refreshes
+        automatically once the limit window resets — on-chain data and payments are unaffected.
       </p>
     </div>
   );
@@ -285,7 +285,7 @@ export function ActivityFeed() {
     <div className="space-y-6">
       {data.stale ? (
         <p className="border border-warn/30 bg-warn/5 px-4 py-2 text-xs text-warn">
-          Showing cached activity — the live history refresh is rate-limited (CSPR.cloud quota).
+          Showing cached activity — the live history refresh hit the chain RPC rate limit.
           Retrying automatically.
         </p>
       ) : error ? (
@@ -365,7 +365,7 @@ export function ActivityFeed() {
             of {formatInt(rows.length)}
             {filter === 'all' ? '' : ` ${filterLabel}`} event{rows.length === 1 ? '' : 's'}
             {events.length >= 100 ? ' (latest 100)' : ''}. Times are relative; hover for the exact
-            timestamp. Every row links to its transaction on cspr.live.
+            timestamp.
           </p>
         </>
       )}

@@ -8,7 +8,7 @@ export interface CatalogEntry {
   tier: TrustTier;
 }
 
-/** LLM seam (SPEC §8): AnthropicLlm in live use, MockLlm when no API key. */
+/** LLM seam: AnthropicLlm in live use, MockLlm when no API key. */
 export interface LlmClient {
   readonly name: string;
   chooseService(task: string, catalog: CatalogEntry[]): Promise<{ serviceId: number; reason: string }>;
@@ -40,7 +40,7 @@ function truncate(s: string, max: number): string {
 }
 
 /**
- * Deterministic LLM stand-in (SPEC §8): picks the cheapest *active* service whose
+ * Deterministic LLM stand-in: picks the cheapest *active* service whose
  * name/description matches task keywords; ties broken by highest trust tier, then lowest id.
  * Falls back to the cheapest active service when no keyword matches.
  */
