@@ -13,7 +13,8 @@ import {
   nearToYocto,
 } from '@agentgate/shared';
 import type { AgentGateConfig, NearKeySigner, VerifyPaymentQuery } from '@agentgate/shared';
-import { LiveNearClient, createChainClient, mapContractPanic } from '../src/index';
+import { LiveNearClient, TxTimeoutError, createChainClient, mapContractPanic } from '../src/index';
+import { CALL_TIMEOUT_MS } from '../src/near-live';
 import { RPC_READ_TIMEOUT_MS } from '../src/near-rpc';
 
 // The NEAR RPC is a fake `fetch` answering with JSON-RPC envelopes from test/fixtures/near/
@@ -90,6 +91,14 @@ interface SentTx {
   waitUntil: string;
 }
 
+/** A send_tx answer: a fixture name or envelope, an HTTP error status (`httpError`), or no answer ever. */
+type SendTxReply = string | Json | { httpStatus: number; body: string } | 'hang';
+
+/** send_tx answered with HTTP `status` (the body is a fixture name). */
+function httpError(status: number, body: string): SendTxReply {
+  return { httpStatus: status, body };
+}
+
 /** A fake NEAR JSON-RPC endpoint: routes by method (last registration wins) and records every call. */
 class FakeRpc {
   readonly calls: RpcCall[] = [];
@@ -134,8 +143,13 @@ class FakeRpc {
     );
   }
 
-  /** send_tx: decodes and checks the signed tx, then answers `reply` with the real tx hash swapped in. */
-  sendTx(reply: string | Json = 'send-tx-success.json'): this {
+  /**
+   * send_tx: decodes and checks each signed tx (its hash re-derived from the signed bytes), then
+   * answers with the next of `replies` (the last one repeats), the real tx hash swapped in.
+   */
+  sendTx(...replies: SendTxReply[]): this {
+    const queue: SendTxReply[] = replies.length > 0 ? replies : ['send-tx-success.json'];
+    let answered = 0;
     return this.method('send_tx', (call: RpcCall) => {
       const signed = decodeSignedTransaction(Buffer.from(String(call.params.signed_tx_base64), 'base64'));
       const digest = new Uint8Array(createHash('sha256').update(encodeTransaction(signed.transaction)).digest());
@@ -150,6 +164,11 @@ class FakeRpc {
         ),
         waitUntil: String(call.params.wait_until),
       });
+      const reply = queue[Math.min(answered++, queue.length - 1)];
+      if (reply === 'hang') return new Promise<Response>(() => {});
+      if (typeof reply === 'object' && reply !== null && typeof reply.httpStatus === 'number') {
+        return json(fixture(String(reply.body)), reply.httpStatus);
+      }
       const envelope = typeof reply === 'string' ? fixture(reply) : structuredClone(reply);
       if (envelope.result?.transaction !== undefined) {
         envelope.result.transaction.hash = hash;
@@ -404,6 +423,22 @@ describe('LiveNearClient registry views', () => {
     expect((await client.listRecentActivity(1))[0]).toMatchObject({ success: false, detail: 'attested service #1 — failure' });
   });
 
+  it('listRecentActivity skips an entry of a kind this client does not know', async () => {
+    const [attestation, payment] = viewValue('view-get-recent-activity.json') as Json[];
+    rpc.view('get_recent_activity', callResult([{ ...attestation, kind: 'service_status' }, payment]));
+    expect((await client.listRecentActivity()).map((event) => event.kind)).toEqual(['payment']);
+  });
+
+  it('decoders reject a view off the ABI: a u64 as a string, an amount as a number, a non-number services_count', async () => {
+    rpc.view('get_service', callResult({ ...viewValue('view-get-service.json'), id: '1' }));
+    await expect(client.getService(1)).rejects.toMatchObject({ code: 'RPC_BAD_RESPONSE', httpStatus: 502 });
+    rpc.view('get_payment', callResult({ ...viewValue('view-get-payment.json'), amount: Number(PRICE) }));
+    await expect(client.getPayment(NONCE)).rejects.toMatchObject({ code: 'RPC_BAD_RESPONSE', httpStatus: 502 });
+    rpc.view('services_count', callResult('3'));
+    await expect(client.listServices()).rejects.toMatchObject({ code: 'RPC_BAD_RESPONSE', httpStatus: 502 });
+    expect(rpc.viewCalls('list_services')).toHaveLength(0);
+  });
+
   it('getPayment reads with optimistic finality; null when the registry has none', async () => {
     rpc.view('get_payment', fixture('view-get-payment.json'));
     expect(await client.getPayment(NONCE)).toStrictEqual({
@@ -465,6 +500,16 @@ describe('LiveNearClient registry views', () => {
     expect(rpc.calls).toHaveLength(calls);
   });
 
+  it('isFullAccessKey fails closed: a permission it does not know is RPC_BAD_RESPONSE, never a quiet answer', async () => {
+    const key = nearSigner(SELLER).publicKey;
+    for (const permission of ['SomethingElse', 42, undefined]) {
+      const odd = fixture('view-access-key-full.json');
+      odd.result.permission = permission;
+      rpc.query('view_access_key', odd);
+      await expect(client.isFullAccessKey(SELLER, key)).rejects.toMatchObject({ code: 'RPC_BAD_RESPONSE', httpStatus: 502 });
+    }
+  });
+
   it('rejects malformed account ids with ERR_INVALID_ACCOUNT_ID before any RPC', async () => {
     for (const promise of [
       client.getBalance('Not An Account'),
@@ -498,6 +543,15 @@ describe('LiveNearClient registry views', () => {
     const err = await rejection(client.getService(1));
     expect(err).toMatchObject({ code: 'RPC_ERROR', httpStatus: 502 });
     expect(err.message).not.toContain('rpc.testnet.near.org');
+  });
+
+  it('a view answered with HTTP 408 stays RPC_TIMEOUT once near-api-js stops retrying', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    rpc.view('get_service', () => json(fixture('error-timeout.json'), 408));
+    const pending = rejection(client.getService(1));
+    await vi.advanceTimersByTimeAsync(5_000); // 4 attempts, 0.5 + 1 + 2 s apart
+    expect(await pending).toMatchObject({ code: 'RPC_TIMEOUT', httpStatus: 504 });
+    expect(rpc.viewCalls('get_service')).toHaveLength(4);
   });
 
   it('a read the RPC never answers fails with RPC_TIMEOUT', async () => {
@@ -544,14 +598,43 @@ describe('LiveNearClient.verifyPayment', () => {
     expect(await client.verifyPayment(query())).toMatchObject({ ok: true, selfPaid: true });
   });
 
-  it('verify returns pending when tx is known but payment not yet visible', async () => {
+  it('verify returns pending when the pay tx is in flight or executed but the payment is not yet visible', async () => {
     rpc.view('get_payment', fixture('view-null.json'));
     rpc.method('tx', fixture('tx-pay-started.json'));
     expect(await client.verifyPayment(query())).toEqual({ ok: false, reason: 'pending' });
-    rpc.method('tx', fixture('tx-none.json'));
-    expect(await client.verifyPayment(query())).toEqual({ ok: false, reason: 'pending' });
     rpc.method('tx', fixture('tx-pay-final.json')); // executed, but this view has not caught up yet
     expect(await client.verifyPayment(query())).toEqual({ ok: false, reason: 'pending' });
+  });
+
+  it('a status-only tx reply: NONE (no record of the tx yet) is not_found, INCLUDED is pending', async () => {
+    rpc.view('get_payment', fixture('view-null.json'));
+    rpc.method('tx', fixture('tx-none.json'));
+    expect(await client.verifyPayment(query())).toEqual({ ok: false, reason: 'not_found' });
+    const included = fixture('tx-none.json');
+    included.result.final_execution_status = 'INCLUDED';
+    rpc.method('tx', included);
+    expect(await client.verifyPayment(query())).toEqual({ ok: false, reason: 'pending' });
+  });
+
+  it('with no payer in the query, the tx is looked up under the payer the registry recorded', async () => {
+    rpc.view('get_payment', fixture('view-get-payment.json'));
+    rpc.method('tx', fixture('tx-pay-final.json'));
+    expect(await client.verifyPayment(query({ payer: undefined }))).toMatchObject({ ok: true, payer: BUYER });
+    expect(rpc.callsTo('tx')[0]?.params).toEqual({ tx_hash: payTx(), sender_account_id: BUYER, wait_until: 'NONE' });
+  });
+
+  it('a tx with several actions passes when one is the matching pay; tx_mismatch when its pay names another nonce', async () => {
+    rpc.view('get_payment', fixture('view-get-payment.json'));
+    const transfer = { Transfer: { deposit: '1' } };
+    rpc.method('tx', txWith('tx-pay-final.json', (tx) => {
+      tx.actions = [transfer, tx.actions[0]];
+    }));
+    expect(await client.verifyPayment(query())).toMatchObject({ ok: true, payer: BUYER });
+    rpc.method('tx', txWith('tx-pay-final.json', (tx) => {
+      const pay = tx.actions[0];
+      tx.actions = [transfer, { FunctionCall: { ...pay.FunctionCall, args: encodeArgs({ service_id: 1, nonce: '9999' }) } }];
+    }));
+    expect(await client.verifyPayment(query())).toEqual({ ok: false, reason: 'tx_mismatch' });
   });
 
   it('verify returns not_found when tx unknown', async () => {
@@ -760,10 +843,96 @@ describe('LiveNearClient change calls', () => {
     );
   });
 
-  it('send_tx timing out is TX_TIMEOUT', async () => {
+  it('send_tx answered with HTTP 408 is TX_TIMEOUT naming the signed tx, which may still land', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    rpc.sendTx(httpError(408, 'error-timeout.json'));
+    const pending = rejection(client.setActive(1, true, nearSigner(SELLER).signer));
+    await vi.advanceTimersByTimeAsync(5_000); // near-api-js re-sends on 408: 4 attempts, 0.5 + 1 + 2 s apart
+    const err = await pending;
+    // every attempt carried the same signed bytes: one tx, never a second one
+    expect(rpc.sent).toHaveLength(4);
+    const hash = rpc.sent[0]!.hash;
+    expect(new Set(rpc.sent.map((sent) => sent.hash))).toEqual(new Set([hash]));
+    expect(err).toBeInstanceOf(TxTimeoutError);
+    expect(err).toMatchObject({ code: 'TX_TIMEOUT', httpStatus: 504, txHash: hash });
+    expect(err.message).toBe(
+      `the NEAR RPC stopped waiting for the set_active call: tx ${hash} may still land; ` +
+        `check https://testnet.nearblocks.io/txns/${hash} before retrying`,
+    );
+  });
+
+  it('a TIMEOUT_ERROR body from send_tx is TX_TIMEOUT naming the tx as well', async () => {
     rpc.sendTx('error-timeout.json');
     const err = await rejection(client.setActive(1, true, nearSigner(SELLER).signer));
-    expect(err).toMatchObject({ code: 'TX_TIMEOUT', httpStatus: 504 });
+    expect(err).toBeInstanceOf(TxTimeoutError);
+    expect(err).toMatchObject({ code: 'TX_TIMEOUT', httpStatus: 504, txHash: rpc.sent[0]!.hash });
+  });
+
+  it('a 408 before anything is signed stays RPC_TIMEOUT: nothing was sent', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    rpc.query('view_access_key', () => json(fixture('error-timeout.json'), 408));
+    rpc.sendTx();
+    const pending = rejection(client.pay({ serviceId: 1, nonce: NONCE, depositYocto: DEPOSIT }, nearSigner(BUYER).signer));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await pending).toMatchObject({ code: 'RPC_TIMEOUT', httpStatus: 504 });
+    expect(rpc.sent).toHaveLength(0);
+  });
+
+  it('past its 120 s bound a call is TX_TIMEOUT once its tx is signed, RPC_TIMEOUT before, and never sends later', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    rpc.sendTx('hang');
+    const signedThenStuck = rejection(client.pay({ serviceId: 1, nonce: NONCE, depositYocto: DEPOSIT }, nearSigner(BUYER).signer));
+    await vi.advanceTimersByTimeAsync(CALL_TIMEOUT_MS + 1);
+    const late = await signedThenStuck;
+    expect(late).toBeInstanceOf(TxTimeoutError);
+    expect(late).toMatchObject({ code: 'TX_TIMEOUT', httpStatus: 504, txHash: rpc.sent[0]!.hash });
+
+    let releaseBlock = (): void => {};
+    rpc.method('block', () => new Promise<Json>((resolve) => {
+      releaseBlock = () => resolve(fixture('block-final.json'));
+    }));
+    const neverSigned = rejection(client.pay({ serviceId: 1, nonce: '4243', depositYocto: DEPOSIT }, nearSigner(BUYER).signer));
+    await vi.advanceTimersByTimeAsync(CALL_TIMEOUT_MS + 1);
+    const early = await neverSigned;
+    expect(early).toMatchObject({ code: 'RPC_TIMEOUT', httpStatus: 504 });
+    expect(early.message).toMatch(/nothing was sent/);
+    releaseBlock(); // the given-up call carries on in the background: it must not sign or send
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(rpc.sent).toHaveLength(1);
+  });
+
+  it('an InvalidNonce rejection is re-signed with a fresh nonce and goes through', async () => {
+    const stale = BigInt(fixture('view-access-key-full.json').result.nonce);
+    const moved = fixture('view-access-key-full.json');
+    moved.result.nonce = Number(stale + 5n); // another client used the key meanwhile
+    rpc.query('view_access_key', () => (rpc.sent.length === 0 ? fixture('view-access-key-full.json') : moved));
+    rpc.sendTx('error-invalid-nonce.json', 'send-tx-success.json');
+    const result = await client.pay({ serviceId: 1, nonce: NONCE, depositYocto: DEPOSIT }, nearSigner(BUYER).signer);
+    expect(rpc.sent.map((sent) => sent.tx.nonce)).toEqual([stale + 1n, stale + 6n]);
+    expect(rpc.sent.every((sent) => sent.signatureValid)).toBe(true);
+    expect(result).toEqual({ txHash: rpc.sent[1]!.hash });
+    expect(rpc.callsTo('query').filter((call) => call.params.request_type === 'view_access_key')).toHaveLength(2);
+  });
+
+  it('NEAR refusing a tx that leaves an account short of its storage stake is ERR_INSUFFICIENT_BALANCE (R16)', async () => {
+    rpc.sendTx('error-lack-balance-for-state.json');
+    const err = await rejection(client.pay({ serviceId: 1, nonce: NONCE, depositYocto: DEPOSIT }, nearSigner(BUYER).signer));
+    expect(err).toMatchObject({ code: 'ERR_INSUFFICIENT_BALANCE', httpStatus: 400 });
+    expect(err.message).toBe(
+      'ERR_INSUFFICIENT_BALANCE: buyer.testnet cannot cover its storage after this transaction (1820000000000000000000 yocto required)',
+    );
+    expect(chainErrorCode(err)).toBe('ERR_INSUFFICIENT_BALANCE');
+
+    // the same failure inside an executed tx (an ActionError) also names that tx
+    const failed = fixture('send-tx-failure-nonce-used.json');
+    failed.result.status = {
+      Failure: { ActionError: { index: 0, kind: { LackBalanceForState: { account_id: BUYER, amount: '1820000000000000000000' } } } },
+    };
+    rpc.sendTx(failed);
+    const inTx = await rejection(client.pay({ serviceId: 1, nonce: '4243', depositYocto: DEPOSIT }, nearSigner(BUYER).signer));
+    expect(inTx).toMatchObject({ code: 'ERR_INSUFFICIENT_BALANCE', httpStatus: 400 });
+    expect(inTx.message).toMatch(/^ERR_INSUFFICIENT_BALANCE: buyer\.testnet cannot cover its storage/);
+    expect(inTx.message).toContain(`(tx ${rpc.sent.at(-1)!.hash})`);
   });
 
   it('a key that is not on the signer account is SIGNER_KEY_NOT_FOUND; nothing is sent', async () => {

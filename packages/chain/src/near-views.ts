@@ -1,4 +1,4 @@
-import { AgentGateError, NEAR_NATIVE_ASSET, formatNear, isRecord, stripTrailingSlashes } from '@agentgate/shared';
+import { NEAR_NATIVE_ASSET, formatNear, isRecord, stripTrailingSlashes } from '@agentgate/shared';
 import type {
   ActivityEvent,
   AttestationRecord,
@@ -7,16 +7,12 @@ import type {
   ServiceRecord,
   ServiceScore,
 } from '@agentgate/shared';
+import { YOCTO_RE } from './checks';
+import { badResponse } from './near-errors';
 
 // Decoders from the `neargate-registry` JSON views (snake_case, U128 amounts as decimal strings)
 // to the shared records. A view that does not have the ABI's shape is RPC_BAD_RESPONSE: the
 // configured account is not answering as the registry does.
-
-const YOCTO_RE = /^(0|[1-9]\d*)$/;
-
-export function badView(method: string): AgentGateError {
-  return new AgentGateError('RPC_BAD_RESPONSE', `the registry answered ${method} with an unexpected shape`, 502);
-}
 
 interface FieldReader {
   str(key: string): string;
@@ -28,10 +24,10 @@ interface FieldReader {
 }
 
 function fields(value: unknown, method: string): FieldReader {
-  if (!isRecord(value)) throw badView(method);
+  if (!isRecord(value)) throw badResponse(`the ${method} view`);
   const pick = <T>(key: string, ok: (v: unknown) => v is T): T => {
     const v = value[key];
-    if (!ok(v)) throw badView(method);
+    if (!ok(v)) throw badResponse(`the ${method} view`);
     return v;
   };
   return {
@@ -43,7 +39,7 @@ function fields(value: unknown, method: string): FieldReader {
 }
 
 function list(value: unknown, method: string): unknown[] {
-  if (!Array.isArray(value)) throw badView(method);
+  if (!Array.isArray(value)) throw badResponse(`the ${method} view`);
   return value;
 }
 

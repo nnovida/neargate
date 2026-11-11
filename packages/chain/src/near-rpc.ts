@@ -1,7 +1,7 @@
 import { JsonRpcProvider } from 'near-api-js';
 import { AccessKeyDoesNotExistError, AccountDoesNotExistError, UnknownTransactionError } from 'near-api-js/rpc-errors';
 import { AgentGateError, isRecord } from '@agentgate/shared';
-import { mapNearError } from './near-errors';
+import { badResponse, mapNearError } from './near-errors';
 
 /** `optimistic` sees a tx's effects as soon as it executes; `final` once its block is final. */
 export type ViewFinality = 'optimistic' | 'final';
@@ -26,7 +26,11 @@ export function withTimeout<T>(work: Promise<T>, ms: number, onTimeout: () => Er
 
 /** A transaction as the `tx` method shows it, reduced to what payment verification reads. */
 export interface TxStatus {
-  /** `final_execution_status`: NONE, INCLUDED, EXECUTED_OPTIMISTIC, INCLUDED_FINAL, EXECUTED or FINAL. */
+  /**
+   * `final_execution_status`: NONE, INCLUDED, EXECUTED_OPTIMISTIC, INCLUDED_FINAL, EXECUTED or
+   * FINAL (NONE when the reply has none). A status-only reply (no `outcome`) with NONE means the
+   * RPC has no record of the tx yet; a later status means the tx is on its way.
+   */
   executionStatus: string;
   /** null while the RPC holds no outcome for the tx (it answers with the status alone). */
   outcome: TxOutcome | null;
@@ -39,10 +43,6 @@ export interface TxOutcome {
   actions: unknown[];
   /** `in_flight` until the tx's result is known (status NotStarted / Started), then `succeeded` or `failed`. */
   state: 'in_flight' | 'succeeded' | 'failed';
-}
-
-function badResponse(what: string): AgentGateError {
-  return new AgentGateError('RPC_BAD_RESPONSE', `the NEAR RPC answered ${what} with an unexpected shape`, 502);
 }
 
 function txState(status: unknown): TxOutcome['state'] {

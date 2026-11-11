@@ -1,0 +1,23 @@
+{
+  "jsonrpc": "2.0",
+  "id": "dontcare",
+  "error": {
+    "name": "HANDLER_ERROR",
+    "cause": {
+      "info": {},
+      "name": "INVALID_TRANSACTION"
+    },
+    "code": -32000,
+    "message": "Server error",
+    "data": {
+      "TxExecutionError": {
+        "InvalidTxError": {
+          "InvalidNonce": {
+            "ak_nonce": 186000000000090,
+            "tx_nonce": 186000000000086
+          }
+        }
+      }
+    }
+  }
+}

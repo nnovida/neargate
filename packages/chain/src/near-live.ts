@@ -1,4 +1,4 @@
-import { Account, PublicKey, Signer, getTransactionLastResult } from 'near-api-js';
+import { Account, PublicKey, actions, getTransactionLastResult } from 'near-api-js';
 import {
   AgentGateError,
   REGISTRATION_DEPOSIT_YOCTO,
@@ -9,6 +9,7 @@ import {
   isValidNonce,
   nativeNearOption,
   parseYocto,
+  stripTrailingSlashes,
 } from '@agentgate/shared';
 import type {
   ActivityEvent,
@@ -26,15 +27,17 @@ import type {
   VerifyResult,
   Yocto,
 } from '@agentgate/shared';
-import { mapCallError } from './near-errors';
-import { loadNearSigner, type LoadedNearSigner } from './near-keys';
+import { assertNonEmpty, assertServiceId, assertYocto, checkVerifyQuery, invalid, judgePaymentRecord } from './checks';
+import { TxTimeoutError, badResponse, mapCallError } from './near-errors';
+import { loadNearSigner } from './near-keys';
 import { NearRpc, withTimeout, type TxStatus, type ViewFinality } from './near-rpc';
-import { badView, isPayAction, parseActivity, parseAttestations, parsePayment, parseScore, parseService } from './near-views';
+import { CallSigner } from './near-signer';
+import { isPayAction, parseActivity, parseAttestations, parsePayment, parseScore, parseService } from './near-views';
 
 /** Gas attached to every registry change call: 30 TGas. */
 const CALL_GAS = 30_000_000_000_000n;
-/** A change call that has not come back in this long fails with TX_TIMEOUT (it may still land). */
-const CALL_TIMEOUT_MS = 120_000;
+/** A change call that has not come back in this long fails: TX_TIMEOUT once its tx is signed. */
+export const CALL_TIMEOUT_MS = 120_000;
 /** `list_services` returns at most this many services per call (the contract's LIST_LIMIT_MAX). */
 const LIST_PAGE = 50;
 /** `get_recent_activity` returns at most this many events (the contract's ACTIVITY_CAP). */
@@ -42,9 +45,8 @@ const ACTIVITY_CAP = 200;
 const DEFAULT_ACTIVITY_LIMIT = 50;
 /** The largest `limit` a list read accepts, as on the devnet's REST API. */
 const MAX_QUERY_LIMIT = 1000;
-/** Accounts kept for reuse, one per signing key (each tracks its key's nonce). */
+/** Signer accounts kept for reuse; each Account's nonce manager keeps its keys' nonces in order. */
 const MAX_CACHED_ACCOUNTS = 16;
-const YOCTO_RE = /^(0|[1-9]\d*)$/;
 
 /**
  * What a change call waits for. `pay` and `record_attestation` return once executed: the
@@ -55,12 +57,20 @@ type WaitUntil = 'EXECUTED_OPTIMISTIC' | 'FINAL';
 
 type PayVerdict = 'unknown' | 'in_flight' | 'succeeded' | 'failed' | 'mismatch';
 
-function invalid(message: string): AgentGateError {
-  return new AgentGateError('invalid_query', message, 400);
-}
-
 function configInvalid(message: string): AgentGateError {
   return new AgentGateError('CONFIG_INVALID', message, 500);
+}
+
+/** `value` as an http(s) URL string, or CONFIG_INVALID naming the setting. */
+function httpUrl(value: unknown, setting: string): string {
+  let url: URL;
+  try {
+    url = new URL(String(value));
+  } catch {
+    throw configInvalid(`${setting} must be a valid URL`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw configInvalid(`${setting} must be http(s)`);
+  return String(value);
 }
 
 /** The mock's code for a malformed account id (the devnet's ERR_INVALID_ACCOUNT_ID). */
@@ -71,18 +81,6 @@ function assertAccountId(value: unknown, field: string): void {
       `ERR_INVALID_ACCOUNT_ID: ${field} is not a valid NEAR account id`,
       400,
     );
-  }
-}
-
-function assertNonEmpty(value: string, what: string): void {
-  if (typeof value !== 'string' || value.trim() === '') {
-    throw invalid(`${what} must be a non-empty string`);
-  }
-}
-
-function assertServiceId(id: number): void {
-  if (!Number.isSafeInteger(id) || id < 1) {
-    throw invalid(`serviceId must be a positive integer, got ${String(id)}`);
   }
 }
 
@@ -107,27 +105,6 @@ function requireNearSigner(signer: AnySigner): NearKeySigner {
 }
 
 /**
- * A near-api-js Signer over a key resolved by `loadNearSigner`: it signs through the loader's
- * `sign` and never holds the secret key itself.
- */
-class LoadedKeySigner extends Signer {
-  private readonly publicKey: PublicKey;
-
-  constructor(private readonly loaded: LoadedNearSigner) {
-    super();
-    this.publicKey = PublicKey.fromString(loaded.publicKey);
-  }
-
-  async getPublicKey(): Promise<PublicKey> {
-    return this.publicKey;
-  }
-
-  protected async signBytes(bytes: Uint8Array): Promise<Uint8Array> {
-    return new Uint8Array(Buffer.from(this.loaded.sign(bytes), 'base64'));
-  }
-}
-
-/**
  * ChainClient for the `neargate-registry` contract on NEAR testnet/mainnet, over near-api-js 7.4.0.
  *
  * Reads are contract views (`final` finality; `get_payment` uses `optimistic` so a payment
@@ -140,6 +117,7 @@ export class LiveNearClient implements ChainClient {
   readonly network: string;
   readonly registryId: string;
   private readonly nearNetwork: NearNetwork;
+  private readonly explorerUrl: string;
   private readonly rpc: NearRpc;
   private readonly accounts = new Map<string, Account>();
   private networkCheck: Promise<void> | null = null;
@@ -152,19 +130,12 @@ export class LiveNearClient implements ChainClient {
     if (!isNearAccountId(config.registryContractId)) {
       throw configInvalid('REGISTRY_CONTRACT_ID must be a NEAR account id');
     }
-    let rpcUrl: URL;
-    try {
-      rpcUrl = new URL(config.nearRpcUrl);
-    } catch {
-      throw configInvalid('NEAR_RPC_URL must be a valid URL');
-    }
-    if (rpcUrl.protocol !== 'http:' && rpcUrl.protocol !== 'https:') {
-      throw configInvalid('NEAR_RPC_URL must be http(s)');
-    }
+    const rpcUrl = httpUrl(config.nearRpcUrl, 'NEAR_RPC_URL');
+    this.explorerUrl = stripTrailingSlashes(httpUrl(config.nearExplorerUrl, 'NEAR_EXPLORER_URL'));
     this.nearNetwork = config.nearNetwork;
     this.network = `near-${config.nearNetwork}`;
     this.registryId = config.registryContractId;
-    this.rpc = new NearRpc(config.nearRpcUrl, { network: this.network, registryId: this.registryId });
+    this.rpc = new NearRpc(rpcUrl, { network: this.network, registryId: this.registryId });
   }
 
   /** Readiness probe: the RPC answers `status` and serves the configured chain. */
@@ -192,11 +163,13 @@ export class LiveNearClient implements ChainClient {
   /** Every service with a native NEAR price: `list_services` pages of 50 up to `services_count()`. */
   async listServices(): Promise<ServiceRecord[]> {
     const count = await this.view('services_count', {});
-    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) throw badView('services_count');
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+      throw badResponse('the services_count view');
+    }
     const services: ServiceRecord[] = [];
     for (let from = 1; from <= count; from += LIST_PAGE) {
       const page = await this.view('list_services', { from_index: from, limit: LIST_PAGE });
-      if (!Array.isArray(page)) throw badView('list_services');
+      if (!Array.isArray(page)) throw badResponse('the list_services view');
       for (const raw of page) {
         const service = parseService(raw, 'list_services');
         if (service !== null) services.push(service);
@@ -254,7 +227,7 @@ export class LiveNearClient implements ChainClient {
     if (found.permission === 'FullAccess') return true;
     // The answer gates owner authority: only a known permission shape may say "no" quietly.
     if (isRecord(found.permission)) return false; // FunctionCall (or a gas key's permission)
-    throw new AgentGateError('RPC_BAD_RESPONSE', 'the NEAR RPC answered the access key lookup without a permission', 502);
+    throw badResponse('the access key lookup', 'without a permission it knows');
   }
 
   /** `view_account`: UNKNOWN_ACCOUNT is false, any other RPC failure throws. */
@@ -264,62 +237,42 @@ export class LiveNearClient implements ChainClient {
   }
 
   /**
-   * Checks the registry's payment record for the nonce in the mock's order (not_found,
-   * wrong_service, amount_too_low, expired, already_attested), then, when `txHash` is given,
-   * that the tx is a successful `pay` of this nonce and service on this registry, signed by
-   * the payer: `tx_mismatch` otherwise, `pending` while the RPC cannot show it yet. With no
-   * payment recorded yet, a `pay` tx for the nonce that is still executing (or executed but
-   * not yet visible to the view) is `pending`; an unknown or failed one is `not_found`.
+   * Checks the registry's payment record for the nonce in the mock's order (`judgePaymentRecord`:
+   * not_found, wrong_service, amount_too_low, expired, already_attested), then, when `txHash` is
+   * given, that the tx is a successful `pay` of this nonce and service on this registry, signed
+   * by the payer: `tx_mismatch` otherwise, `pending` while the RPC cannot show it yet. With no
+   * payment recorded yet, a `pay` tx for the nonce that is still executing (or executed but not
+   * yet visible to the view) is `pending`; an unknown or failed one is `not_found`.
    * Payments relayed as delegate actions (signed by a relayer) do not match here.
    */
   async verifyPayment(q: VerifyPaymentQuery): Promise<VerifyResult> {
-    if (typeof q.nonce !== 'string' || !isValidNonce(q.nonce)) {
-      throw invalid('nonce must be 1–20 decimal digits');
-    }
-    assertServiceId(q.serviceId);
-    if (typeof q.minAmountYocto !== 'string' || !YOCTO_RE.test(q.minAmountYocto)) {
-      throw invalid('minAmountYocto must be a yocto decimal string');
-    }
-    if (typeof q.maxAgeMs !== 'number' || !Number.isFinite(q.maxAgeMs) || q.maxAgeMs < 0) {
-      throw invalid('maxAgeMs must be a non-negative number');
-    }
+    checkVerifyQuery(q);
     if (q.txHash !== undefined && !isNearTxHash(q.txHash)) {
       throw invalid('txHash must be a base58 NEAR transaction hash');
     }
     if (q.payer !== undefined) assertAccountId(q.payer, 'payer');
 
     const payment = await this.getPayment(q.nonce);
+    const verdict = judgePaymentRecord(payment, q, Date.now());
     if (payment === null) {
-      if (q.txHash === undefined || q.payer === undefined) return { ok: false, reason: 'not_found' };
-      const verdict = this.judgePayTx(await this.rpc.txStatus(q.txHash, q.payer), q, q.payer);
-      if (verdict === 'mismatch') return { ok: false, reason: 'tx_mismatch' };
-      if (verdict === 'unknown' || verdict === 'failed') return { ok: false, reason: 'not_found' };
-      return { ok: false, reason: 'pending' };
+      if (q.txHash === undefined || q.payer === undefined) return verdict;
+      const tx = this.judgePayTx(await this.rpc.txStatus(q.txHash, q.payer), q, q.payer);
+      if (tx === 'mismatch') return { ok: false, reason: 'tx_mismatch' };
+      return tx === 'in_flight' || tx === 'succeeded' ? { ok: false, reason: 'pending' } : verdict;
     }
-    if (payment.serviceId !== q.serviceId) return { ok: false, reason: 'wrong_service' };
-    if (BigInt(payment.amountYocto) < BigInt(q.minAmountYocto)) return { ok: false, reason: 'amount_too_low' };
-    if (Date.now() - payment.timestamp > q.maxAgeMs) return { ok: false, reason: 'expired' };
-    if (payment.attested) return { ok: false, reason: 'already_attested' };
-    if (q.txHash !== undefined) {
-      if (q.payer !== undefined && q.payer !== payment.payer) return { ok: false, reason: 'tx_mismatch' };
-      const verdict = this.judgePayTx(await this.rpc.txStatus(q.txHash, payment.payer), q, payment.payer);
-      if (verdict === 'mismatch' || verdict === 'failed') return { ok: false, reason: 'tx_mismatch' };
-      if (verdict !== 'succeeded') return { ok: false, reason: 'pending' };
-    }
-    return {
-      ok: true,
-      amountYocto: payment.amountYocto,
-      payer: payment.payer,
-      timestamp: payment.timestamp,
-      selfPaid: payment.selfPaid,
-    };
+    if (!verdict.ok || q.txHash === undefined) return verdict;
+    if (q.payer !== undefined && q.payer !== payment.payer) return { ok: false, reason: 'tx_mismatch' };
+    const tx = this.judgePayTx(await this.rpc.txStatus(q.txHash, payment.payer), q, payment.payer);
+    if (tx === 'mismatch' || tx === 'failed') return { ok: false, reason: 'tx_mismatch' };
+    return tx === 'succeeded' ? verdict : { ok: false, reason: 'pending' };
   }
 
   /** Where a tx stands as `payer`'s `pay` of q's nonce for q's service on this registry. */
   private judgePayTx(status: TxStatus | null, q: VerifyPaymentQuery, payer: string): PayVerdict {
     if (status === null) return 'unknown';
     const { outcome } = status;
-    if (outcome === null) return 'in_flight';
+    // A status-only reply: NONE means the RPC has no record of the tx yet, a later status that it is on its way.
+    if (outcome === null) return status.executionStatus === 'NONE' ? 'unknown' : 'in_flight';
     const isThePay =
       outcome.signerId === payer &&
       outcome.receiverId === this.registryId &&
@@ -353,7 +306,7 @@ export class LiveNearClient implements ChainClient {
       'FINAL',
     );
     if (typeof result !== 'number' || !Number.isSafeInteger(result) || result < 1) {
-      throw new AgentGateError('RPC_BAD_RESPONSE', `register_service returned no service id (tx ${txHash})`, 502);
+      throw badResponse(`the register_service call (tx ${txHash})`, 'without a service id');
     }
     return { serviceId: result, txHash };
   }
@@ -368,9 +321,7 @@ export class LiveNearClient implements ChainClient {
   ): Promise<{ txHash: string }> {
     const near = requireNearSigner(signer);
     assertServiceId(input.serviceId);
-    if (typeof input.depositYocto !== 'string' || !YOCTO_RE.test(input.depositYocto)) {
-      throw invalid('depositYocto must be a yocto decimal string');
-    }
+    assertYocto(input.depositYocto, 'depositYocto');
     parseYocto(input.depositYocto);
     const { txHash } = await this.call(
       near,
@@ -413,6 +364,11 @@ export class LiveNearClient implements ChainClient {
   /**
    * Signs and sends one registry function call with 30 TGas and `depositYocto` attached, after
    * checking the RPC serves the configured chain. Returns the tx hash and the call's JSON result.
+   *
+   * `Account.signAndSendTransaction` builds the tx, has the CallSigner sign it (which records
+   * its hash before anything is sent), re-signs with a fresh nonce on InvalidNonce, and throws
+   * the parsed execution error on a `Failure` status, so contract panics keep their `ERR_*`
+   * codes. A call that times out after its tx was signed is TX_TIMEOUT naming that tx.
    */
   private async call(
     signer: NearKeySigner,
@@ -429,19 +385,24 @@ export class LiveNearClient implements ChainClient {
     });
     await this.ensureNetwork();
     const what = `the ${method} call`;
-    let outcome: Awaited<ReturnType<Account['callFunctionRaw']>>;
+    const callSigner = new CallSigner(loaded);
+    let outcome: Awaited<ReturnType<Account['signAndSendTransaction']>>;
     try {
       outcome = await withTimeout(
-        this.accountFor(signer.accountId, loaded).callFunctionRaw({
-          contractId: this.registryId,
-          methodName: method,
-          args,
-          deposit: BigInt(depositYocto),
-          gas: CALL_GAS,
+        this.accountFor(signer.accountId).signAndSendTransaction({
+          receiverId: this.registryId,
+          actions: [actions.functionCall(method, args, CALL_GAS, BigInt(depositYocto))],
           waitUntil,
+          signer: callSigner,
         }),
         CALL_TIMEOUT_MS,
-        () => new AgentGateError('TX_TIMEOUT', `${what} did not come back within ${CALL_TIMEOUT_MS / 1000} s; it may still land`, 504),
+        () => {
+          callSigner.close(); // nothing more goes out for this call once the caller has its answer
+          const lead = `${what} got no answer within ${CALL_TIMEOUT_MS / 1000} s`;
+          return callSigner.txHash === undefined
+            ? new AgentGateError('RPC_TIMEOUT', `${lead}; nothing was sent`, 504)
+            : new TxTimeoutError(lead, callSigner.txHash, this.explorerUrl);
+        },
       );
     } catch (err) {
       throw mapCallError(err, {
@@ -450,12 +411,12 @@ export class LiveNearClient implements ChainClient {
         registryId: this.registryId,
         signerId: signer.accountId,
         publicKey: loaded.publicKey,
+        txHash: callSigner.txHash,
+        explorerUrl: this.explorerUrl,
       });
     }
     const txHash = (outcome as { transaction_outcome?: { id?: unknown } }).transaction_outcome?.id;
-    if (!isNearTxHash(txHash)) {
-      throw new AgentGateError('RPC_BAD_RESPONSE', `the NEAR RPC answered ${what} without a transaction hash`, 502);
-    }
+    if (!isNearTxHash(txHash)) throw badResponse(what, 'without a transaction hash');
     return { txHash, result: getTransactionLastResult(outcome) };
   }
 
@@ -468,13 +429,12 @@ export class LiveNearClient implements ChainClient {
     return this.networkCheck;
   }
 
-  /** One Account per signing key, so its nonces stay in order across calls. */
-  private accountFor(accountId: string, loaded: LoadedNearSigner): Account {
-    const key = `${accountId} ${loaded.publicKey}`;
-    let account = this.accounts.get(key);
+  /** One Account per signer account, so its nonce manager keeps each key's nonces in order across calls. */
+  private accountFor(accountId: string): Account {
+    let account = this.accounts.get(accountId);
     if (account === undefined) {
-      account = new Account(accountId, this.rpc.provider, new LoadedKeySigner(loaded));
-      this.accounts.set(key, account);
+      account = new Account(accountId, this.rpc.provider);
+      this.accounts.set(accountId, account);
       if (this.accounts.size > MAX_CACHED_ACCOUNTS) {
         const oldest = this.accounts.keys().next().value;
         if (oldest !== undefined) this.accounts.delete(oldest);

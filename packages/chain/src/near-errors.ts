@@ -8,6 +8,7 @@ import {
   ContractExecutionError,
   ContractMethodNotFoundError,
   HostGuestPanicError,
+  LackBalanceForStateActionError,
   NotEnoughBalanceError,
   NotEnoughBalanceForDepositError,
   RpcError,
@@ -25,10 +26,42 @@ export interface NearErrorContext {
   registryId: string;
 }
 
-/** A change call also names its signer and the public key it signed with. */
+/** A change call also names its signer, the public key it signs with and the tx it signed. */
 export interface CallErrorContext extends NearErrorContext {
   signerId: string;
   publicKey: string;
+  /** The hash of the last tx the call signed, and so may have sent; undefined while nothing was signed. */
+  txHash: string | undefined;
+  /** The explorer's base URL (config.nearExplorerUrl, no trailing slash), for the TX_TIMEOUT link. */
+  explorerUrl: string;
+}
+
+/**
+ * TX_TIMEOUT (504): a registry change call was signed and sent, but nothing came back for it
+ * (the RPC gave up with HTTP 408 or TIMEOUT_ERROR, or the call's own bound ran out). The tx may
+ * still land: look it up before retrying, or a retry can register or pay twice. The error
+ * carries what that takes:
+ *
+ * - `txHash`: the hash of the signed tx that was sent (its explorer page is in the message)
+ */
+export class TxTimeoutError extends AgentGateError {
+  readonly txHash: string;
+
+  /** `lead` says what gave up, e.g. "the NEAR RPC stopped waiting for the pay call". */
+  constructor(lead: string, txHash: string, explorerUrl: string) {
+    super(
+      'TX_TIMEOUT',
+      `${lead}: tx ${txHash} may still land; check ${explorerUrl}/txns/${txHash} before retrying`,
+      504,
+    );
+    this.name = 'TxTimeoutError';
+    this.txHash = txHash;
+  }
+}
+
+/** RPC_BAD_RESPONSE (502): the NEAR RPC, or the registry behind it, answered `what` in a shape this client cannot use. */
+export function badResponse(what: string, how = 'with an unexpected shape'): AgentGateError {
+  return new AgentGateError('RPC_BAD_RESPONSE', `the NEAR RPC answered ${what} ${how}`, 502);
 }
 
 /** A contract panic message that leads with a code: "ERR_NONCE_USED: nonce already paid". */
@@ -132,7 +165,8 @@ function networkCode(err: unknown): string | null {
  * - a registry without the contract (or not this ABI) → NOT_DEPLOYED (503)
  * - a contract panic → `mapContractPanic`
  * - a transaction the RPC stopped waiting for → TX_TIMEOUT (504); one NEAR rejected → TX_FAILED (502)
- * - HTTP 408 → RPC_TIMEOUT (504); other HTTP errors, unreachable RPC, RPC-side errors → RPC_ERROR (502)
+ * - HTTP 408 → RPC_TIMEOUT (504): a read can simply be retried (`mapCallError` turns a 408 on a
+ *   sent tx into TX_TIMEOUT); other HTTP errors, unreachable RPC, RPC-side errors → RPC_ERROR (502)
  * - malformed JSON → RPC_BAD_RESPONSE (502)
  */
 export function mapNearError(err: unknown, ctx: NearErrorContext): AgentGateError {
@@ -152,7 +186,7 @@ export function mapNearError(err: unknown, ctx: NearErrorContext): AgentGateErro
   if (err instanceof TransactionTimeoutError) {
     return new AgentGateError(
       'TX_TIMEOUT',
-      `the NEAR RPC stopped waiting for ${ctx.what}; the transaction may still land, check the account on the explorer`,
+      `the NEAR RPC stopped waiting for ${ctx.what}; the transaction may still land, check it before retrying`,
       504,
     );
   }
@@ -165,9 +199,7 @@ export function mapNearError(err: unknown, ctx: NearErrorContext): AgentGateErro
     const why = status === 429 ? 'rate-limited' : `answered HTTP ${status} to`;
     return new AgentGateError('RPC_ERROR', `the NEAR RPC ${why} ${ctx.what}`, 502);
   }
-  if (err instanceof SyntaxError) {
-    return new AgentGateError('RPC_BAD_RESPONSE', `the NEAR RPC answered ${ctx.what} with malformed JSON`, 502);
-  }
+  if (err instanceof SyntaxError) return badResponse(ctx.what, 'with malformed JSON');
   if (err instanceof RpcError) {
     // RPC-side errors (node syncing, unknown block, internal error): the node's own text.
     return new AgentGateError('RPC_ERROR', `the NEAR RPC failed ${ctx.what}: ${clip(err.message)}`, 502);
@@ -188,19 +220,37 @@ export function mapNearError(err: unknown, ctx: NearErrorContext): AgentGateErro
 }
 
 /**
- * A failed change call (sign + send through `Account`) as an AgentGateError: the signer-side
- * failures first, then everything `mapNearError` covers.
+ * A failed change call (sign + send through `Account`) as an AgentGateError: the send-side and
+ * signer-side failures first, then everything `mapNearError` covers.
  *
- * - NEAR refusing a tx the signer cannot fund → ERR_INSUFFICIENT_BALANCE (400), the mock's code
+ * - the RPC giving up on a signed tx (HTTP 408 or TIMEOUT_ERROR) → TxTimeoutError (TX_TIMEOUT,
+ *   504) naming the tx, which may still land. A 408 before anything was signed (the access key
+ *   or block read) stays RPC_TIMEOUT: nothing was sent, so a retry is safe.
+ * - NEAR refusing a tx the signer cannot fund (NotEnoughBalance), or one that leaves an account
+ *   short of its storage stake (LackBalanceForState) → ERR_INSUFFICIENT_BALANCE (400), the mock's code
  * - a signing key that is not an access key of the signer → SIGNER_KEY_NOT_FOUND (400)
  * - a signer account that does not exist → SIGNER_ACCOUNT_NOT_FOUND (400)
  */
 export function mapCallError(err: unknown, ctx: CallErrorContext): AgentGateError {
+  if (ctx.txHash !== undefined && (err instanceof TransactionTimeoutError || httpStatusOf(err) === 408)) {
+    return new TxTimeoutError(`the NEAR RPC stopped waiting for ${ctx.what}`, ctx.txHash, ctx.explorerUrl);
+  }
   if (err instanceof NotEnoughBalanceError || err instanceof NotEnoughBalanceForDepositError) {
     return new AgentGateError(
       'ERR_INSUFFICIENT_BALANCE',
       `ERR_INSUFFICIENT_BALANCE: ${err.signerId} has ${err.balance.toString()} yocto, the transaction needs ` +
         `${err.cost.toString()} yocto (deposit + gas)`,
+      400,
+    );
+  }
+  if (err instanceof LackBalanceForStateActionError) {
+    return new AgentGateError(
+      'ERR_INSUFFICIENT_BALANCE',
+      withTx(
+        `ERR_INSUFFICIENT_BALANCE: ${err.accountId} cannot cover its storage after this transaction ` +
+          `(${err.amount.toString()} yocto required)`,
+        err,
+      ),
       400,
     );
   }

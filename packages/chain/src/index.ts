@@ -4,7 +4,7 @@ import { LiveNearClient } from './near-live';
 
 export { MockChainHttpClient } from './mock';
 export { LiveNearClient } from './near-live';
-export { mapContractPanic } from './near-errors';
+export { TxTimeoutError, mapContractPanic } from './near-errors';
 export { verifyNearSignature } from './near-signature';
 export {
   defaultCredentialsPath,

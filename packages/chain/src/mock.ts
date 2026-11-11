@@ -3,7 +3,6 @@ import {
   MOCK_NETWORK,
   MOCK_REGISTRY_ID,
   REGISTRATION_DEPOSIT_YOCTO,
-  isValidNonce,
   stripTrailingSlashes,
 } from '@agentgate/shared';
 import type {
@@ -20,15 +19,10 @@ import type {
   VerifyResult,
   Yocto,
 } from '@agentgate/shared';
-
-const YOCTO_RE = /^(0|[1-9]\d*)$/;
+import { assertNonEmpty, assertServiceId, assertYocto, checkVerifyQuery, judgePaymentRecord } from './checks';
 
 /** Devnet is local/in-process, but never let a hung socket block a request forever. */
 const DEVNET_REQUEST_TIMEOUT_MS = 30_000;
-
-function invalid(message: string): AgentGateError {
-  return new AgentGateError('invalid_query', message, 400);
-}
 
 function requireMockSigner(signer: AnySigner): MockSigner {
   if (signer.kind !== 'mock') {
@@ -42,18 +36,6 @@ function requireMockSigner(signer: AnySigner): MockSigner {
     throw new AgentGateError('invalid_signer', 'mock signer accountId must not be empty', 400);
   }
   return signer;
-}
-
-function assertNonEmpty(value: string, what: string): void {
-  if (typeof value !== 'string' || value.trim() === '') {
-    throw invalid(`${what} must be a non-empty string`);
-  }
-}
-
-function assertServiceId(id: number): void {
-  if (!Number.isSafeInteger(id) || id < 1) {
-    throw invalid(`serviceId must be a positive integer, got ${String(id)}`);
-  }
 }
 
 /**
@@ -220,32 +202,9 @@ export class MockChainHttpClient implements ChainClient {
    * the transaction to the nonce (`tx_mismatch`) is a live-only check.
    */
   async verifyPayment(q: VerifyPaymentQuery): Promise<VerifyResult> {
-    if (typeof q.nonce !== 'string' || !isValidNonce(q.nonce)) {
-      throw invalid('nonce must be 1–20 decimal digits');
-    }
-    assertServiceId(q.serviceId);
-    if (typeof q.minAmountYocto !== 'string' || !YOCTO_RE.test(q.minAmountYocto)) {
-      throw invalid('minAmountYocto must be a yocto decimal string');
-    }
-    if (typeof q.maxAgeMs !== 'number' || !Number.isFinite(q.maxAgeMs) || q.maxAgeMs < 0) {
-      throw invalid('maxAgeMs must be a non-negative number');
-    }
-
+    checkVerifyQuery(q);
     const payment = await this.getPayment(q.nonce);
-    if (payment === null) return { ok: false, reason: 'not_found' };
-    if (payment.serviceId !== q.serviceId) return { ok: false, reason: 'wrong_service' };
-    if (BigInt(payment.amountYocto) < BigInt(q.minAmountYocto)) {
-      return { ok: false, reason: 'amount_too_low' };
-    }
-    if (Date.now() - payment.timestamp > q.maxAgeMs) return { ok: false, reason: 'expired' };
-    if (payment.attested) return { ok: false, reason: 'already_attested' };
-    return {
-      ok: true,
-      amountYocto: payment.amountYocto,
-      payer: payment.payer,
-      timestamp: payment.timestamp,
-      selfPaid: payment.selfPaid,
-    };
+    return judgePaymentRecord(payment, q, Date.now());
   }
 
   // ---- writes ---------------------------------------------------------------
@@ -273,9 +232,7 @@ export class MockChainHttpClient implements ChainClient {
   ): Promise<{ txHash: string }> {
     const mockSigner = requireMockSigner(signer);
     assertServiceId(input.serviceId);
-    if (typeof input.depositYocto !== 'string' || !YOCTO_RE.test(input.depositYocto)) {
-      throw invalid('depositYocto must be a yocto decimal string');
-    }
+    assertYocto(input.depositYocto, 'depositYocto');
     return await this.post<{ txHash: string }>('/registry/pay', {
       signer: mockSigner.accountId,
       serviceId: input.serviceId,
