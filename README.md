@@ -1,12 +1,14 @@
 # NearGate
 
+[![NEAR testnet](https://img.shields.io/badge/NEAR-testnet-00EC97?style=flat-square&logo=near&logoColor=white)](https://testnet.nearblocks.io/address/neargate-1112-registry.testnet) ![x402 HTTP 402](https://img.shields.io/badge/x402-HTTP%20402-6E56CF?style=flat-square) ![Rust 1.95.0](https://img.shields.io/badge/Rust-1.95.0-000000?style=flat-square&logo=rust&logoColor=white) ![TypeScript 5.9](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=flat-square&logo=typescript&logoColor=white) ![Node.js >= 22.22.2](https://img.shields.io/badge/Node.js-%E2%89%A5%2022.22.2-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white) ![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs&logoColor=white) ![MCP server](https://img.shields.io/badge/MCP-server-000000?style=flat-square&logo=modelcontextprotocol&logoColor=white) [![License MIT](https://img.shields.io/badge/license-MIT-3DA639?style=flat-square)](LICENSE)
+
 **Pay-per-call APIs for AI agents on NEAR.** NearGate puts an HTTP 402 paywall (x402) in front of any HTTP API and settles every call in NEAR through its own registry contract. An agent reads the 402 invoice, pays the registry, retries with the transaction as proof and gets the response. The gateway then records an attestation on chain, so every service carries a score backed by real payments.
 
 An AI agent can hold a NEAR account, but it cannot sign up for an API key or type in a card number. With NearGate it pays per call by itself: no account at the seller, no API key, no subscription. Its owner keeps control: the agent can run on a NEAR function-call key that can spend only a prepaid escrow, the NearGate client refuses any invoice above the cap it is given (`--max` on the CLI, `maxNear` over MCP), and the gateway can pay the agent's gas (NEP-366).
 
 Built during NEAR HACKATHON ([nearhackathon.com](https://nearhackathon.com)) as the NEAR port of AgentGate, the team's earlier x402 gateway. What existed before and what is new: [Built on AgentGate](#disclosure).
 
-**Contents:** [Try it](#try-it-no-keys) · [Do X → see Y](#do-x--see-y) · [How it works](#how-it-works) · [NEAR features](#near-features-used) · [Testnet deployment](#deployed-on-near-testnet) · [Tests](#tests) · [Error codes](#error-codes) · [Layout](#repository-layout) · [Built on AgentGate](#disclosure) · [Limits](#limits-and-trust-model) · [License](#license)
+**Contents:** [Try it](#try-it-no-keys) · [Do X → see Y](#do-x--see-y) · [How it works](#how-it-works) · [NEAR features](#near-features-used) · [Tech stack](#tech-stack) · [Testnet deployment](#deployed-on-near-testnet) · [Tests](#tests) · [Error codes](#error-codes) · [Layout](#repository-layout) · [Built on AgentGate](#disclosure) · [Limits](#limits-and-trust-model) · [License](#license)
 
 ## Try it (no keys)
 
@@ -132,7 +134,7 @@ The full spec, every 402 reason and the gateway routes are on the dashboard's `/
 | Own smart contract (Rust, near-sdk 5.30.1) | `neargate-registry` ([contracts/](contracts/README.md)): the service catalog, pay-through payments, the escrow, attestations, scores and an activity ring. It has no admin. Every byte a caller makes it store is prepaid by that caller (0.12 NEAR per service, 0.002 NEAR per payment and per escrow entry), measured with `env::storage_usage()` and refused with `ERR_STORAGE_EXCEEDED` past the budget. |
 | NEP-297 events | `EVENT_JSON` logs with `standard: "neargate"` for `service_registered`, `payment`, `attestation`, `service_status`, `attestor_changed`, `escrow_deposit` and `escrow_withdraw`. |
 | Function-call access keys | `npm run neargate -- agent-key add` gives an agent a key that NEAR itself restricts to the registry and the one method `pay_from_escrow`: it spends the prepaid escrow and nothing else, plus gas from the account's own balance up to its allowance. A function-call key cannot attach a deposit, so it could never sign `pay` (which carries the price as a deposit); that is why the escrow exists and `pay_from_escrow` attaches nothing. `withdraw_escrow` needs exactly 1 yoctoNEAR attached, so only a full-access key can take the escrow back. The sandbox test `agent_function_call_key_pays_from_escrow_only` proves both refusals (`DepositWithFunctionCall`, `MethodNameMismatch`). |
-| NEP-366 meta transactions | The gasless rail: the agent signs its `pay_from_escrow` as a `SignedDelegate` and sends it as the payment proof. Before relaying, the gateway checks its shape, its signature, that the key is the payer's and may call `pay_from_escrow`, its nonce and the escrow. It then relays it and pays only the gas. NEAR makes a relayer pay any deposit a relayed call attaches, so the gateway relays this one zero-deposit call and nothing else. Shipped: tested end to end on the mock chain (`e2e/gasless.test.ts`); its first testnet run comes with the deploy. |
+| NEP-366 meta transactions | The gasless rail: the agent signs its `pay_from_escrow` as a `SignedDelegate` and sends it as the payment proof. Before relaying, the gateway checks its shape, its signature, that the key is the payer's and may call `pay_from_escrow`, its nonce and the escrow. It then relays it and pays only the gas. NEAR makes a relayer pay any deposit a relayed call attaches, so the gateway relays this one zero-deposit call and nothing else. Shipped: tested end to end on the mock chain (`e2e/gasless.test.ts`). The registry it runs against is deployed; its first testnet run waits for the hosted gateway. |
 | Access keys as identity | Self-map: the gateway accepts a seller's private API URL only in a request signed by a key that `view_access_key` shows is a FullAccess key of the service owner. |
 
 The track hints this touches: AGENT COMMERCE (07 Agent Economy: agents paying for APIs), AGENT SECURITY and FUNCTION CALL KEYS (06 AI Security & Defense), META TRANSACTIONS (08 Real-World Money).
@@ -140,6 +142,20 @@ The track hints this touches: AGENT COMMERCE (07 Agent Economy: agents paying fo
 ### NEAR Agent Connect (not integrated)
 
 NearGate is the paying side of agentic commerce on NEAR. [Agent Connect](https://nearbuilders.org/build#agent-connect) (the NEAR Intents agent API) is a complementary agent wallet with owner rules: an agent withdraws within its owner's limits to its own NEAR account, then pays NearGate invoices from there, and NearGate's own caps (`--max`, `maxNear`, `BUDGET_EXCEEDED`, the escrow) add to those custody-side rules. It is not integrated: Agent Connect is a mainnet-only, experimental beta, and its owner-policy actions are transfers and withdrawals, not contract calls.
+
+## Tech stack
+
+| Layer | Stack | In NearGate |
+|---|---|---|
+| Smart contract | ![Rust 1.95.0](https://img.shields.io/badge/Rust-1.95.0-000000?style=flat-square&logo=rust&logoColor=white) ![near-sdk 5.30.1](https://img.shields.io/badge/near--sdk-5.30.1-00EC97?style=flat-square&logo=near&logoColor=white) ![WebAssembly wasm32](https://img.shields.io/badge/WebAssembly-wasm32-654FF0?style=flat-square&logo=webassembly&logoColor=white) ![cargo-near 0.22.0](https://img.shields.io/badge/cargo--near-0.22.0-00EC97?style=flat-square&logo=rust&logoColor=white) | `neargate-registry`: the catalog, pay-through payments, the escrow, attestations and scores ([contracts/](contracts/README.md)) |
+| Contract tests | ![near-workspaces 0.24.0](https://img.shields.io/badge/near--workspaces-0.24.0-00EC97?style=flat-square&logo=near&logoColor=white) | sandbox tests against a real NEAR node, next to the near-sdk unit tests |
+| Chain access | ![NEAR testnet](https://img.shields.io/badge/NEAR-testnet-00EC97?style=flat-square&logo=near&logoColor=white) ![near-api-js 7.4.0](https://img.shields.io/badge/near--api--js-7.4.0-00EC97?style=flat-square&logo=near&logoColor=white) ![near-cli-rs 0.30](https://img.shields.io/badge/near--cli--rs-0.30-00EC97?style=flat-square&logo=near&logoColor=white) | registry views and calls (`pay`, `pay_from_escrow`, `record_attestation`), NEP-366 delegates (with borsh 2.0.0); near-cli-rs runs the bootstrap and deploy scripts |
+| Gateway (x402) | ![Node.js >= 22.22.2](https://img.shields.io/badge/Node.js-%E2%89%A5%2022.22.2-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white) ![TypeScript 5.9](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=flat-square&logo=typescript&logoColor=white) ![Express 4.22](https://img.shields.io/badge/Express-4.22-000000?style=flat-square&logo=express&logoColor=white) | the 402 paywall, payment checks, the gasless relay and the attestation queue, with helmet 8, express-rate-limit 7 and undici 6 |
+| CLI and agent tools | ![MCP SDK 1.29](https://img.shields.io/badge/MCP%20SDK-1.29-000000?style=flat-square&logo=modelcontextprotocol&logoColor=white) ![Zod 3.25](https://img.shields.io/badge/Zod-3.25-3E67B1?style=flat-square&logo=zod&logoColor=white) | `npm run neargate -- …` (commander 12, bundled by tsup 8) and the five MCP tools |
+| Buyer agent | ![Claude via the Messages API](https://img.shields.io/badge/Claude-Messages%20API-D97757?style=flat-square&logo=claude&logoColor=white) | picks a service, keeps to its budget and pays; model from `LLM_MODEL` (default `claude-sonnet-4-6`), and a deterministic MockLlm without `ANTHROPIC_API_KEY` |
+| Dashboard | ![Next.js 16.2](https://img.shields.io/badge/Next.js-16.2-000000?style=flat-square&logo=nextdotjs&logoColor=white) ![React 18.3](https://img.shields.io/badge/React-18.3-61DAFB?style=flat-square&logo=react&logoColor=white) ![Tailwind CSS 3.4](https://img.shields.io/badge/Tailwind%20CSS-3.4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white) ![SWR 2.4](https://img.shields.io/badge/SWR-2.4-000000?style=flat-square&logo=swr&logoColor=white) | the catalog, service pages, activity feed and `/docs`, refreshed every 5 s |
+| Tests and CI | ![Vitest 3.2](https://img.shields.io/badge/Vitest-3.2-6E9F18?style=flat-square&logo=vitest&logoColor=white) ![GitHub Actions CI](https://img.shields.io/badge/GitHub%20Actions-CI-2088FF?style=flat-square&logo=githubactions&logoColor=white) | `npm test` (with tsx 4), and in CI on pull requests and pushes to `main`: typecheck, tests, dashboard build, the demo and `cargo test` |
+| Hosting (options; not hosted yet) | ![PM2](https://img.shields.io/badge/PM2-gateway%20%2B%20dashboard-2B037A?style=flat-square&logo=pm2&logoColor=white) ![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white) ![Vercel](https://img.shields.io/badge/Vercel-dashboard-000000?style=flat-square&logo=vercel&logoColor=white) ![Cloudflare Tunnel](https://img.shields.io/badge/Cloudflare-Tunnel-F38020?style=flat-square&logo=cloudflare&logoColor=white) | the runbook for each: [deploy/README.md](deploy/README.md) |
 
 ## Deployed on NEAR testnet
 
@@ -150,6 +166,7 @@ NearGate is the paying side of agentic commerce on NEAR. [Agent Connect](https:/
 | Registry contract | [`neargate-1112-registry.testnet`](https://testnet.nearblocks.io/address/neargate-1112-registry.testnet) (the CLI's default registry) |
 | Deploy + `new()` | [`8vM38YTz…`](https://testnet.nearblocks.io/txns/8vM38YTzoissBoq38UN4gTDmyjoFa3451WGj4krPHit) |
 | Gateway | `https://<gateway-host>`, run by `neargate-1112-gateway.testnet` (it signs the attestations and relays gasless payments) |
+| Seed accounts | `neargate-1112-seller.testnet` registers the seed service; `neargate-1112-buyer.testnet` pays for it |
 | Dashboard | `https://<dashboard-host>`: catalog, service pages, activity feed and `/docs` |
 | `register_service` | `<tx-register>` |
 | `pay` | `<tx-pay>` |
@@ -171,8 +188,8 @@ Hosting the gateway and the dashboard (pm2, Vercel or docker compose): [deploy/R
 
 | Suite | Command | Tests |
 |---|---|---|
-| TypeScript: every package, the e2e flows on the mock chain (in-process servers on port 0), the dashboard | `npm test` | 1,200+ (vitest); no network |
-| Contract: unit tests and near-workspaces sandbox tests | `cd contracts && cargo test` (build the wasm first: [contracts/README.md](contracts/README.md#test)) | 55+ |
+| TypeScript: every package, the e2e flows on the mock chain (in-process servers on port 0), the dashboard | `npm test` | 1,284 in 73 files (vitest); no network |
+| Contract: unit tests and near-workspaces sandbox tests | `cd contracts && cargo test` (build the wasm first: [contracts/README.md](contracts/README.md#test)) | 59: 53 unit, 6 sandbox |
 | Typecheck, dashboard build, demo | `npm run typecheck`, `npm run build`, `npm run demo` | |
 
 The e2e suites cover the full loop, the escrow and gasless rails, the owner-signed self-map, the CLI as a subprocess and the demo's six lines. Two guards keep this README honest: `e2e/readme.test.ts` checks every `npm run` script, relative link and live value in it, and `e2e/copy-guard.test.ts` scans every tracked file for the previous chain's vocabulary and the retired hosts. In the contract suite, `pay_refunds_excess_and_forwards_exact_price`, `self_paid_payment_cannot_be_attested_onchain` and `pay_storage_cost_is_covered_by_fee` run against a real NEAR sandbox node.
@@ -190,7 +207,7 @@ The ones a buyer or seller meets most. The CLI prints `error: <CODE>: <message>`
 | `ERR_ESCROW_INSUFFICIENT` | The escrow holds less than price + 0.002 NEAR. | `escrow deposit` more. |
 | `RELAYER_UNAVAILABLE` | `--gasless`, but the gateway offers no relayer. | Use `--from-escrow`. |
 | `TX_TIMEOUT` | A transaction was sent, but its outcome is unknown. | Check the named tx on nearblocks before retrying. |
-| `CONFIG_INVALID` | A bad flag or variable, e.g. live mode with no registry id. | Set `REGISTRY_CONTRACT_ID` (or pass `--registry`). |
+| `CONFIG_INVALID` | A bad flag or variable, e.g. a malformed account id or URL, or an unknown network. | Fix the named flag or variable. Unset, `REGISTRY_CONTRACT_ID` means the deployed registry. |
 | `GATEWAY_REQUIRED` | A live `wrap` with no `--gateway` and no hosted default. | Pass `--gateway`; the registry stores it for good. |
 | `settlement_pending` (402) | The payment is not visible yet, or a gasless relay is in flight, timed out or not read yet. | Retry the same proof after `Retry-After`; `buy --gasless` does it on its own. |
 | `tx_mismatch` (402) | The tx is not a successful `pay` of this nonce and service, signed by the named payer. | Present the right transaction. |
