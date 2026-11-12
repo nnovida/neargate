@@ -95,7 +95,7 @@ describe('CLI docs page: buy --gasless', () => {
       "waiting: the gateway's relay (tx <tx hash>, <explorer>/txns/<tx hash>) is settling",
       'for at most 150 s; it prints one waiting: line on stderr',
       'escrowPaid',
-      'npm run neargate -- escrow balance before buying again: buying again signs a NEW payment',
+      'neargate escrow balance before buying again: buying again signs a NEW payment',
       'always check the escrow balance before buying again: it can mean the gateway’s relay landed before the gateway restarted',
       'DELEGATE_REJECTED',
       'RELAYER_ERROR',

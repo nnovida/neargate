@@ -37,7 +37,7 @@ export const DOC_GROUPS: DocGroup[] = [
       {
         href: '/docs/quickstart',
         label: 'Quickstart',
-        keywords: ['live', 'hosted', 'deployment', 'railway', 'curl', 'demo', 'npm run demo', 'dev:seed', 'mock', 'offline', 'testnet', 'near:bootstrap', 'near:deploy', 'near:seed', 'smoke:live', 'DRY_RUN', 'FORCE_REDEPLOY', 'NEARGATE_PREFIX', 'tutorial'],
+        keywords: ['live', 'hosted', 'deployment', 'railway', 'curl', '@neargate/cli', 'npm install -g', 'npx', 'Missing script', 'demo', 'npm run demo', 'dev:seed', 'mock', 'offline', 'testnet', 'near:bootstrap', 'near:deploy', 'near:seed', 'smoke:live', 'DRY_RUN', 'FORCE_REDEPLOY', 'NEARGATE_PREFIX', 'tutorial'],
       },
     ],
   },

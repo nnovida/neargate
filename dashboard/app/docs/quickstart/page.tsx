@@ -6,6 +6,7 @@ import {
   DEFAULT_REGISTRY_CONTRACT_ID,
 } from '@agentgate/shared';
 import { CommandBlock } from '@/components/copy';
+import { CLI_INSTALL } from '@/lib/cli';
 import {
   Callout,
   CodeBlock,
@@ -57,11 +58,18 @@ export default function Page() {
           </P>
           <CommandBlock wrap text={`curl -i ${DEFAULT_GATEWAY_URL}/svc/1`} />
           <P>
-            From a clone (<M>npm install</M> once), the CLI targets this deployment by default:{' '}
-            <M>list</M> and <M>status</M> need no key.
+            The CLI is on npm and targets this deployment by default; <M>list</M> and{' '}
+            <M>status</M> need no key. Install it once, then run it from any folder:
           </P>
-          <CommandBlock text="npm run neargate -- list" />
-          <CommandBlock text="npm run neargate -- status 1" />
+          <CommandBlock text={CLI_INSTALL} />
+          <CommandBlock text="neargate list" />
+          <CommandBlock text="neargate status 1" />
+          <P>
+            Without installing, <M>npx -y @neargate/cli status 1</M> runs the same command. In a
+            clone of the repository, run it from the repository root as{' '}
+            <M>npm run neargate -- status 1</M>: that script exists only there, so in any other
+            folder npm answers <M>Missing script: &quot;neargate&quot;</M>.
+          </P>
           <P>
             To buy a call you need a funded testnet account whose key is in{' '}
             <M>~/.near-credentials/testnet/</M>; the near CLI’s faucet sponsor creates one:
@@ -70,7 +78,7 @@ export default function Page() {
             wrap
             text="near account create-account sponsor-by-faucet-service <you>.testnet autogenerate-new-keypair --signature-scheme ed25519 save-to-legacy-keychain network-config testnet create"
           />
-          <CommandBlock wrap text="npm run neargate -- buy 1 --max 0.02 --account <you>.testnet" />
+          <CommandBlock wrap text="neargate buy 1 --max 0.02 --account <you>.testnet" />
           <P>
             It pays 0.01 NEAR + 0.002 NEAR storage to the registry, prints the rates on stdout and a
             receipt with the explorer link on stderr; the gateway then attests the call and the

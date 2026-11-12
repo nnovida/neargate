@@ -7,6 +7,7 @@ import { formatNear, formatPriceWithStorage, yoctoToNear } from '@agentgate/shar
 import { fetcher, isChainDown, isNotFound } from '@/lib/fetcher';
 import { formatDateTime, formatInt, svcLabel, timeAgo } from '@/lib/format';
 import { shellUrl } from '@/lib/links';
+import { CLI_INSTALL } from '@/lib/cli';
 import type { ServiceDetailResponse } from '@/lib/api-types';
 import { AccountLink } from '@/components/account-id';
 import { TrustBadge } from '@/components/trust-badge';
@@ -55,8 +56,8 @@ function buildCurlSnippet(
   // The CLI defaults to live mode: against the offline devnet it needs --mode mock.
   const modeFlag = mode === 'mock' ? ' --mode mock' : '';
   return [
-    '# the same flow in one command (budget cap in NEAR, on price + storage fee):',
-    `#   npm run neargate -- buy ${serviceId} --max <near> --account <your account>${modeFlag}`,
+    `# the same flow in one command, with the CLI (${CLI_INSTALL}); the budget cap in NEAR covers price + storage fee:`,
+    `#   neargate buy ${serviceId} --max <near> --account <your account>${modeFlag}`,
     '',
     '# 1 — call without payment → HTTP 402 + PaymentRequiredResponse JSON',
     `curl -i ${target}`,

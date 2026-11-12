@@ -11,9 +11,7 @@ import { TrustBadge } from '@/components/trust-badge';
 import { CommandBlock } from '@/components/copy';
 import { ChainDownBanner, EmptyState, ErrorState, Skeleton, StaleNotice } from '@/components/states';
 import { LiveDot } from '@/components/live-dot';
-
-const WRAP_CMD =
-  'npm run neargate -- wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --account alice.testnet --gateway https://neargate-gateway-production.up.railway.app';
+import { CLI_INSTALL, WRAP_CMD } from '@/lib/cli';
 
 type View = 'grid' | 'list';
 const VIEW_KEY = 'neargate:catalog-view';
@@ -293,7 +291,10 @@ export function CatalogGrid() {
           label="registry empty"
           title="No services on-chain yet — wrap your first API in one command."
         >
-          <CommandBlock text={WRAP_CMD} />
+          <CommandBlock text={CLI_INSTALL} />
+          <div className="mt-3">
+            <CommandBlock text={WRAP_CMD} wrap />
+          </div>
           <p className="mt-3 text-center text-xs text-mut">
             Registers the service on-chain, puts a 402 paywall in front of it, and lists it here
             automatically.

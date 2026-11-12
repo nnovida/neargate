@@ -2,17 +2,14 @@ import Link from 'next/link';
 import { StatsStrip } from '@/components/stats-strip';
 import { CommandBlock } from '@/components/copy';
 import { REPO_URL } from '@/lib/seo';
-
-const LIST_CMD = 'npm run neargate -- list';
-const WRAP_CMD =
-  'npm run neargate -- wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --account alice.testnet --gateway https://neargate-gateway-production.up.railway.app';
+import { CLI_INSTALL, LIST_CMD, WRAP_CMD, WRAP_SHAPE } from '@/lib/cli';
 
 const STEPS = [
   {
     n: '01',
     title: 'Wrap',
     body: 'One command registers your API on the NEAR registry contract and drops a 402 paywall in front of it. No billing code, no accounts, no keys to issue.',
-    code: 'npm run neargate -- wrap <url> --price 0.5 --name <name> --account <you> --gateway <url>',
+    code: WRAP_SHAPE,
   },
   {
     n: '02',
@@ -88,7 +85,8 @@ export default function Home() {
         >
           <CommandBlock text={WRAP_CMD} wrap typewriter />
           <p className="mt-3 font-mono text-[11px] text-mut">
-            one line, your NEAR account and its key (read from ~/.near-credentials). Or read the live{' '}
+            one line after <span className="text-white">{CLI_INSTALL}</span>, with your NEAR account
+            and its key (read from ~/.near-credentials). Or read the live{' '}
             <Link href="/catalog" className="text-accent underline underline-offset-4">
               on-chain catalog
             </Link>{' '}
@@ -229,7 +227,8 @@ export default function Home() {
           <h2 className="mt-3 max-w-lg font-display text-2xl font-semibold tracking-tight text-white sm:text-3xl">
             Wrap your first API in under five minutes.
           </h2>
-          <div className="mt-7 max-w-2xl">
+          <div className="mt-7 max-w-2xl space-y-3">
+            <CommandBlock text={CLI_INSTALL} />
             <CommandBlock text={WRAP_CMD} wrap />
           </div>
           <p className="mt-4 font-mono text-[11px] text-mut">

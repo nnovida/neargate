@@ -41,17 +41,18 @@ export default function Page() {
       {/* ───────────────────────────── invocation ───────────────────────────── */}
       <H2 id="invocation">Invocation</H2>
       <P>
-        The CLI is on npm as <M>@neargate/cli</M>. Installed globally, it is the{' '}
-        <M>neargate</M> binary:
+        The CLI is on npm as <M>@neargate/cli</M>. Install it once and it is the <M>neargate</M>{' '}
+        binary, which runs from any folder; every example on this page uses it:
       </P>
       <CommandBlock text="npm install -g @neargate/cli" />
       <CommandBlock text="neargate <command> [args] [options]" />
       <P>
-        From a clone of the repository, run it through the root script instead; everything after
-        the <M>--</M> is forwarded to the binary. The examples on this page use this form, and work
-        the same with <M>neargate</M> in place of <M>npm run neargate --</M>:
+        To run one command without installing, use <M>npx -y @neargate/cli &lt;command&gt;</M>. In a
+        clone of the repository, the root script runs the same CLI from source, from the repository
+        root only (anywhere else npm answers <M>Missing script: &quot;neargate&quot;</M>); everything
+        after the <M>--</M> is forwarded, so <M>neargate status 1</M> becomes:
       </P>
-      <CommandBlock text="npm run neargate -- <command> [args] [options]" />
+      <CommandBlock text="npm run neargate -- status 1" />
       <P>
         To pay from your own code instead, <M>@neargate/sdk</M> (<M>npm install @neargate/sdk</M>)
         bundles the paying client with its types: <M>createNearGateChain()</M> reads and pays on
@@ -289,7 +290,7 @@ export default function Page() {
       </P>
       <CommandBlock
         wrap
-        text={'npm run neargate -- wrap <upstreamUrl> --price <near> --name <name> [options]'}
+        text={'neargate wrap <upstreamUrl> --price <near> --name <name> [options]'}
       />
       <PropList
         items={[
@@ -383,7 +384,7 @@ export default function Page() {
       </P>
       <H3 id="wrap-example">Example</H3>
       <CodeBlock
-        label="npm run neargate -- wrap http://localhost:4010/feed --price 0.5 --name &quot;RWA FX &amp; Gold Oracle&quot; --mode mock"
+        label="neargate wrap http://localhost:4010/feed --price 0.5 --name &quot;RWA FX &amp; Gold Oracle&quot; --mode mock"
         code={[
           'service id:      1',
           'public endpoint: http://localhost:4021/svc/1',
@@ -399,7 +400,7 @@ export default function Page() {
           </P>
           <CommandBlock
             wrap
-            text={`npm run neargate -- wrap https://<your api> --price 0.01 --name "<name>" --attestor ${DEFAULT_GATEWAY_ACCOUNT_ID} --account <seller>.testnet`}
+            text={`neargate wrap https://<your api> --price 0.01 --name "<name>" --attestor ${DEFAULT_GATEWAY_ACCOUNT_ID} --account <seller>.testnet`}
           />
         </>
       )}
@@ -418,7 +419,7 @@ export default function Page() {
         never registers. Live mode only: in mock mode it refuses with <M>LIVE_ONLY</M> and prints
         the admin-route <M>curl</M> to use instead.
       </P>
-      <CommandBlock wrap text="npm run neargate -- map <id> <upstreamUrl> --account <owner>" />
+      <CommandBlock wrap text="neargate map <id> <upstreamUrl> --account <owner>" />
       <P>
         It reads the service on-chain, checks that your key’s account is its owner (
         <M>NOT_SERVICE_OWNER</M>) and maps at the gateway the registry records for it, printing{' '}
@@ -431,7 +432,7 @@ export default function Page() {
         The on-chain catalog with scores and trust tiers. No key. The table goes to stdout (header
         included, so scripts can parse it); the empty-catalog hint goes to stderr.
       </P>
-      <CommandBlock text="npm run neargate -- list" />
+      <CommandBlock text="neargate list" />
       <CodeBlock
         label="output"
         code={[
@@ -453,7 +454,7 @@ export default function Page() {
         response body goes to <strong className="text-white">stdout</strong> (pipeable); the receipt
         goes to <strong className="text-white">stderr</strong>.
       </P>
-      <CommandBlock wrap text="npm run neargate -- buy <id> --account <buyer> --max <near> [--from-escrow | --gasless]" />
+      <CommandBlock wrap text="neargate buy <id> --account <buyer> --max <near> [--from-escrow | --gasless]" />
       <PropList
         items={[
           { name: '<id>', type: 'positive integer', required: true, desc: 'The service id (see list).' },
@@ -547,7 +548,7 @@ export default function Page() {
         One service in full: record, price (with the storage fee), payment target, owner, attestor,
         trust tier with the score, and its 10 latest attestations. No key.
       </P>
-      <CommandBlock text="npm run neargate -- status <id>" />
+      <CommandBlock text="neargate status <id>" />
 
       {/* ───────────────────────────── pause / resume ───────────────────────────── */}
       <H2 id="pause">pause</H2>
@@ -556,12 +557,12 @@ export default function Page() {
         registry’s <M>pay</M> panics <M>ERR_SERVICE_INACTIVE</M>) and its gateway answers{' '}
         <M>403 service_inactive</M>. Prints the service, its new state and the transaction.
       </P>
-      <CommandBlock text="npm run neargate -- pause <id> --account <owner>" />
+      <CommandBlock text="neargate pause <id> --account <owner>" />
       <H2 id="resume">resume</H2>
       <P>
         Owner only: calls <M>set_active(true)</M>; calls flow again.
       </P>
-      <CommandBlock text="npm run neargate -- resume <id> --account <owner>" />
+      <CommandBlock text="neargate resume <id> --account <owner>" />
       <P>
         Signing as anyone but the owner is rejected by the registry with{' '}
         <M>ERR_NOT_AUTHORIZED</M>, which the CLI rewords into an owner-only message.
@@ -577,7 +578,7 @@ export default function Page() {
         the buyer <DocLink href="#signer-flags">signer flags</DocLink>.
       </P>
       <H3 id="escrow-deposit">escrow deposit</H3>
-      <CommandBlock text="npm run neargate -- escrow deposit <near> --account <buyer>" />
+      <CommandBlock text="neargate escrow deposit <near> --account <buyer>" />
       <P>
         Calls <M>deposit_escrow</M> with the amount attached. The first deposit of an account must
         be <strong className="text-white">more than</strong> <M>0.002 NEAR</M>: the registry keeps
@@ -597,7 +598,7 @@ export default function Page() {
         ].join('\n')}
       />
       <H3 id="escrow-withdraw">escrow withdraw</H3>
-      <CommandBlock text="npm run neargate -- escrow withdraw <near> --account <buyer>" />
+      <CommandBlock text="neargate escrow withdraw <near> --account <buyer>" />
       <P>
         Calls <M>withdraw_escrow</M>, which sends the amount back to your account. It attaches
         exactly 1 yocto, so{' '}
@@ -608,7 +609,7 @@ export default function Page() {
         <M>tx</M> and, in live mode, <M>explorer</M>.
       </P>
       <H3 id="escrow-balance">escrow balance</H3>
-      <CommandBlock text="npm run neargate -- escrow balance [account]" />
+      <CommandBlock text="neargate escrow balance [account]" />
       <P>
         Reads an account’s escrow; no key. Without the argument (or <M>--account</M>) it reads the
         buyer account. An account that never deposited holds <M>0 NEAR</M>.
@@ -625,7 +626,7 @@ export default function Page() {
         offline devnet does not model). Gives an AI agent a key that can spend your escrow and
         nothing else.
       </P>
-      <CommandBlock wrap text="npm run neargate -- agent-key add --allowance <near> --account <owner> --key-file <owner key>" />
+      <CommandBlock wrap text="neargate agent-key add --allowance <near> --account <owner> --key-file <owner key>" />
       <PropList
         items={[
           {
@@ -686,7 +687,7 @@ export default function Page() {
         devnet, funds each with 1000 NEAR from its faucet and prints their balances with ready-to-paste
         export lines. The devnet must be running (<M>npm run dev</M>).
       </P>
-      <CommandBlock text="npm run neargate -- demo-accounts --mode mock" />
+      <CommandBlock text="neargate demo-accounts --mode mock" />
       <CodeBlock
         label="output (abbreviated)"
         code={[
@@ -710,7 +711,7 @@ export default function Page() {
         nothing else there; a readiness hint goes to stderr. It takes the config flags and the buyer{' '}
         <DocLink href="#signer-flags">signer flags</DocLink>.
       </P>
-      <CommandBlock text="npm run neargate -- mcp --account <buyer>" />
+      <CommandBlock text="neargate mcp --account <buyer>" />
       <H3 id="mcp-tools">Tools</H3>
       <DocTable
         head={['Tool', 'Does', 'Spends NEAR']}
@@ -1019,7 +1020,7 @@ export default function Page() {
               <Sub>
                 When the escrow did not pay (<M>no</M>), fix the cause and buy again. When it may
                 have (<M>unknown</M>), check the relay transaction on the explorer and{' '}
-                <M>npm run neargate -- escrow balance</M> before buying again: buying again signs a
+                <M>neargate escrow balance</M> before buying again: buying again signs a
                 NEW payment. After <M>invoice_used</M>, always check the escrow balance before
                 buying again: it can mean the gateway’s relay landed before the gateway restarted.
               </Sub>
