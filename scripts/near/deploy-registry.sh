@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # scripts/near/deploy-registry.sh — build the neargate-registry contract and deploy it to testnet.
 #
-#   1. cargo near build non-reproducible-wasm   (in contracts/registry)
+#   1. cargo near build non-reproducible-wasm   (in contracts/registry, with $HOME remapped to
+#      /build; a wasm that still embeds a path under $HOME is refused)
 #   2. near contract deploy <registry> use-file <wasm> with-init-call new json-args '{}' …
 #   3. near contract call-function as-read-only <registry> services_count …
 #      and the same view read through JSON-RPC: it must be 0 on a fresh deploy, or this fails
@@ -34,6 +35,10 @@ FORCE_REDEPLOY="${FORCE_REDEPLOY:-0}"
 MIN_BALANCE_NEAR="${MIN_REGISTRY_BALANCE_NEAR:-3}"
 BUILT_WASM="$ROOT/contracts/target/near/neargate_registry/neargate_registry.wasm"
 WASM="${NEARGATE_REGISTRY_WASM:-$BUILT_WASM}"
+# The wasm keeps the source path of every panic location. Remapping the builder's home directory
+# to /build keeps the local user name out of the code published on-chain; -C link-arg=-s is what
+# cargo-near passes by default, kept because --env RUSTFLAGS replaces it.
+WASM_RUSTFLAGS="-C link-arg=-s --remap-path-prefix=$HOME=/build"
 NETWORK=testnet
 NO_CODE_HASH=11111111111111111111111111111111
 
@@ -125,10 +130,13 @@ fi
 if [ -z "${NEARGATE_REGISTRY_WASM:-}" ]; then
   say ""
   say "== build (contracts/registry)"
-  (cd "$ROOT/contracts/registry" && run cargo near build non-reproducible-wasm)
+  (cd "$ROOT/contracts/registry" && run cargo near build non-reproducible-wasm --env "RUSTFLAGS=$WASM_RUSTFLAGS")
 fi
 if [ "$DRY_RUN" != 1 ]; then
   [ -f "$WASM" ] || die "wasm not found at $WASM (the build writes it there; or set NEARGATE_REGISTRY_WASM)"
+  if [ -n "${HOME:-}" ] && [ "$HOME" != / ] && grep -aqF "$HOME/" "$WASM"; then
+    die "$WASM embeds paths under $HOME; refusing to publish them on-chain. Build it with: cargo near build non-reproducible-wasm --env 'RUSTFLAGS=$WASM_RUSTFLAGS'"
+  fi
   say "wasm: $(wc -c < "$WASM" | tr -d ' ') bytes, sha256 $(sha256_of "$WASM")"
 fi
 

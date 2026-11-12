@@ -59,8 +59,9 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-**contributors@agentgate.invalid**.
+reported privately to the community leaders responsible for enforcement through
+this repository's GitHub **Security** tab → **Report a vulnerability** (say that it
+is a Code of Conduct report).
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the

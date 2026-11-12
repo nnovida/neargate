@@ -14,13 +14,12 @@
 export const RETIRED_WORDS = /casper|cspr|\bmotes\b|account-hash|deploy hash/i;
 
 /**
- * The AgentGate deployment's hosts and repository, and fetching its npm CLI: the package of that
- * name on npm is the old CLI for the previous chain, not NearGate's. Every npx, `npm install`,
- * `npm i` and `npm exec` form counts, whatever flags come between the command and the name
- * (`--yes`, `-g`, …). The workspace's name alone (a manifest, an import) does not.
+ * Fetching the CLI from npm: NearGate publishes nothing there, so a package of that name on npm
+ * would be someone else's. Every npx, `npm install`, `npm i` and `npm exec` form counts, whatever
+ * flags come between the command and the name (`--yes`, `-g`, …). The workspace's name alone (a
+ * manifest, an import, `npm run build -w`) does not.
  */
-export const RETIRED_HOSTS =
-  /gateway\.example\.org|agentgate\.example\.org|example\.invalid\/AgentGate|(?:\bnpx|\bnpm\s+(?:i|install|exec))\b[^\n]*@neargate\/cli/i;
+export const NPM_CLI_FETCH = /(?:\bnpx|\bnpm\s+(?:i|install|exec))\b[^\n]*@neargate\/cli/i;
 
 /**
  * The README section that discloses the AgentGate origin (the event asks for it). It is the only

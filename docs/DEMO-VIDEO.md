@@ -4,7 +4,7 @@ One take of the live testnet loop: the problem, a seller's API in the on-chain c
 
 ## Before recording
 
-- The registry is deployed on testnet and seeded (`neargate-1112-registry.testnet`), and the gateway and the dashboard are hosted (`https://<gateway-host>`, `https://<dashboard-host>`), with the gateway running `RELAYER_ENABLED=1` for the gasless shot.
+- The registry is deployed on testnet and seeded (`neargate-app-registry.testnet`), and the gateway and the dashboard are hosted (`https://<gateway-host>`, `https://<dashboard-host>`), with the gateway running `RELAYER_ENABLED=1` for the gasless shot.
 - A buyer account `<buyer>.testnet` with its key in `~/.near-credentials/testnet/`, about 1 NEAR, an escrow of 0.1 NEAR (`npm run neargate -- escrow deposit 0.1 --account <buyer>.testnet`) and an agent key (`npm run neargate -- agent-key add --allowance 0.25 --account <buyer>.testnet`).
 - Run every command once off camera, so nothing waits on a first compile. Terminal: dark theme, large font, about 110 × 30.
 - Browser tabs, in order: the dashboard's service page for #1 (note its score, for example 3/3), and nearblocks (it opens from the `buy` receipt's link).

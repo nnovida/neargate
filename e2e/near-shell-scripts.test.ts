@@ -227,7 +227,7 @@ describe('scripts/near shell scripts (bash, stub near/curl/cargo)', () => {
       expect(run.code, run.stderr).toBe(0);
       const steps = run.calls.filter((c) => !c.startsWith('curl'));
       expect(steps).toEqual([
-        'cargo near build non-reproducible-wasm',
+        `cargo near build non-reproducible-wasm --env RUSTFLAGS=-C link-arg=-s --remap-path-prefix=${home}=/build`,
         `near contract deploy ${REGISTRY} use-file ${wasm()} with-init-call new json-args {} ` +
           'prepaid-gas 100 Tgas attached-deposit 0 NEAR network-config testnet sign-with-legacy-keychain send',
         `near contract call-function as-read-only ${REGISTRY} services_count json-args {} network-config testnet now`,
@@ -302,6 +302,16 @@ describe('scripts/near shell scripts (bash, stub near/curl/cargo)', () => {
       expect(run.code, run.stderr).toBe(0);
       expect(run.calls.some((c) => c.startsWith('cargo'))).toBe(false);
       expect(run.calls.some((c) => c.includes(`use-file ${prebuilt} with-init-call new`))).toBe(true);
+    });
+
+    it('refuses, without deploying, a wasm that embeds paths under the builder home directory', async () => {
+      await putAccount(REGISTRY);
+      const leaky = path.join(tmp, 'leaky.wasm');
+      await writeFile(leaky, `\0asm panicked at ${home}/.cargo/registry/src/near-sdk/src/env.rs`);
+      const run = await bash('deploy-registry.sh', { ...env, NEARGATE_REGISTRY_WASM: leaky });
+      expect(run.code).not.toBe(0);
+      expect(run.stderr).toContain('embeds paths under');
+      notRun(run.calls);
     });
 
     it('fails, without deploying, when the build leaves no wasm', async () => {

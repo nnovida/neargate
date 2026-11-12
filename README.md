@@ -1,6 +1,6 @@
 # NearGate
 
-[![NEAR testnet](https://img.shields.io/badge/NEAR-testnet-00EC97?style=flat-square&logo=near&logoColor=white)](https://testnet.nearblocks.io/address/neargate-1112-registry.testnet) ![x402 HTTP 402](https://img.shields.io/badge/x402-HTTP%20402-6E56CF?style=flat-square) ![Rust 1.95.0](https://img.shields.io/badge/Rust-1.95.0-000000?style=flat-square&logo=rust&logoColor=white) ![TypeScript 5.9](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=flat-square&logo=typescript&logoColor=white) ![Node.js >= 22.22.2](https://img.shields.io/badge/Node.js-%E2%89%A5%2022.22.2-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white) ![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs&logoColor=white) ![MCP server](https://img.shields.io/badge/MCP-server-000000?style=flat-square&logo=modelcontextprotocol&logoColor=white) [![License MIT](https://img.shields.io/badge/license-MIT-3DA639?style=flat-square)](LICENSE)
+[![NEAR testnet](https://img.shields.io/badge/NEAR-testnet-00EC97?style=flat-square&logo=near&logoColor=white)](https://testnet.nearblocks.io/address/neargate-app-registry.testnet) ![x402 HTTP 402](https://img.shields.io/badge/x402-HTTP%20402-6E56CF?style=flat-square) ![Rust 1.95.0](https://img.shields.io/badge/Rust-1.95.0-000000?style=flat-square&logo=rust&logoColor=white) ![TypeScript 5.9](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=flat-square&logo=typescript&logoColor=white) ![Node.js >= 22.22.2](https://img.shields.io/badge/Node.js-%E2%89%A5%2022.22.2-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white) ![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs&logoColor=white) ![MCP server](https://img.shields.io/badge/MCP-server-000000?style=flat-square&logo=modelcontextprotocol&logoColor=white) [![License MIT](https://img.shields.io/badge/license-MIT-3DA639?style=flat-square)](LICENSE)
 
 **Pay-per-call APIs for AI agents on NEAR.** NearGate puts an HTTP 402 paywall (x402) in front of any HTTP API and settles every call in NEAR through its own registry contract. An agent reads the 402 invoice, pays the registry, retries with the transaction as proof and gets the response. The gateway then records an attestation on chain, so every service carries a score backed by real payments.
 
@@ -35,7 +35,7 @@ The two hashes are the buyer's `pay` and the gateway's `record_attestation` on t
 On NEAR testnet, also with no key:
 
 ```bash
-npm run neargate -- list                  # the live catalog of the registry neargate-1112-registry.testnet
+npm run neargate -- list                  # the live catalog of the registry neargate-app-registry.testnet
 curl -i https://<gateway-host>/svc/1      # an HTTP 402 with the x402 invoice
 ```
 
@@ -75,13 +75,13 @@ near account create-account sponsor-by-faucet-service <you>.testnet autogenerate
 | Do | See |
 |---|---|
 | **Buy:** `npm run neargate -- buy 1 --account <you>.testnet --max 0.05` | the response on stdout; on stderr the price + 0.002 NEAR storage, the `pay` tx and its nearblocks link. Seconds later the gateway's attestation lands and the service's score on the dashboard goes up by one. |
-| **Sell:** `npm run neargate -- wrap https://<your-api> --price 0.01 --name "My API" --account <you>.testnet --attestor neargate-1112-gateway.testnet --gateway https://<gateway-host>` | the service id, its public `/svc/<id>` endpoint and the register tx (0.12 NEAR deposit). Your API's URL never goes on chain: it is sent only to the gateway, in a request signed with your full-access key. |
+| **Sell:** `npm run neargate -- wrap https://<your-api> --price 0.01 --name "My API" --account <you>.testnet --attestor neargate-app-gateway.testnet --gateway https://<gateway-host>` | the service id, its public `/svc/<id>` endpoint and the register tx (0.12 NEAR deposit). Your API's URL never goes on chain: it is sent only to the gateway, in a request signed with your full-access key. |
 | **Agent key:** `npm run neargate -- escrow deposit 0.5 --account <you>.testnet`, then `npm run neargate -- agent-key add --allowance 0.25 --account <you>.testnet` | the escrow balance; then the key file `~/.near-credentials/testnet/<you>.testnet.neargate-agent.json` (mode 0600) and the AddKey tx. The agent buys with `npm run neargate -- buy 1 --from-escrow --account <you>.testnet --key-file <that file> --max 0.05`. |
-| **Gasless:** `npm run neargate -- buy 1 --gasless --account <you>.testnet --key-file <that file> --max 0.05` | `relayed: gasless — neargate-1112-gateway.testnet relayed the signed pay_from_escrow and paid the gas`. Your account's balance does not move; the escrow pays price + 0.002 NEAR. Needs a gateway running with `RELAYER_ENABLED=1`. |
+| **Gasless:** `npm run neargate -- buy 1 --gasless --account <you>.testnet --key-file <that file> --max 0.05` | `relayed: gasless — neargate-app-gateway.testnet relayed the signed pay_from_escrow and paid the gas`. Your account's balance does not move; the escrow pays price + 0.002 NEAR. Needs a gateway running with `RELAYER_ENABLED=1`. |
 | **MCP:** `npm run build -w packages/cli`, then add the server below to `claude_desktop_config.json` | Claude Desktop gets five tools: `neargate_list_services`, `neargate_get_service`, `neargate_get_invoice`, `neargate_escrow_balance` and `neargate_buy` (capped by `maxNear`; `fromEscrow` and `gasless` work with an agent key) |
 
 ```json
-{ "mcpServers": { "neargate": { "command": "node", "args": ["/path/to/neargate-app/packages/cli/dist/bin.js", "mcp", "--registry", "neargate-1112-registry.testnet", "--account", "<you>.testnet", "--key-file", "~/.near-credentials/testnet/<you>.testnet.neargate-agent.json"] } } }
+{ "mcpServers": { "neargate": { "command": "node", "args": ["/path/to/neargate-app/packages/cli/dist/bin.js", "mcp", "--registry", "neargate-app-registry.testnet", "--account", "<you>.testnet", "--key-file", "~/.near-credentials/testnet/<you>.testnet.neargate-agent.json"] } } }
 ```
 
 Every flag, the MCP tools in full and the docs pages behind them: [packages/cli/README.md](packages/cli/README.md), or `/docs` on the dashboard (`npm run dev:dashboard`, or `https://<dashboard-host>/docs`).
@@ -163,10 +163,10 @@ NearGate is the paying side of agentic commerce on NEAR. [Agent Connect](https:/
 
 | What | Value |
 |---|---|
-| Registry contract | [`neargate-1112-registry.testnet`](https://testnet.nearblocks.io/address/neargate-1112-registry.testnet) (the CLI's default registry) |
+| Registry contract | [`neargate-app-registry.testnet`](https://testnet.nearblocks.io/address/neargate-app-registry.testnet) (the CLI's default registry) |
 | Deploy + `new()` | [`8vM38YTz…`](https://testnet.nearblocks.io/txns/8vM38YTzoissBoq38UN4gTDmyjoFa3451WGj4krPHit) |
-| Gateway | `https://<gateway-host>`, run by `neargate-1112-gateway.testnet` (it signs the attestations and relays gasless payments) |
-| Seed accounts | `neargate-1112-seller.testnet` registers the seed service; `neargate-1112-buyer.testnet` pays for it |
+| Gateway | `https://<gateway-host>`, run by `neargate-app-gateway.testnet` (it signs the attestations and relays gasless payments) |
+| Seed accounts | `neargate-app-seller.testnet` registers the seed service; `neargate-app-buyer.testnet` pays for it |
 | Dashboard | `https://<dashboard-host>`: catalog, service pages, activity feed and `/docs` |
 | `register_service` | `<tx-register>` |
 | `pay` | `<tx-pay>` |
@@ -247,13 +247,13 @@ NearGate is the NEAR port of AgentGate, the team's x402 gateway for Casper, buil
 
 | | |
 |---|---|
-| Pre-hackathon baseline | tag `pre-hackathon` = `8dba09a` (2026-07-24), the last Casper commit |
+| Pre-hackathon baseline | tag `pre-hackathon` = `181dc9c` (2026-07-24), the last Casper commit |
 | Hackathon work | every commit after it, all from 2026-11-11 on, inside the NEAR HACKATHON window |
 | The diff | [pre-hackathon...hackathon-submission](../../compare/pre-hackathon...hackathon-submission) on GitHub; in a clone, `git diff --stat pre-hackathon hackathon-submission` |
 
 **Built in the window:** the `neargate-registry` contract with its escrow and sandbox tests (it replaces the Casper contracts); the NEAR client on near-api-js and the mock chain's NEAR mirror; the NEAR x402 rail (pay through the registry, verified by view and by transaction) and the NEAR-key self-map; the escrow, the restricted agent keys and the NEP-366 gasless relay; the CLI, MCP server, client and buyer agent on NEAR; the dashboard on NEAR; the testnet scripts, the hosting files, this README and the guards.
 
-**Carried over from AgentGate and ported:** the monorepo layout and the product idea; the gateway's 402 proxy (invoice store, nonce burn, attestation queue and retries, SSRF guard, rate limits); the CLI and MCP structure; the buyer agent and its MockLlm; the mock-chain devnet idea; the sample oracle; the dashboard's Next.js shell. **Removed:** the Casper contracts, the casper-js-sdk and CSPR.cloud client, and the CEP-18 facilitator rail. Internal package and env names keep the AgentGate prefix: the `@agentgate/*` workspaces, the CLI workspace `@neargate/cli`, `AGENTGATE_MODE` and `AGENTGATE_ADMIN_TOKEN`. NearGate publishes nothing to npm; the package of that name on npm is AgentGate's old CLI, so run the CLI from this repo with `npm run neargate -- …`.
+**Carried over from AgentGate and ported:** the monorepo layout and the product idea; the gateway's 402 proxy (invoice store, nonce burn, attestation queue and retries, SSRF guard, rate limits); the CLI and MCP structure; the buyer agent and its MockLlm; the mock-chain devnet idea; the sample oracle; the dashboard's Next.js shell. **Removed:** the Casper contracts, the casper-js-sdk and CSPR.cloud client, and the CEP-18 facilitator rail. Internal package and env names keep the AgentGate prefix: the `@agentgate/*` workspaces, `AGENTGATE_MODE` and `AGENTGATE_ADMIN_TOKEN`; the CLI workspace is `@neargate/cli`. NearGate publishes nothing to npm, so run the CLI from this repo with `npm run neargate -- …`.
 
 **Libraries:** near-sdk 5.30.1 and near-workspaces 0.24.0 (contract and sandbox tests); near-api-js 7.4.0 and borsh (NEAR client); Express with helmet, express-rate-limit and undici (gateway); the MCP SDK (`@modelcontextprotocol/sdk`), commander and zod (CLI); Next.js 16, React 18, SWR and Tailwind CSS (dashboard); vitest, tsx, tsup and TypeScript. No project template was used; the baseline is AgentGate itself.
 

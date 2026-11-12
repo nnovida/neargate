@@ -19,7 +19,7 @@ export function isNearNetwork(value: unknown): value is NearNetwork {
  * `npm run near:deploy`, tx 8vM38YTzoissBoq38UN4gTDmyjoFa3451WGj4krPHit). Override with
  * `REGISTRY_CONTRACT_ID` or the CLI's `--registry`.
  */
-export const DEFAULT_REGISTRY_CONTRACT_ID: string = 'neargate-1112-registry.testnet';
+export const DEFAULT_REGISTRY_CONTRACT_ID: string = 'neargate-app-registry.testnet';
 
 /**
  * Default hosted gateway the CLI targets in live mode when `--gateway` is unset. Empty until the

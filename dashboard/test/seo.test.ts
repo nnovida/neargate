@@ -91,7 +91,6 @@ describe('repository links in the page chrome', () => {
 
     for (const html of [nav, footer, home]) {
       expect(html).not.toMatch(/github/i);
-      expect(html).not.toContain('example/AgentGate');
     }
     expect(footer).toContain('MIT licensed');
   });

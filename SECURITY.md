@@ -14,10 +14,8 @@ testnet named in the README's "Deployed on NEAR testnet" section.
 
 Please **do not open a public issue** for security problems.
 
-Preferred: use GitHub's private vulnerability reporting on this repository
-(the **Security** tab → **Report a vulnerability**).
-
-Alternatively, email **contributors@agentgate.invalid** with:
+Use GitHub's private vulnerability reporting on this repository
+(the **Security** tab → **Report a vulnerability**), with:
 
 - a description of the issue and its impact,
 - reproduction steps or a proof of concept,

@@ -178,7 +178,7 @@ describe('README.md: the disclosure (Built on AgentGate)', () => {
   it('names the baseline, the window, the diff, the libraries and the AI assistance', () => {
     const section = disclosureSection(README);
     expect(section).toContain('`pre-hackathon`');
-    expect(section).toContain('8dba09a');
+    expect(section).toContain('181dc9c');
     expect(section).toContain('2026-07-24');
     expect(section).toContain('compare/pre-hackathon...hackathon-submission');
     for (const lib of ['near-sdk', 'near-workspaces', 'near-api-js', 'Next.js', 'Express', 'MCP', 'vitest']) {

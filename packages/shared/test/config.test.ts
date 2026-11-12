@@ -33,7 +33,7 @@ describe('loadConfig — mock mode defaults', () => {
     expect(cfg.nearRpcUrl).toBe('https://rpc.testnet.near.org');
     expect(cfg.nearExplorerUrl).toBe('https://testnet.nearblocks.io');
     expect(cfg.registryContractId).toBe(DEFAULT_REGISTRY_CONTRACT_ID);
-    expect(cfg.registryContractId).toBe('neargate-1112-registry.testnet');
+    expect(cfg.registryContractId).toBe('neargate-app-registry.testnet');
     expect(cfg.llmModel).toBe('claude-sonnet-4-6');
     expect(cfg.oracleStatic).toBe(false);
     expect(cfg.buyerBudgetNear).toBe('1');

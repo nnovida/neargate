@@ -32,6 +32,10 @@ cargo near build non-reproducible-wasm
 # -> contracts/target/near/neargate_registry/neargate_registry.wasm  (+ _abi.json)
 ```
 
+The wasm keeps the source path of every panic location, so a plain build embeds your home directory.
+`npm run near:deploy` builds with `--env "RUSTFLAGS=-C link-arg=-s --remap-path-prefix=$HOME=/build"`
+and refuses to deploy a wasm that still names a path under `$HOME`.
+
 Needs `cargo-near` (0.22) and the pinned toolchain. `rustup` installs the toolchain from
 `rust-toolchain.toml` on first use; `cargo-near` is a separate tool:
 
