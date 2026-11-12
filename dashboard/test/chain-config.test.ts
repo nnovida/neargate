@@ -45,10 +45,12 @@ describe('getChain (the dashboard server, live mode)', () => {
     expect(config.nearExplorerUrl).toBe('https://testnet.nearblocks.io');
   });
 
-  it('still fails closed on a missing registry id', async () => {
+  it('falls back to the deployed default registry when REGISTRY_CONTRACT_ID is unset', async () => {
     delete process.env['REGISTRY_CONTRACT_ID'];
+    const { DEFAULT_REGISTRY_CONTRACT_ID } = await import('@agentgate/shared');
     const { getChain } = await import('@/lib/server/chain');
 
-    expect(() => getChain()).toThrow(/REGISTRY_CONTRACT_ID/);
+    expect(DEFAULT_REGISTRY_CONTRACT_ID).not.toBe('');
+    expect(getChain().chain.registryId).toBe(DEFAULT_REGISTRY_CONTRACT_ID);
   });
 });

@@ -747,7 +747,7 @@ export default function Page() {
           [<M key="5">INVALID_ACCOUNT_ID</M>, 'An account flag is not a NEAR account id.'],
           [<M key="6">INVALID_AMOUNT</M>, 'A NEAR amount (--price, --max, maxNear, an escrow amount, --allowance) is not a plain non-negative decimal of at most 24 places, or is above the u128 maximum; an escrow amount or an agent key allowance of zero is refused too.'],
           [<M key="7">INVALID_PRICE</M>, '--price is below the registry minimum of 0.000001 NEAR.'],
-          [<M key="8">CONFIG_INVALID</M>, 'A flag or environment variable is invalid — for example live mode with no REGISTRY_CONTRACT_ID.'],
+          [<M key="8">CONFIG_INVALID</M>, 'A flag or environment variable is invalid — for example a malformed REGISTRY_CONTRACT_ID or an unknown NEAR_NETWORK.'],
           [<M key="9">SIGNER_MISSING</M>, 'No account for the command’s role: pass --account or set the role’s *_ACCOUNT_ID (mock: MOCK_*_ACCOUNT).'],
           [<M key="10">SIGNER_KEY_INVALID</M>, 'A secret key or key file is not a valid ed25519 NEAR key. The message names the source, never the key.'],
           [<M key="11">SIGNER_KEY_UNREADABLE</M>, 'The key file cannot be read.'],

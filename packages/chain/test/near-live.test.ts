@@ -301,7 +301,8 @@ describe('LiveNearClient construction', () => {
     expect(() => new LiveNearClient({ ...liveConfig(), registryContractId: '' })).toThrow(
       expect.objectContaining({ code: 'CONFIG_INVALID', message: expect.stringMatching(/REGISTRY_CONTRACT_ID/) }),
     );
-    expect(() => createChainClient(liveConfig({ REGISTRY_CONTRACT_ID: '' }))).toThrow(
+    // An empty REGISTRY_CONTRACT_ID env falls back to the deployed default, so blank the config itself.
+    expect(() => createChainClient({ ...liveConfig(), registryContractId: '' })).toThrow(
       expect.objectContaining({ code: 'CONFIG_INVALID' }),
     );
     expect(() => new LiveNearClient({ ...liveConfig(), registryContractId: 'Not A Registry' })).toThrow(

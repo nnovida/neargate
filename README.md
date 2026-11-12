@@ -33,11 +33,11 @@ The two hashes are the buyer's `pay` and the gateway's `record_attestation` on t
 On NEAR testnet, also with no key:
 
 ```bash
-npm run neargate -- list                  # the live catalog of the registry <registry-account>
+npm run neargate -- list                  # the live catalog of the registry neargate-1112-registry.testnet
 curl -i https://<gateway-host>/svc/1      # an HTTP 402 with the x402 invoice
 ```
 
-> Pending the testnet deploy and the hosting: `<registry-account>`, `<gateway-host>` and `<dashboard-host>` are placeholders, and until the registry id is set `list` answers `CONFIG_INVALID`.
+> Pending the hosting: `<gateway-host>` and `<dashboard-host>` are placeholders. The registry is deployed, but it holds no service until the seed runs through the hosted gateway, so for now `list` prints an empty catalog.
 
 ## Do X → see Y
 
@@ -73,13 +73,13 @@ near account create-account sponsor-by-faucet-service <you>.testnet autogenerate
 | Do | See |
 |---|---|
 | **Buy:** `npm run neargate -- buy 1 --account <you>.testnet --max 0.05` | the response on stdout; on stderr the price + 0.002 NEAR storage, the `pay` tx and its nearblocks link. Seconds later the gateway's attestation lands and the service's score on the dashboard goes up by one. |
-| **Sell:** `npm run neargate -- wrap https://<your-api> --price 0.01 --name "My API" --account <you>.testnet --attestor <gateway-account> --gateway https://<gateway-host>` | the service id, its public `/svc/<id>` endpoint and the register tx (0.12 NEAR deposit). Your API's URL never goes on chain: it is sent only to the gateway, in a request signed with your full-access key. |
+| **Sell:** `npm run neargate -- wrap https://<your-api> --price 0.01 --name "My API" --account <you>.testnet --attestor neargate-1112-gateway.testnet --gateway https://<gateway-host>` | the service id, its public `/svc/<id>` endpoint and the register tx (0.12 NEAR deposit). Your API's URL never goes on chain: it is sent only to the gateway, in a request signed with your full-access key. |
 | **Agent key:** `npm run neargate -- escrow deposit 0.5 --account <you>.testnet`, then `npm run neargate -- agent-key add --allowance 0.25 --account <you>.testnet` | the escrow balance; then the key file `~/.near-credentials/testnet/<you>.testnet.neargate-agent.json` (mode 0600) and the AddKey tx. The agent buys with `npm run neargate -- buy 1 --from-escrow --account <you>.testnet --key-file <that file> --max 0.05`. |
-| **Gasless:** `npm run neargate -- buy 1 --gasless --account <you>.testnet --key-file <that file> --max 0.05` | `relayed: gasless — <gateway-account> relayed the signed pay_from_escrow and paid the gas`. Your account's balance does not move; the escrow pays price + 0.002 NEAR. Needs a gateway running with `RELAYER_ENABLED=1`. |
+| **Gasless:** `npm run neargate -- buy 1 --gasless --account <you>.testnet --key-file <that file> --max 0.05` | `relayed: gasless — neargate-1112-gateway.testnet relayed the signed pay_from_escrow and paid the gas`. Your account's balance does not move; the escrow pays price + 0.002 NEAR. Needs a gateway running with `RELAYER_ENABLED=1`. |
 | **MCP:** `npm run build -w packages/cli`, then add the server below to `claude_desktop_config.json` | Claude Desktop gets five tools: `neargate_list_services`, `neargate_get_service`, `neargate_get_invoice`, `neargate_escrow_balance` and `neargate_buy` (capped by `maxNear`; `fromEscrow` and `gasless` work with an agent key) |
 
 ```json
-{ "mcpServers": { "neargate": { "command": "node", "args": ["/path/to/neargate-app/packages/cli/dist/bin.js", "mcp", "--registry", "<registry-account>", "--account", "<you>.testnet", "--key-file", "~/.near-credentials/testnet/<you>.testnet.neargate-agent.json"] } } }
+{ "mcpServers": { "neargate": { "command": "node", "args": ["/path/to/neargate-app/packages/cli/dist/bin.js", "mcp", "--registry", "neargate-1112-registry.testnet", "--account", "<you>.testnet", "--key-file", "~/.near-credentials/testnet/<you>.testnet.neargate-agent.json"] } } }
 ```
 
 Every flag, the MCP tools in full and the docs pages behind them: [packages/cli/README.md](packages/cli/README.md), or `/docs` on the dashboard (`npm run dev:dashboard`, or `https://<dashboard-host>/docs`).
@@ -143,12 +143,13 @@ NearGate is the paying side of agentic commerce on NEAR. [Agent Connect](https:/
 
 ## Deployed on NEAR testnet
 
-**Not deployed yet:** the testnet deploy fills in the values below; until then they are placeholders.
+**Deployed on 2026-11-12:** the registry and its four accounts. **Pending the hosting:** the gateway and dashboard hosts, and the register → pay → attest transactions that the seed writes through the hosted gateway, are still placeholders.
 
 | What | Value |
 |---|---|
-| Registry contract | `<registry-account>` (the CLI's default registry) |
-| Gateway | `https://<gateway-host>`, run by `<gateway-account>` (it signs the attestations and relays gasless payments) |
+| Registry contract | [`neargate-1112-registry.testnet`](https://testnet.nearblocks.io/address/neargate-1112-registry.testnet) (the CLI's default registry) |
+| Deploy + `new()` | [`8vM38YTz…`](https://testnet.nearblocks.io/txns/8vM38YTzoissBoq38UN4gTDmyjoFa3451WGj4krPHit) |
+| Gateway | `https://<gateway-host>`, run by `neargate-1112-gateway.testnet` (it signs the attestations and relays gasless payments) |
 | Dashboard | `https://<dashboard-host>`: catalog, service pages, activity feed and `/docs` |
 | `register_service` | `<tx-register>` |
 | `pay` | `<tx-pay>` |

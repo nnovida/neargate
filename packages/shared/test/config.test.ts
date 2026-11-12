@@ -33,7 +33,7 @@ describe('loadConfig — mock mode defaults', () => {
     expect(cfg.nearRpcUrl).toBe('https://rpc.testnet.near.org');
     expect(cfg.nearExplorerUrl).toBe('https://testnet.nearblocks.io');
     expect(cfg.registryContractId).toBe(DEFAULT_REGISTRY_CONTRACT_ID);
-    expect(cfg.registryContractId).toBe('');
+    expect(cfg.registryContractId).toBe('neargate-1112-registry.testnet');
     expect(cfg.llmModel).toBe('claude-sonnet-4-6');
     expect(cfg.oracleStatic).toBe(false);
     expect(cfg.buyerBudgetNear).toBe('1');
@@ -51,7 +51,7 @@ describe('loadConfig — mock mode defaults', () => {
 
   it('treats empty-string env values as unset (matches .env.example blanks)', () => {
     const cfg = loadConfig({ REGISTRY_CONTRACT_ID: '', NEAR_RPC_URL: '  ', MOCK_BUYER_ACCOUNT: '' });
-    expect(cfg.registryContractId).toBe('');
+    expect(cfg.registryContractId).toBe(DEFAULT_REGISTRY_CONTRACT_ID);
     expect(cfg.nearRpcUrl).toBe('https://rpc.testnet.near.org');
     expect(cfg.mockBuyerAccount).toBe('buyer.mock');
   });

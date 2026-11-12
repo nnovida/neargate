@@ -136,7 +136,11 @@ describe('createChainClient', () => {
   });
 
   it('refuses live mode with CONFIG_INVALID while no registry contract id is configured', () => {
-    const config = loadConfig({ AGENTGATE_MODE: 'live', AGENTGATE_ADMIN_TOKEN: 'strong-token-for-tests' });
+    // An empty REGISTRY_CONTRACT_ID env falls back to the deployed default, so blank it on the config.
+    const config = {
+      ...loadConfig({ AGENTGATE_MODE: 'live', AGENTGATE_ADMIN_TOKEN: 'strong-token-for-tests' }),
+      registryContractId: '',
+    };
     let thrown: unknown;
     try {
       createChainClient(config);

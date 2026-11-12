@@ -186,9 +186,9 @@ export default function Page() {
         ]}
       />
       <Callout tone="warn" title="LIVE MODE PREREQUISITES">
-        Live mode needs <M>REGISTRY_CONTRACT_ID</M> — with it unset the chain client refuses to
-        start with <M>CONFIG_INVALID</M>. The registry badge at the top of each docs page reads{' '}
-        <M>not deployed</M> until a default registry id is set. The gateway also needs{' '}
+        Live mode reads the registry from <M>REGISTRY_CONTRACT_ID</M> (the CLI&apos;s{' '}
+        <M>--registry</M>); with it unset it uses the default registry that the badge at the top of
+        each docs page shows. The gateway also needs{' '}
         <M>GATEWAY_ACCOUNT_ID</M> with a key and a non-default <M>AGENTGATE_ADMIN_TOKEN</M>; both are
         enforced by config. Reading the catalog (<M>neargate list</M>, <M>status</M>) needs no key.
       </Callout>
