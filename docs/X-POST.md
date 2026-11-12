@@ -12,7 +12,7 @@ Before posting, replace the two placeholders:
 X counts every link as 23 characters, so the post below stays within 280 characters once both links are in. It is plain ASCII on purpose: X counts some other characters, such as emoji, as two. `e2e/readme.test.ts` checks the length and the tags.
 
 ```text
-NearGate: AI agents pay for APIs per call in NEAR (HTTP 402 + our registry contract). Each paid call scores the seller on-chain. Agent keys can spend only a prepaid escrow.
+AI agents can't sign up for API keys. NearGate lets them pay per API call in NEAR, with on-chain seller scores and agent keys limited to a prepaid escrow. Feedback welcome!
 
 Built at NEAR HACKATHON @NEARProtocol #NEARHackathon
 REPO_URL

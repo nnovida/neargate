@@ -94,6 +94,30 @@ describe('repo-wide copy guard', () => {
     expect(offenders(RETIRED_HOSTS, {}, false)).toEqual([]);
   });
 
+  it('the old-CLI pattern catches every way to fetch it from npm, and not the workspace name alone', () => {
+    // Built from parts, so this file never spells a form the host check refuses.
+    const oldCli = ['@neargate', 'cli'].join('/');
+    for (const fetch of [
+      `npx ${oldCli} list`,
+      `npx -y ${oldCli}@latest list`,
+      `npx --yes ${oldCli} list`,
+      `npm i -g ${oldCli}`,
+      `npm install ${oldCli}@latest`,
+      `npm install --global ${oldCli}`,
+      `npm exec ${oldCli} -- list`,
+    ]) {
+      expect(RETIRED_HOSTS.test(fetch), fetch).toBe(true);
+    }
+    for (const ok of [
+      `"name": "${oldCli}",`,
+      `import { buy } from '${oldCli}';`,
+      `the CLI workspace \`${oldCli}\` keeps the old prefix; run it with \`npm run neargate -- list\``,
+      'npm run neargate -- list',
+    ]) {
+      expect(RETIRED_HOSTS.test(ok), ok).toBe(false);
+    }
+  });
+
   it('every file the word check skips exists and still needs its exemption', () => {
     for (const file of Object.keys(WORD_GUARD_FILES)) {
       const full = path.join(REPO_ROOT, file);

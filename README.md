@@ -2,11 +2,11 @@
 
 **Pay-per-call APIs for AI agents on NEAR.** NearGate puts an HTTP 402 paywall (x402) in front of any HTTP API and settles every call in NEAR through its own registry contract. An agent reads the 402 invoice, pays the registry, retries with the transaction as proof and gets the response. The gateway then records an attestation on chain, so every service carries a score backed by real payments.
 
-An AI agent can hold a NEAR account, but it cannot sign up for an API key or type in a card number. With NearGate it pays per call by itself: no account at the seller, no API key, no subscription. Its owner keeps control: the agent can run on a NEAR function-call key that can only spend a prepaid escrow, under a per-call cap, and the gateway can pay the agent's gas (NEP-366).
+An AI agent can hold a NEAR account, but it cannot sign up for an API key or type in a card number. With NearGate it pays per call by itself: no account at the seller, no API key, no subscription. Its owner keeps control: the agent can run on a NEAR function-call key that can spend only a prepaid escrow, the NearGate client refuses any invoice above the cap it is given (`--max` on the CLI, `maxNear` over MCP), and the gateway can pay the agent's gas (NEP-366).
 
 Built during NEAR HACKATHON ([nearhackathon.com](https://nearhackathon.com)) as the NEAR port of AgentGate, the team's earlier x402 gateway. What existed before and what is new: [Built on AgentGate](#disclosure).
 
-**Contents:** [Try it](#try-it-no-keys) · [Do X → see Y](#do-x--see-y) · [How it works](#how-it-works) · [NEAR features](#near-features-used) · [Deployed](#deployed-on-near-testnet) · [Tests](#tests) · [Error codes](#error-codes) · [Layout](#repository-layout) · [Built on AgentGate](#disclosure) · [Limits](#limits-and-trust-model) · [License](#license)
+**Contents:** [Try it](#try-it-no-keys) · [Do X → see Y](#do-x--see-y) · [How it works](#how-it-works) · [NEAR features](#near-features-used) · [Testnet deployment](#deployed-on-near-testnet) · [Tests](#tests) · [Error codes](#error-codes) · [Layout](#repository-layout) · [Built on AgentGate](#disclosure) · [Limits](#limits-and-trust-model) · [License](#license)
 
 ## Try it (no keys)
 
@@ -34,7 +34,7 @@ On NEAR testnet, also with no key:
 
 ```bash
 npm run neargate -- list                  # the live catalog of the registry <registry-account>
-curl -i https://<gateway-host>/svc/1      # HTTP/1.1 402 Payment Required + the x402 invoice
+curl -i https://<gateway-host>/svc/1      # an HTTP 402 with the x402 invoice
 ```
 
 > Pending the testnet deploy and the hosting: `<registry-account>`, `<gateway-host>` and `<dashboard-host>` are placeholders, and until the registry id is set `list` answers `CONFIG_INVALID`.
@@ -59,7 +59,8 @@ npm run dev:dashboard                                                # terminal 
 | `npm run neargate -- buy 1 --from-escrow --max 1 --mode mock` | `from: escrow (nothing attached; the escrow was debited)` |
 | `npm run neargate -- buy 1 --gasless --max 1 --mode mock` | `relayed: gasless — gateway.mock relayed the signed pay_from_escrow and paid the gas` |
 | `npm run neargate -- wrap http://localhost:4010/feed --price 0.25 --name "Gold Spot Feed" --mode mock` | `service id: 2`, the endpoint `http://localhost:4021/svc/2` and the register tx |
-| `MCP_CMD="npx tsx packages/cli/src/bin.ts mcp --mode mock" scripts/mcp.sh list` | the catalog as the MCP tool `neargate_list_services` returns it; `scripts/mcp.sh tools` lists all five tools |
+| `MCP_CMD="npx tsx packages/cli/src/bin.ts mcp --mode mock" scripts/mcp.sh tools` | the five MCP tools: `neargate_list_services`, `neargate_get_service`, `neargate_get_invoice`, `neargate_escrow_balance`, `neargate_buy` |
+| `MCP_CMD="npx tsx packages/cli/src/bin.ts mcp --mode mock" scripts/mcp.sh list` | the catalog as the MCP tool `neargate_list_services` returns it |
 
 ### On NEAR testnet (needs a funded testnet account and its key)
 
@@ -130,7 +131,7 @@ The full spec, every 402 reason and the gateway routes are on the dashboard's `/
 |---|---|
 | Own smart contract (Rust, near-sdk 5.30.1) | `neargate-registry` ([contracts/](contracts/README.md)): the service catalog, pay-through payments, the escrow, attestations, scores and an activity ring. It has no admin. Every byte a caller makes it store is prepaid by that caller (0.12 NEAR per service, 0.002 NEAR per payment and per escrow entry), measured with `env::storage_usage()` and refused with `ERR_STORAGE_EXCEEDED` past the budget. |
 | NEP-297 events | `EVENT_JSON` logs with `standard: "neargate"` for `service_registered`, `payment`, `attestation`, `service_status`, `attestor_changed`, `escrow_deposit` and `escrow_withdraw`. |
-| Function-call access keys | `neargate agent-key add` gives an agent a key that NEAR itself restricts to the registry and the one method `pay_from_escrow`: it spends the prepaid escrow and nothing else, plus gas from the account's own balance up to its allowance. A function-call key cannot attach a deposit, so it could never sign `pay` (which carries the price as a deposit); that is why the escrow exists and `pay_from_escrow` attaches nothing. `withdraw_escrow` needs exactly 1 yoctoNEAR attached, so only a full-access key can take the escrow back. The sandbox test `agent_function_call_key_pays_from_escrow_only` proves both refusals (`DepositWithFunctionCall`, `MethodNameMismatch`). |
+| Function-call access keys | `npm run neargate -- agent-key add` gives an agent a key that NEAR itself restricts to the registry and the one method `pay_from_escrow`: it spends the prepaid escrow and nothing else, plus gas from the account's own balance up to its allowance. A function-call key cannot attach a deposit, so it could never sign `pay` (which carries the price as a deposit); that is why the escrow exists and `pay_from_escrow` attaches nothing. `withdraw_escrow` needs exactly 1 yoctoNEAR attached, so only a full-access key can take the escrow back. The sandbox test `agent_function_call_key_pays_from_escrow_only` proves both refusals (`DepositWithFunctionCall`, `MethodNameMismatch`). |
 | NEP-366 meta transactions | The gasless rail: the agent signs its `pay_from_escrow` as a `SignedDelegate` and sends it as the payment proof. Before relaying, the gateway checks its shape, its signature, that the key is the payer's and may call `pay_from_escrow`, its nonce and the escrow. It then relays it and pays only the gas. NEAR makes a relayer pay any deposit a relayed call attaches, so the gateway relays this one zero-deposit call and nothing else. Shipped: tested end to end on the mock chain (`e2e/gasless.test.ts`); its first testnet run comes with the deploy. |
 | Access keys as identity | Self-map: the gateway accepts a seller's private API URL only in a request signed by a key that `view_access_key` shows is a FullAccess key of the service owner. |
 
@@ -141,6 +142,8 @@ The track hints this touches: AGENT COMMERCE (07 Agent Economy: agents paying fo
 NearGate is the paying side of agentic commerce on NEAR. [Agent Connect](https://nearbuilders.org/build#agent-connect) (the NEAR Intents agent API) is a complementary agent wallet with owner rules: an agent withdraws within its owner's limits to its own NEAR account, then pays NearGate invoices from there, and NearGate's own caps (`--max`, `maxNear`, `BUDGET_EXCEEDED`, the escrow) add to those custody-side rules. It is not integrated: Agent Connect is a mainnet-only, experimental beta, and its owner-policy actions are transfers and withdrawals, not contract calls.
 
 ## Deployed on NEAR testnet
+
+**Not deployed yet:** the testnet deploy fills in the values below; until then they are placeholders.
 
 | What | Value |
 |---|---|
@@ -180,7 +183,7 @@ The ones a buyer or seller meets most. The CLI prints `error: <CODE>: <message>`
 | Code | Meaning | What to do |
 |---|---|---|
 | `BUDGET_EXCEEDED` | The invoice total (price + 0.002 NEAR) is above `--max`, `maxNear` or the agent's budget. | Nothing was paid. Raise the cap or pick another service. |
-| `PAID_NOT_SERVED` | The `pay` went through, but the gateway did not serve the call. The error names the tx and the nonce. | Do not buy again: that pays twice. Re-present the same proof (an `X-PAYMENT` for that tx and nonce) once the gateway answers. |
+| `PAID_NOT_SERVED` | The `pay` went through, but the gateway did not serve the call. The error names the tx and the nonce. | Do not buy again: that pays twice. Re-present the same proof once the gateway answers: [the `curl` below](#re-present-a-paid-proof). |
 | `GASLESS_NOT_SERVED` | `--gasless`: the gateway did not serve the call, after `buy` re-presented the signed delegate for as long as the relay was settling (up to 150 s). The escrow paid only if the gateway's relay landed; the message says whether it did not, or may have. | If it may have paid, or after `invoice_used`, check the relay tx it links and `escrow balance` before buying again: buying again signs a new payment. |
 | `PRICE_MISMATCH` | Escrow or gasless: the invoice total is not the on-chain price + 0.002 NEAR. | Nothing was sent. Do not pay this gateway's invoice from the escrow. |
 | `ERR_ESCROW_INSUFFICIENT` | The escrow holds less than price + 0.002 NEAR. | `escrow deposit` more. |
@@ -191,6 +194,13 @@ The ones a buyer or seller meets most. The CLI prints `error: <CODE>: <message>`
 | `settlement_pending` (402) | The payment is not visible yet, or a gasless relay is in flight, timed out or not read yet. | Retry the same proof after `Retry-After`; `buy --gasless` does it on its own. |
 | `tx_mismatch` (402) | The tx is not a successful `pay` of this nonce and service, signed by the named payer. | Present the right transaction. |
 | `ERR_*` (contract) | The registry refused a call, e.g. `ERR_NONCE_USED`, `ERR_SELF_PAYMENT`, `ERR_DEPOSIT_TOO_LOW`. | The full list: [contracts/README.md](contracts/README.md#errors). |
+
+<a id="re-present-a-paid-proof"></a>After `PAID_NOT_SERVED`, re-present the paid transaction (`pay` or `pay_from_escrow`): send the same request again with an `X-PAYMENT` header, the base64 of the JSON below (the format is on the dashboard's `/docs/protocol` page, [source](dashboard/app/docs/protocol/page.tsx)). The gateway serves it once; after that, the nonce answers `invoice_used`.
+
+```bash
+TX=<tx hash> NONCE=<nonce> PAYER=<you>.testnet
+curl -i -H "X-PAYMENT: $(printf '{"x402Version":1,"scheme":"exact","network":"near-testnet","payload":{"kind":"tx","transaction":"%s","nonce":"%s","payer":"%s"}}' "$TX" "$NONCE" "$PAYER" | base64 | tr -d '\n')" https://<gateway-host>/svc/<id>
+```
 
 ## Repository layout
 
@@ -221,7 +231,7 @@ NearGate is the NEAR port of AgentGate, the team's x402 gateway for Casper, buil
 |---|---|
 | Pre-hackathon baseline | tag `pre-hackathon` = `8dba09a` (2026-07-24), the last Casper commit |
 | Hackathon work | every commit after it, all from 2026-11-11 on, inside the NEAR HACKATHON window |
-| The diff | `<REPO_URL>/compare/pre-hackathon...hackathon-submission`; in a clone, `git diff --stat pre-hackathon hackathon-submission` |
+| The diff | [pre-hackathon...hackathon-submission](../../compare/pre-hackathon...hackathon-submission) on GitHub; in a clone, `git diff --stat pre-hackathon hackathon-submission` |
 
 **Built in the window:** the `neargate-registry` contract with its escrow and sandbox tests (it replaces the Casper contracts); the NEAR client on near-api-js and the mock chain's NEAR mirror; the NEAR x402 rail (pay through the registry, verified by view and by transaction) and the NEAR-key self-map; the escrow, the restricted agent keys and the NEP-366 gasless relay; the CLI, MCP server, client and buyer agent on NEAR; the dashboard on NEAR; the testnet scripts, the hosting files, this README and the guards.
 

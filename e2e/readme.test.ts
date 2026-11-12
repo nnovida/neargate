@@ -5,12 +5,15 @@
  * code:
  *   - the two-command offline path, the six lines it prints, the diff link and the disclosure;
  *   - every live value is its placeholder while the shared default is empty, and the value itself
- *     (placeholder gone) once it is set, so the testnet deploy and the hosting cannot forget the
- *     README;
+ *     (placeholder gone) once it is set, in the README and the demo-video script alike, so the
+ *     testnet deploy and the hosting cannot forget them; the deployment section says "Not deployed
+ *     yet" until the registry exists;
  *   - the retired chain vocabulary only inside the `## Built on AgentGate` section;
- *   - every `npm run` script, relative link and #anchor it shows exists;
+ *   - every `npm run` script, relative link and #anchor it shows exists; every CLI line it shows runs
+ *     as `npm run neargate -- …`, and every `scripts/mcp.sh` line names its server (MCP_CMD);
  *   - the X post fits one post and carries the event's tags; the demo-video script runs 90–120 s;
- *   - the LICENSE keeps both holders, and the root package is the private `neargate`.
+ *   - the LICENSE keeps both holders, the root package is the private `neargate`, and no package
+ *     of the repo can be published to npm.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -43,6 +46,19 @@ function readJson(file: string): Record<string, unknown> {
 
 const README = read('README.md');
 
+/** The files that carry the live values: the README, and the demo-video script's set-up. */
+const LIVE_VALUE_DOCS = ['README.md', 'docs/DEMO-VIDEO.md'] as const;
+
+/** The first line of the README's deployment section while the registry is not deployed. */
+const NOT_DEPLOYED = 'Not deployed yet';
+
+/**
+ * The disclosure's diff link. GitHub resolves it against the repository (`<repo>/compare/…`), so
+ * it works without knowing the repository URL; it is not a file, so the relative-link check skips
+ * exactly this one target.
+ */
+const COMPARE_LINK = '../../compare/pre-hackathon...hackathon-submission';
+
 /** The live values the testnet deploy (Task 7b) and the hosting (Task 9b) fill in. */
 const LIVE_VALUES = [
   { constant: 'DEFAULT_REGISTRY_CONTRACT_ID', value: DEFAULT_REGISTRY_CONTRACT_ID, placeholder: '<registry-account>' },
@@ -60,6 +76,15 @@ function githubSlug(heading: string): string {
     .trim()
     .toLowerCase();
   return text.replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/ /g, '-');
+}
+
+/** One `## ` section of the README: its heading line up to the next `## ` heading ('' if none). */
+function readmeSection(heading: string): string {
+  const lines = README.split('\n');
+  const start = lines.indexOf(heading);
+  if (start === -1) return '';
+  const next = lines.findIndex((line, i) => i > start && line.startsWith('## '));
+  return lines.slice(start, next === -1 ? undefined : next).join('\n');
 }
 
 /** The README's markdown lines outside fenced code blocks. */
@@ -99,17 +124,31 @@ describe('README.md: the first screen', () => {
   });
 });
 
-describe('README.md: live values (filled in by the testnet deploy and the hosting)', () => {
-  for (const { constant, value, placeholder } of LIVE_VALUES) {
-    it(`${constant}: the placeholder ${placeholder} while it is empty, the value (and no placeholder) once set`, () => {
-      if (value === '') {
-        expect(README).toContain(placeholder);
-      } else {
-        expect(README).toContain(value);
-        expect(README).not.toContain(placeholder);
-      }
-    });
+describe('live values in the README and the demo-video script (filled in by the testnet deploy and the hosting)', () => {
+  for (const doc of LIVE_VALUE_DOCS) {
+    for (const { constant, value, placeholder } of LIVE_VALUES) {
+      it(`${doc}, ${constant}: the placeholder ${placeholder} while it is empty, the value (and no placeholder) once set`, () => {
+        const text = readOrEmpty(doc);
+        if (value === '') {
+          expect(text).toContain(placeholder);
+        } else {
+          expect(text).toContain(value);
+          expect(text).not.toContain(placeholder);
+        }
+      });
+    }
   }
+
+  it(`the deployment section opens with "${NOT_DEPLOYED}" while the registry id is empty, and no line says so once it is set`, () => {
+    const section = readmeSection('## Deployed on NEAR testnet');
+    expect(section).not.toBe('');
+    if (DEFAULT_REGISTRY_CONTRACT_ID === '') {
+      const firstLine = section.split('\n').slice(1).find((line) => line.trim() !== '') ?? '';
+      expect(firstLine).toContain(NOT_DEPLOYED);
+    } else {
+      expect(README).not.toContain(NOT_DEPLOYED);
+    }
+  });
 
   it('the gateway account: a placeholder until the registry is deployed (its accounts exist from then on)', () => {
     if (DEFAULT_REGISTRY_CONTRACT_ID === '') expect(README).toContain('<gateway-account>');
@@ -152,6 +191,7 @@ describe('README.md: the disclosure (Built on AgentGate)', () => {
 
   it('links the diff and does not link the old repository (the in-repo history is the disclosure)', () => {
     expect(README).toContain('compare/pre-hackathon...hackathon-submission');
+    expect(disclosureSection(README)).toContain(`](${COMPARE_LINK})`);
     expect(README).not.toMatch(/github\.com\/[^\s)]*agentgate/i);
   });
 
@@ -175,11 +215,24 @@ describe('README.md: everything it points at exists', () => {
     expect(used.filter((s) => !scripts.includes(s))).toEqual([]);
   });
 
+  it('every CLI command it shows runs from the repo as `npm run neargate -- …` (nothing installs a `neargate` bin)', () => {
+    const bare = README.split('\n').filter((line) => /`neargate (?:list|status|wrap|map|buy|escrow|agent-key|mcp|demo-accounts)\b/.test(line));
+    expect(bare).toEqual([]);
+  });
+
+  it('every `scripts/mcp.sh` command it shows names its server with MCP_CMD (without it the helper runs live mode)', () => {
+    const uses = [...README.matchAll(/(MCP_CMD="[^"]+" )?scripts\/mcp\.sh \w+/g)];
+    expect(uses.length).toBeGreaterThan(0);
+    expect(uses.filter((m) => m[1] === undefined).map((m) => m[0])).toEqual([]);
+  });
+
   it('every relative link resolves to a tracked path', () => {
     const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: REPO_ROOT, encoding: 'utf8' }).split('\0');
     const targets = [...proseLines(README).join('\n').matchAll(/\]\(([^)\s]+)\)/g)]
       .map((m) => m[1]!)
       .filter((t) => !/^(https?:|mailto:|#)/.test(t))
+      // GitHub's compare view, not a file: see COMPARE_LINK.
+      .filter((t) => t !== COMPARE_LINK)
       .map((t) => t.replace(/#.*$/, '').replace(/\/$/, ''));
     expect(targets.length).toBeGreaterThan(3);
     const missing = targets.filter((t) => !tracked.some((f) => f === t || f.startsWith(`${t}/`)) || !existsSync(path.join(REPO_ROOT, t)));
@@ -264,6 +317,18 @@ describe('LICENSE and the root package', () => {
     expect(lock['name']).toBe('neargate');
     const root = (lock['packages'] as Record<string, Record<string, unknown>>)[''];
     expect(root?.['name']).toBe('neargate');
+  });
+
+  it('no package of the repo can be published to npm (the README says NearGate publishes nothing)', () => {
+    const manifests = execFileSync('git', ['ls-files', '-z', '--', 'package.json', '*/package.json'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+    })
+      .split('\0')
+      .filter((f) => f !== '');
+    expect(manifests.length).toBeGreaterThan(8);
+    const publishable = manifests.filter((f) => readJson(f)['private'] !== true);
+    expect(publishable).toEqual([]);
   });
 
   it('CONTRIBUTING.md states the Node floor and the neargate script', () => {

@@ -1,6 +1,7 @@
 {
   "name": "@neargate/cli",
   "version": "0.2.1",
+  "private": true,
   "description": "Wrap any HTTP API into a paid x402 service on NEAR — HTTP 402 micropayments in native NEAR with on-chain discovery and reputation.",
   "type": "module",
   "bin": {
@@ -27,13 +28,6 @@
     "web3",
     "cli"
   ],
-  "publishConfig": {
-    "access": "public",
-    "main": "./dist/index.js",
-    "exports": {
-      ".": "./dist/index.js"
-    }
-  },
   "scripts": {
     "build": "tsup",
     "prepack": "tsup",
