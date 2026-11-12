@@ -1,14 +1,32 @@
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
-import { Inter, JetBrains_Mono, Space_Grotesk } from 'next/font/google';
+import localFont from 'next/font/local';
 import { Nav } from '@/components/nav';
 import { Footer } from '@/components/footer';
 import { SITE_URL } from '@/lib/seo';
 import './globals.css';
 
-const display = Space_Grotesk({ subsets: ['latin'], variable: '--font-display' });
-const body = Inter({ subsets: ['latin'], variable: '--font-body' });
-const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-mono' });
+// Bundled variable fonts (SIL OFL 1.1, licenses beside them in ./fonts), so `next build` needs no
+// network access. Subset to Latin, punctuation, arrows and box drawing.
+const display = localFont({
+  src: './fonts/SpaceGrotesk-Variable.woff2',
+  weight: '300 700',
+  display: 'swap',
+  variable: '--font-display',
+});
+const body = localFont({
+  src: './fonts/Inter-Variable.woff2',
+  weight: '100 900',
+  display: 'swap',
+  variable: '--font-body',
+});
+const mono = localFont({
+  src: './fonts/JetBrainsMono-Variable.woff2',
+  weight: '100 800',
+  display: 'swap',
+  variable: '--font-mono',
+  adjustFontFallback: false,
+});
 
 const SITE_TAGLINE = 'NearGate — Stripe for AI agents on NEAR';
 const SITE_DESCRIPTION =

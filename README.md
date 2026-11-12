@@ -188,7 +188,7 @@ Hosting the gateway and the dashboard (pm2, Vercel or docker compose): [deploy/R
 
 | Suite | Command | Tests |
 |---|---|---|
-| TypeScript: every package, the e2e flows on the mock chain (in-process servers on port 0), the dashboard | `npm test` | 1,284 in 73 files (vitest); no network |
+| TypeScript: every package, the e2e flows on the mock chain (in-process servers on port 0), the dashboard | `npm test` | 1,287 in 74 files (vitest); no network |
 | Contract: unit tests and near-workspaces sandbox tests | `cd contracts && cargo test` (build the wasm first: [contracts/README.md](contracts/README.md#test)) | 59: 53 unit, 6 sandbox |
 | Typecheck, dashboard build, demo | `npm run typecheck`, `npm run build`, `npm run demo` | |
 
@@ -255,7 +255,7 @@ NearGate is the NEAR port of AgentGate, the team's x402 gateway for Casper, buil
 
 **Carried over from AgentGate and ported:** the monorepo layout and the product idea; the gateway's 402 proxy (invoice store, nonce burn, attestation queue and retries, SSRF guard, rate limits); the CLI and MCP structure; the buyer agent and its MockLlm; the mock-chain devnet idea; the sample oracle; the dashboard's Next.js shell. **Removed:** the Casper contracts, the casper-js-sdk and CSPR.cloud client, and the CEP-18 facilitator rail. Internal package and env names keep the AgentGate prefix: the `@agentgate/*` workspaces, `AGENTGATE_MODE` and `AGENTGATE_ADMIN_TOKEN`; the CLI workspace is `@neargate/cli`. NearGate publishes nothing to npm, so run the CLI from this repo with `npm run neargate -- …`.
 
-**Libraries:** near-sdk 5.30.1 and near-workspaces 0.24.0 (contract and sandbox tests); near-api-js 7.4.0 and borsh (NEAR client); Express with helmet, express-rate-limit and undici (gateway); the MCP SDK (`@modelcontextprotocol/sdk`), commander and zod (CLI); Next.js 16, React 18, SWR and Tailwind CSS (dashboard); vitest, tsx, tsup and TypeScript. No project template was used; the baseline is AgentGate itself.
+**Libraries:** near-sdk 5.30.1 and near-workspaces 0.24.0 (contract and sandbox tests); near-api-js 7.4.0 and borsh (NEAR client); Express with helmet, express-rate-limit and undici (gateway); the MCP SDK (`@modelcontextprotocol/sdk`), commander and zod (CLI); Next.js 16, React 18, SWR and Tailwind CSS (dashboard), with the fonts Space Grotesk, Inter and JetBrains Mono bundled in `dashboard/app/fonts` (SIL OFL 1.1); vitest, tsx, tsup and TypeScript. No project template was used; the baseline is AgentGate itself.
 
 **AI code:** AI coding assistants were used throughout the window to write, test and review the code and the docs. The event's rules ask for this disclosure.
 
