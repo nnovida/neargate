@@ -102,7 +102,7 @@ function proseLines(text: string): string[] {
 describe('README.md: the first screen', () => {
   it('names NearGate and puts the two-command offline path near the top', () => {
     const top = README.split('\n').slice(0, 40).join('\n');
-    expect(top).toMatch(/^# NearGate\b/m);
+    expect(top).toMatch(/^(# NearGate\b|<h1[^>]*>NearGate<\/h1>)/m);
     expect(top).toContain('npm install && npm run demo');
   });
 
