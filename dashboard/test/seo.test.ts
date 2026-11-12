@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { DEFAULT_DASHBOARD_URL } from '@agentgate/shared';
 
 /**
  * seo.ts reads NEXT_PUBLIC_* once at module load (Next inlines them at build time), so each test
@@ -22,11 +23,12 @@ describe('SITE_URL (the origin for canonical links, the sitemap and metadataBase
     expect((await seo({ NEXT_PUBLIC_SITE_URL: 'https://dash.example/' })).SITE_URL).toBe('https://dash.example');
   });
 
-  it('falls back to the dashboard dev origin, never to an empty string or an old host', async () => {
+  it('falls back to the hosted dashboard, DEFAULT_DASHBOARD_URL, never to an empty string', async () => {
+    expect(DEFAULT_DASHBOARD_URL).not.toBe('');
     const unset: Array<Record<string, string>> = [{}, { NEXT_PUBLIC_SITE_URL: '' }, { NEXT_PUBLIC_SITE_URL: '   ' }];
     for (const env of unset) {
       const { SITE_URL } = await seo(env);
-      expect(SITE_URL).toBe('http://localhost:3000');
+      expect(SITE_URL).toBe(DEFAULT_DASHBOARD_URL.replace(/\/+$/, ''));
       expect(() => new URL(SITE_URL)).not.toThrow();
     }
   });

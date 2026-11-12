@@ -93,6 +93,25 @@ gateway container (the key file must be readable by uid 1000) and publishes both
 `127.0.0.1` only. Point the same tunnel ingress lines at them. Set `NEXT_PUBLIC_SITE_URL` in `.env`
 before `--build` (and `NEXT_PUBLIC_REPO_URL`, if the GitHub links should show).
 
+## (d) Railway (the current hosting)
+
+NearGate runs on Railway as one project with two services, both deployed from this repository's
+`main` branch. Railway's config-as-code files can no longer be opted into, so every setting below
+lives in each service's settings and variables (`packages/*/railway.json` predate this).
+
+| | `neargate-gateway` | `neargate-dashboard` |
+|---|---|---|
+| Public URL | https://neargate-gateway-production.up.railway.app | https://neargate-dashboard-production.up.railway.app |
+| Builder, Dockerfile path | Dockerfile, `packages/middleware/Dockerfile` | Dockerfile, `dashboard/Dockerfile` |
+| Healthcheck path | `/healthz` | `/api/health` |
+| Volume | mounted at `/app/packages/middleware/data` (upstream map, invoices, attestation queue) | none |
+| Variables | `AGENTGATE_MODE=live`, `NEAR_NETWORK=testnet`, `REGISTRY_CONTRACT_ID`, `GATEWAY_ACCOUNT_ID`, `GATEWAY_PRIVATE_KEY`, `AGENTGATE_ADMIN_TOKEN=${{secret(64)}}`, `RELAYER_ENABLED=1`, `TRUST_PROXY=1`, `PORT=3012`, `INVOICE_STORE_PATH` and `ATTESTATION_QUEUE_PATH` under the volume, `RAILWAY_RUN_UID=0` (the volume is owned by root) | `AGENTGATE_MODE=live`, `NEAR_NETWORK=testnet`, `REGISTRY_CONTRACT_ID`, `PORT=3011`, `NEXT_PUBLIC_SITE_URL=https://${{RAILWAY_PUBLIC_DOMAIN}}`, `NEXT_PUBLIC_REPO_URL` |
+
+Keep one replica of the gateway. `GATEWAY_PRIVATE_KEY` is the `private_key` of the gateway
+account's key file; paste it into Railway yourself and never commit it. The project was created from
+the public repository URL, without Railway's GitHub app, so a push does not deploy by itself:
+redeploy both services from Railway after each push to `main`.
+
 ## Check it
 
 ```bash

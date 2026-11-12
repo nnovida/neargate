@@ -24,10 +24,10 @@ The read commands need no key.
 ```bash
 neargate wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" \
   --account seller.testnet --key-file ~/.near-credentials/testnet/seller.testnet.json \
-  --gateway https://<gateway-host>
+  --gateway https://neargate-gateway-production.up.railway.app
 ```
 
-`--gateway` is the base URL your gateway is reached at. The registry stores it for good, and live mode has no hosted default yet, so `wrap` refuses to run without it (`GATEWAY_REQUIRED`).
+`--gateway` is the base URL your gateway is reached at. The registry stores it for good. Without it, live `wrap` uses the hosted NearGate gateway, https://neargate-gateway-production.up.railway.app.
 
 Before anything goes on chain, `wrap` resolves your key and checks that the payment target exists (it defaults to `--account`; a missing account would strand every payment). It then registers the service (registering attaches a 0.12 NEAR deposit) and maps your upstream on the gateway by **signing an ownership challenge with the same key** — no shared admin token. The upstream URL is only ever sent to the gateway. In mock mode the mapping goes through the gateway admin token instead.
 

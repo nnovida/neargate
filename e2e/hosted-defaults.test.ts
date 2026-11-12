@@ -1,14 +1,14 @@
 /**
- * e2e/hosted-defaults.test.ts — until the team hosts NearGate, the shared defaults name no gateway
- * and no dashboard, so nothing points at a host that does not exist yet. Set both once the hosts are
- * up (packages/shared/src/config.ts) and update this test with them.
+ * e2e/hosted-defaults.test.ts — the shared defaults name the hosted gateway and dashboard (Railway,
+ * deploy/README.md), both or neither. The registry stores a service's gateway URL for good, so a
+ * change here must be deliberate: update this test with the new hosts.
  */
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_DASHBOARD_URL, DEFAULT_GATEWAY_URL } from '@agentgate/shared';
 
 describe('the hosted defaults', () => {
-  it('the shared defaults are empty until NearGate is hosted', () => {
-    expect(DEFAULT_GATEWAY_URL).toBe('');
-    expect(DEFAULT_DASHBOARD_URL).toBe('');
+  it('name the hosted gateway and dashboard', () => {
+    expect(DEFAULT_GATEWAY_URL).toBe('https://neargate-gateway-production.up.railway.app');
+    expect(DEFAULT_DASHBOARD_URL).toBe('https://neargate-dashboard-production.up.railway.app');
   });
 });

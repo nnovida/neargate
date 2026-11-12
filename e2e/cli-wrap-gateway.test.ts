@@ -1,8 +1,10 @@
 /**
- * e2e/cli-wrap-gateway.test.ts — live `neargate wrap` without a gateway, through the real bin.
+ * e2e/cli-wrap-gateway.test.ts — live `neargate wrap` without `--gateway`, through the real bin.
  *
- * The registry stores a service's gateway URL for good and no hosted gateway is set yet, so a live
- * `wrap` that names none must stop with GATEWAY_REQUIRED before it touches the chain or a key. The
+ * The registry stores a service's gateway URL for good. With the hosted default set
+ * (DEFAULT_GATEWAY_URL), a live `wrap` that names no gateway gets past the gateway check and, with no
+ * key in an empty HOME, stops at the missing key before any RPC request. GATEWAY_REQUIRED (no hosted
+ * default and no flag) is unit-tested on resolveWrapGateway in packages/cli/test/cli.test.ts. The
  * "chain" here is a loopback HTTP server that counts requests; nothing leaves the machine.
  */
 import { execFile } from 'node:child_process';
@@ -23,7 +25,7 @@ interface CliRun {
   stderr: string;
 }
 
-describe('neargate wrap (subprocess, live mode, no gateway)', () => {
+describe('neargate wrap (subprocess, live mode, no --gateway)', () => {
   let rpc: Server;
   let rpcRequests = 0;
   let rpcUrl: string;
@@ -83,12 +85,12 @@ describe('neargate wrap (subprocess, live mode, no gateway)', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('exits 1 with GATEWAY_REQUIRED naming --gateway, before any RPC request, key read or output', async () => {
+  it('uses the hosted default gateway: no GATEWAY_REQUIRED, it stops at the missing key before any RPC request', async () => {
     const run = await runWrap([]);
 
     expect(run.code).toBe(1);
-    expect(run.stderr).toContain('GATEWAY_REQUIRED');
-    expect(run.stderr).toContain("--gateway <your gateway's base URL>");
+    expect(run.stderr).not.toContain('GATEWAY_REQUIRED');
+    expect(run.stderr).toContain('SIGNER_MISSING');
     expect(run.stdout).toBe('');
     expect(rpcRequests).toBe(0);
   });

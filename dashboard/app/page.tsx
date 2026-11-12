@@ -5,7 +5,7 @@ import { REPO_URL } from '@/lib/seo';
 
 const LIST_CMD = 'npm run neargate -- list';
 const WRAP_CMD =
-  'npm run neargate -- wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --account alice.testnet --gateway https://<gateway-host>';
+  'npm run neargate -- wrap https://api.example.com/gold --price 0.5 --name "Gold Spot Feed" --account alice.testnet --gateway https://neargate-gateway-production.up.railway.app';
 
 const STEPS = [
   {

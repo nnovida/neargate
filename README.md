@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Rust-1.95.0-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust 1.95.0"> <img src="https://img.shields.io/badge/near--sdk-5.30.1-00EC97?style=flat-square&logo=near&logoColor=white" alt="near-sdk 5.30.1"> <img src="https://img.shields.io/badge/WebAssembly-wasm32-654FF0?style=flat-square&logo=webassembly&logoColor=white" alt="WebAssembly wasm32"> <img src="https://img.shields.io/badge/cargo--near-0.22.0-00EC97?style=flat-square&logo=rust&logoColor=white" alt="cargo-near 0.22.0"> <img src="https://img.shields.io/badge/near--workspaces-0.24.0-00EC97?style=flat-square&logo=near&logoColor=white" alt="near-workspaces 0.24.0"><br>
   <img src="https://img.shields.io/badge/near--api--js-7.4.0-00EC97?style=flat-square&logo=near&logoColor=white" alt="near-api-js 7.4.0"> <img src="https://img.shields.io/badge/near--cli--rs-0.30-00EC97?style=flat-square&logo=near&logoColor=white" alt="near-cli-rs 0.30"> <img src="https://img.shields.io/badge/Node.js-%E2%89%A5%2022.22.2-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js 22.22.2 or later"> <img src="https://img.shields.io/badge/TypeScript-5.9-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.9"> <img src="https://img.shields.io/badge/Express-4.22-000000?style=flat-square&logo=express&logoColor=white" alt="Express 4.22"><br>
   <img src="https://img.shields.io/badge/MCP%20SDK-1.29-000000?style=flat-square&logo=modelcontextprotocol&logoColor=white" alt="MCP SDK 1.29"> <img src="https://img.shields.io/badge/Zod-3.25-3E67B1?style=flat-square&logo=zod&logoColor=white" alt="Zod 3.25"> <img src="https://img.shields.io/badge/Claude-Messages%20API-D97757?style=flat-square&logo=claude&logoColor=white" alt="Claude via the Messages API"> <img src="https://img.shields.io/badge/Next.js-16.2-000000?style=flat-square&logo=nextdotjs&logoColor=white" alt="Next.js 16.2"> <img src="https://img.shields.io/badge/React-18.3-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React 18.3"> <img src="https://img.shields.io/badge/Tailwind%20CSS-3.4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white" alt="Tailwind CSS 3.4"> <img src="https://img.shields.io/badge/SWR-2.4-000000?style=flat-square&logo=swr&logoColor=white" alt="SWR 2.4"><br>
-  <img src="https://img.shields.io/badge/Vitest-3.2-6E9F18?style=flat-square&logo=vitest&logoColor=white" alt="Vitest 3.2"> <img src="https://img.shields.io/badge/GitHub%20Actions-CI-2088FF?style=flat-square&logo=githubactions&logoColor=white" alt="GitHub Actions CI"> <img src="https://img.shields.io/badge/PM2-gateway%20%2B%20dashboard-2B037A?style=flat-square&logo=pm2&logoColor=white" alt="PM2"> <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker Compose"> <img src="https://img.shields.io/badge/Vercel-dashboard-000000?style=flat-square&logo=vercel&logoColor=white" alt="Vercel"> <img src="https://img.shields.io/badge/Cloudflare-Tunnel-F38020?style=flat-square&logo=cloudflare&logoColor=white" alt="Cloudflare Tunnel">
+  <img src="https://img.shields.io/badge/Vitest-3.2-6E9F18?style=flat-square&logo=vitest&logoColor=white" alt="Vitest 3.2"> <img src="https://img.shields.io/badge/GitHub%20Actions-CI-2088FF?style=flat-square&logo=githubactions&logoColor=white" alt="GitHub Actions CI"> <a href="https://neargate-dashboard-production.up.railway.app"><img src="https://img.shields.io/badge/Railway-live-0B0D0E?style=flat-square&logo=railway&logoColor=white" alt="Hosted on Railway"></a> <img src="https://img.shields.io/badge/PM2-gateway%20%2B%20dashboard-2B037A?style=flat-square&logo=pm2&logoColor=white" alt="PM2"> <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker Compose"> <img src="https://img.shields.io/badge/Vercel-dashboard-000000?style=flat-square&logo=vercel&logoColor=white" alt="Vercel"> <img src="https://img.shields.io/badge/Cloudflare-Tunnel-F38020?style=flat-square&logo=cloudflare&logoColor=white" alt="Cloudflare Tunnel">
 </p>
 
 ## At a glance
@@ -23,7 +23,7 @@
 | **How NEAR fits in** | The agent pays the registry contract per call: no account at the seller, no API key, no subscription. A NEAR function-call key lets the agent spend only a prepaid escrow, NEP-366 meta transactions let the gateway pay its gas, and the client refuses any invoice above its cap (`--max`, `maxNear`). Every counted call is a payment the contract received ([NEAR features used](#near-features-used)). |
 | **Try it** | `npm install && npm run demo` runs the whole loop on a mock chain, with no key and no network ([Try it](#try-it-no-keys)); every step a judge can run: [Do X → see Y](#do-x--see-y). |
 | **Tracks** | Agent Economy (`agents`): agents paying for APIs by themselves. AI Security & Defense (`security`): function-call keys, spending caps and payment-backed scores. Real-World Money (`realworld`): NEP-366 meta transactions, so the agent needs no gas. |
-| **Status** | NEAR testnet. The registry `neargate-app-registry.testnet` is deployed; the hosted gateway and dashboard are pending ([deployment](#deployed-on-near-testnet)). |
+| **Status** | Live on NEAR testnet: the registry `neargate-app-registry.testnet`, the gateway at https://neargate-gateway-production.up.railway.app and the dashboard at https://neargate-dashboard-production.up.railway.app, with one seeded service ([deployment](#deployed-on-near-testnet)). |
 | **Built at** | NEAR HACKATHON ([nearhackathon.com](https://nearhackathon.com)), as the NEAR port of AgentGate, an earlier x402 gateway. What existed before and what is new: [Built on AgentGate](#disclosure). |
 
 **Contents:** [Try it](#try-it-no-keys) · [Do X → see Y](#do-x--see-y) · [How it works](#how-it-works) · [NEAR features](#near-features-used) · [Tech stack](#tech-stack) · [Testnet deployment](#deployed-on-near-testnet) · [Tests](#tests) · [Error codes](#error-codes) · [Layout](#repository-layout) · [Built on AgentGate](#disclosure) · [Limits](#limits-and-trust-model) · [License](#license)
@@ -54,10 +54,10 @@ On NEAR testnet, also with no key:
 
 ```bash
 npm run neargate -- list                  # the live catalog of the registry neargate-app-registry.testnet
-curl -i https://<gateway-host>/svc/1      # an HTTP 402 with the x402 invoice
+curl -i https://neargate-gateway-production.up.railway.app/svc/1      # an HTTP 402 with the x402 invoice
 ```
 
-> Pending the hosting: `<gateway-host>` and `<dashboard-host>` are placeholders. The registry is deployed, but it holds no service until the seed runs through the hosted gateway, so for now `list` prints an empty catalog.
+The same catalog, with each service's page, score and activity, is on the dashboard: https://neargate-dashboard-production.up.railway.app.
 
 ## Do X → see Y
 
@@ -93,7 +93,7 @@ near account create-account sponsor-by-faucet-service <you>.testnet autogenerate
 | Do | See |
 |---|---|
 | **Buy:** `npm run neargate -- buy 1 --account <you>.testnet --max 0.05` | the response on stdout; on stderr the price + 0.002 NEAR storage, the `pay` tx and its nearblocks link. Seconds later the gateway's attestation lands and the service's score on the dashboard goes up by one. |
-| **Sell:** `npm run neargate -- wrap https://<your-api> --price 0.01 --name "My API" --account <you>.testnet --attestor neargate-app-gateway.testnet --gateway https://<gateway-host>` | the service id, its public `/svc/<id>` endpoint and the register tx (0.12 NEAR deposit). Your API's URL never goes on chain: it is sent only to the gateway, in a request signed with your full-access key. |
+| **Sell:** `npm run neargate -- wrap https://<your-api> --price 0.01 --name "My API" --account <you>.testnet --attestor neargate-app-gateway.testnet --gateway https://neargate-gateway-production.up.railway.app` | the service id, its public `/svc/<id>` endpoint and the register tx (0.12 NEAR deposit). Your API's URL never goes on chain: it is sent only to the gateway, in a request signed with your full-access key. |
 | **Agent key:** `npm run neargate -- escrow deposit 0.5 --account <you>.testnet`, then `npm run neargate -- agent-key add --allowance 0.25 --account <you>.testnet` | the escrow balance; then the key file `~/.near-credentials/testnet/<you>.testnet.neargate-agent.json` (mode 0600) and the AddKey tx. The agent buys with `npm run neargate -- buy 1 --from-escrow --account <you>.testnet --key-file <that file> --max 0.05`. |
 | **Gasless:** `npm run neargate -- buy 1 --gasless --account <you>.testnet --key-file <that file> --max 0.05` | `relayed: gasless — neargate-app-gateway.testnet relayed the signed pay_from_escrow and paid the gas`. Your account's balance does not move; the escrow pays price + 0.002 NEAR. Needs a gateway running with `RELAYER_ENABLED=1`. |
 | **MCP:** `npm run build -w packages/cli`, then add the server below to `claude_desktop_config.json` | Claude Desktop gets five tools: `neargate_list_services`, `neargate_get_service`, `neargate_get_invoice`, `neargate_escrow_balance` and `neargate_buy` (capped by `maxNear`; `fromEscrow` and `gasless` work with an agent key) |
@@ -102,7 +102,7 @@ near account create-account sponsor-by-faucet-service <you>.testnet autogenerate
 { "mcpServers": { "neargate": { "command": "node", "args": ["/path/to/neargate-app/packages/cli/dist/bin.js", "mcp", "--registry", "neargate-app-registry.testnet", "--account", "<you>.testnet", "--key-file", "~/.near-credentials/testnet/<you>.testnet.neargate-agent.json"] } } }
 ```
 
-Every flag, the MCP tools in full and the docs pages behind them: [packages/cli/README.md](packages/cli/README.md), or `/docs` on the dashboard (`npm run dev:dashboard`, or `https://<dashboard-host>/docs`).
+Every flag, the MCP tools in full and the docs pages behind them: [packages/cli/README.md](packages/cli/README.md), or `/docs` on the dashboard (`npm run dev:dashboard`, or `https://neargate-dashboard-production.up.railway.app/docs`).
 
 ## How it works
 
@@ -152,7 +152,7 @@ The full spec, every 402 reason and the gateway routes are on the dashboard's `/
 | Own smart contract (Rust, near-sdk 5.30.1) | `neargate-registry` ([contracts/](contracts/README.md)): the service catalog, pay-through payments, the escrow, attestations, scores and an activity ring. It has no admin. Every byte a caller makes it store is prepaid by that caller (0.12 NEAR per service, 0.002 NEAR per payment and per escrow entry), measured with `env::storage_usage()` and refused with `ERR_STORAGE_EXCEEDED` past the budget. |
 | NEP-297 events | `EVENT_JSON` logs with `standard: "neargate"` for `service_registered`, `payment`, `attestation`, `service_status`, `attestor_changed`, `escrow_deposit` and `escrow_withdraw`. |
 | Function-call access keys | `npm run neargate -- agent-key add` gives an agent a key that NEAR itself restricts to the registry and the one method `pay_from_escrow`: it spends the prepaid escrow and nothing else, plus gas from the account's own balance up to its allowance. A function-call key cannot attach a deposit, so it could never sign `pay` (which carries the price as a deposit); that is why the escrow exists and `pay_from_escrow` attaches nothing. `withdraw_escrow` needs exactly 1 yoctoNEAR attached, so only a full-access key can take the escrow back. The sandbox test `agent_function_call_key_pays_from_escrow_only` proves both refusals (`DepositWithFunctionCall`, `MethodNameMismatch`). |
-| NEP-366 meta transactions | The gasless rail: the agent signs its `pay_from_escrow` as a `SignedDelegate` and sends it as the payment proof. Before relaying, the gateway checks its shape, its signature, that the key is the payer's and may call `pay_from_escrow`, its nonce and the escrow. It then relays it and pays only the gas. NEAR makes a relayer pay any deposit a relayed call attaches, so the gateway relays this one zero-deposit call and nothing else. Shipped: tested end to end on the mock chain (`e2e/gasless.test.ts`). The registry it runs against is deployed; its first testnet run waits for the hosted gateway. |
+| NEP-366 meta transactions | The gasless rail: the agent signs its `pay_from_escrow` as a `SignedDelegate` and sends it as the payment proof. Before relaying, the gateway checks its shape, its signature, that the key is the payer's and may call `pay_from_escrow`, its nonce and the escrow. It then relays it and pays only the gas. NEAR makes a relayer pay any deposit a relayed call attaches, so the gateway relays this one zero-deposit call and nothing else. Shipped: tested end to end on the mock chain (`e2e/gasless.test.ts`). The registry it runs against is deployed; the hosted gateway runs with the relay on (`RELAYER_ENABLED=1`). |
 | Access keys as identity | Self-map: the gateway accepts a seller's private API URL only in a request signed by a key that `view_access_key` shows is a FullAccess key of the service owner. |
 
 The track hints this touches: AGENT COMMERCE (07 Agent Economy: agents paying for APIs), AGENT SECURITY and FUNCTION CALL KEYS (06 AI Security & Defense), META TRANSACTIONS (08 Real-World Money).
@@ -175,22 +175,22 @@ The badges under the logo show the same stack.
 | Buyer agent | Claude via the Messages API | picks a service, keeps to its budget and pays; model from `LLM_MODEL` (default `claude-sonnet-4-6`), and a deterministic MockLlm without `ANTHROPIC_API_KEY` |
 | Dashboard | Next.js 16.2, React 18.3, Tailwind CSS 3.4, SWR 2.4 | the catalog, service pages, activity feed and `/docs`, refreshed every 5 s |
 | Tests and CI | Vitest 3.2, tsx 4, GitHub Actions | `npm test`, and in CI on pull requests and pushes to `main`: typecheck, tests, dashboard build, the demo and `cargo test` |
-| Hosting (options; not hosted yet) | PM2, Docker Compose, Vercel, Cloudflare Tunnel | the runbook for each: [deploy/README.md](deploy/README.md) |
+| Hosting | Railway (live: the gateway and the dashboard); PM2, Docker Compose, Vercel and Cloudflare Tunnel as options | the runbook for each: [deploy/README.md](deploy/README.md) |
 
 ## Deployed on NEAR testnet
 
-**Deployed on 2026-11-12:** the registry and its four accounts. **Pending the hosting:** the gateway and dashboard hosts, and the register → pay → attest transactions that the seed writes through the hosted gateway, are still placeholders.
+**Deployed on 2026-11-12:** the registry and its four accounts, the gateway and the dashboard (both on Railway), and one seeded service: `npm run near:seed` wrote the register → pay → attest triple below through the hosted gateway, and `npm run smoke:live` passes against it.
 
 | What | Value |
 |---|---|
 | Registry contract | [`neargate-app-registry.testnet`](https://testnet.nearblocks.io/address/neargate-app-registry.testnet) (the CLI's default registry) |
 | Deploy + `new()` | [`MaCbVgv9…`](https://testnet.nearblocks.io/txns/MaCbVgv9GcC1a6pXfFrY7VNLyUZKmgosstYcHkBRY3p) |
-| Gateway | `https://<gateway-host>`, run by `neargate-app-gateway.testnet` (it signs the attestations and relays gasless payments) |
+| Gateway | `https://neargate-gateway-production.up.railway.app`, run by `neargate-app-gateway.testnet` (it signs the attestations and relays gasless payments) |
 | Seed accounts | `neargate-app-seller.testnet` registers the seed service; `neargate-app-buyer.testnet` pays for it |
-| Dashboard | `https://<dashboard-host>`: catalog, service pages, activity feed and `/docs` |
-| `register_service` | `<tx-register>` |
-| `pay` | `<tx-pay>` |
-| `record_attestation` | `<tx-attest>` |
+| Dashboard | `https://neargate-dashboard-production.up.railway.app`: catalog, service pages, activity feed and `/docs` |
+| `register_service` | [`Gkm8cvN8…`](https://testnet.nearblocks.io/txns/Gkm8cvN8p3Mo7iTX9waXqPzx8JkxdonQ1pJejEMtXQEz) (service #1, USD exchange rates at 0.01 NEAR) |
+| `pay` | [`GzdVvhQM…`](https://testnet.nearblocks.io/txns/GzdVvhQMEaZAfLxqkuQnbEX2PGMwtByoTgA5HGYuXEVr) (0.01 NEAR + 0.002 NEAR storage) |
+| `record_attestation` | [`33A9zf2o…`](https://testnet.nearblocks.io/txns/33A9zf2o8LzgHCTA1brh57Wc5xzR8zLRTdEEWXu1hYM4) (signed by the gateway: score 1/1) |
 
 Running your own deployment (testnet; needs near-cli-rs, and cargo-near for the deploy):
 
@@ -202,13 +202,13 @@ Running your own deployment (testnet; needs near-cli-rs, and cargo-near for the 
 | `npm run near:seed` | one real register → pay → attest through the running gateway, with the three nearblocks links |
 | `npm run smoke:live` | a read-only check: list, one service, an unpaid 402 |
 
-Hosting the gateway and the dashboard (pm2, Vercel or docker compose): [deploy/README.md](deploy/README.md). Contract build, ABI and storage accounting: [contracts/README.md](contracts/README.md).
+Hosting the gateway and the dashboard (Railway, pm2, Vercel or docker compose): [deploy/README.md](deploy/README.md). Contract build, ABI and storage accounting: [contracts/README.md](contracts/README.md).
 
 ## Tests
 
 | Suite | Command | Tests |
 |---|---|---|
-| TypeScript: every package, the e2e flows on the mock chain (in-process servers on port 0), the dashboard | `npm test` | 1,287 in 74 files (vitest); no network |
+| TypeScript: every package, the e2e flows on the mock chain (in-process servers on port 0), the dashboard | `npm test` | 1,288 in 74 files (vitest); no network |
 | Contract: unit tests and near-workspaces sandbox tests | `cd contracts && cargo test` (build the wasm first: [contracts/README.md](contracts/README.md#test)) | 59: 53 unit, 6 sandbox |
 | Typecheck, dashboard build, demo | `npm run typecheck`, `npm run build`, `npm run demo` | |
 
@@ -237,7 +237,7 @@ The ones a buyer or seller meets most. The CLI prints `error: <CODE>: <message>`
 
 ```bash
 TX=<tx hash> NONCE=<nonce> PAYER=<you>.testnet
-curl -i -H "X-PAYMENT: $(printf '{"x402Version":1,"scheme":"exact","network":"near-testnet","payload":{"kind":"tx","transaction":"%s","nonce":"%s","payer":"%s"}}' "$TX" "$NONCE" "$PAYER" | base64 | tr -d '\n')" https://<gateway-host>/svc/<id>
+curl -i -H "X-PAYMENT: $(printf '{"x402Version":1,"scheme":"exact","network":"near-testnet","payload":{"kind":"tx","transaction":"%s","nonce":"%s","payer":"%s"}}' "$TX" "$NONCE" "$PAYER" | base64 | tr -d '\n')" https://neargate-gateway-production.up.railway.app/svc/<id>
 ```
 
 ## Repository layout

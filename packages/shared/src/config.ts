@@ -22,21 +22,21 @@ export function isNearNetwork(value: unknown): value is NearNetwork {
 export const DEFAULT_REGISTRY_CONTRACT_ID: string = 'neargate-app-registry.testnet';
 
 /**
- * Default hosted gateway the CLI targets in live mode when `--gateway` is unset. Empty until the
- * team hosts NearGate (see deploy/README.md; set this and DEFAULT_DASHBOARD_URL together): while it
- * is empty, a live `neargate wrap` without `--gateway` is refused (GATEWAY_REQUIRED) before it
- * touches the chain, because the registry stores the gateway URL for good. Override per call with
- * `--gateway`.
+ * Default hosted gateway the CLI targets in live mode when `--gateway` is unset: the NearGate
+ * gateway on Railway (deploy/README.md; this and DEFAULT_DASHBOARD_URL change together). The
+ * registry stores a service's gateway URL for good, so `neargate wrap` registers this URL unless
+ * `--gateway` names another. Set to '' and a live `wrap` without `--gateway` is refused
+ * (GATEWAY_REQUIRED) before it touches the chain.
  */
-export const DEFAULT_GATEWAY_URL: string = '';
+export const DEFAULT_GATEWAY_URL: string = 'https://neargate-gateway-production.up.railway.app';
 
 /**
  * Default hosted dashboard the CLI links to in live mode when printing the service detail URL;
- * mock mode links to http://localhost:<DASHBOARD_PORT>. Empty until the team hosts NearGate (see
- * deploy/README.md; set this and DEFAULT_GATEWAY_URL together): while it is empty, live `wrap`
- * prints no dashboard link and the dashboard's own site origin falls back to localhost.
+ * mock mode links to http://localhost:<DASHBOARD_PORT>. The NearGate dashboard on Railway
+ * (deploy/README.md; this and DEFAULT_GATEWAY_URL change together). Set to '' and live `wrap`
+ * prints no dashboard link.
  */
-export const DEFAULT_DASHBOARD_URL: string = '';
+export const DEFAULT_DASHBOARD_URL: string = 'https://neargate-dashboard-production.up.railway.app';
 
 /** Per-network RPC and explorer defaults (overridable via NEAR_RPC_URL / NEAR_EXPLORER_URL). */
 const NEAR_DEFAULTS: Record<NearNetwork, { rpcUrl: string; explorerUrl: string }> = {

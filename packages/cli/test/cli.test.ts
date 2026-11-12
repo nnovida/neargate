@@ -7,7 +7,7 @@ import type {
   ServiceRecord,
   ServiceScore,
 } from '@agentgate/shared';
-import { AgentGateError, base58Encode, nativeNearOption } from '@agentgate/shared';
+import { AgentGateError, DEFAULT_GATEWAY_URL, base58Encode, nativeNearOption } from '@agentgate/shared';
 import {
   createDemoAccounts,
   formatServiceTable,
@@ -742,11 +742,11 @@ describe('resolveWrapGateway', () => {
     expect(resolveWrapGateway({ flag: '  ', mode: 'mock', middlewarePort: 4099 })).toBe('http://localhost:4099');
   });
 
-  it('live mode has no hosted default yet: a missing or blank --gateway is GATEWAY_REQUIRED, naming the flag', () => {
+  it('live mode without a hosted default: a missing or blank --gateway is GATEWAY_REQUIRED, naming the flag', () => {
     for (const flag of [undefined, '', '   ']) {
       let thrown: unknown;
       try {
-        resolveWrapGateway({ flag, mode: 'live', middlewarePort: MOCK_PORT });
+        resolveWrapGateway({ flag, mode: 'live', middlewarePort: MOCK_PORT, hostedDefault: '' });
       } catch (err) {
         thrown = err;
       }
@@ -765,5 +765,10 @@ describe('resolveWrapGateway', () => {
         hostedDefault: 'https://gateway.example',
       }),
     ).toBe('https://gateway.example');
+  });
+
+  it('live mode without --gateway registers the shared hosted gateway, DEFAULT_GATEWAY_URL', () => {
+    expect(DEFAULT_GATEWAY_URL).not.toBe('');
+    expect(resolveWrapGateway({ flag: undefined, mode: 'live', middlewarePort: MOCK_PORT })).toBe(DEFAULT_GATEWAY_URL);
   });
 });
