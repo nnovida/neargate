@@ -31,10 +31,10 @@ export const DISCLOSURE_HEADING = '## Built on AgentGate';
 export const DISCLOSURE_TITLE = '## Built on AgentGate (Casper)';
 
 /**
- * Never scanned: the port's plan and review ledger (they record what was replaced), dependency
- * metadata, and build output (never tracked; listed so a stray `git add -f` cannot fail the guard).
+ * Never scanned: dependency metadata and build output (never tracked; listed so a stray
+ * `git add -f` cannot fail the guard).
  */
-export const UNSCANNED_PREFIXES: readonly string[] = ['docs/superpowers/', '.superpowers/', 'node_modules/', 'contracts/target/'];
+export const UNSCANNED_PREFIXES: readonly string[] = ['node_modules/', 'contracts/target/'];
 export const UNSCANNED_FILES: readonly string[] = ['package-lock.json'];
 
 /**

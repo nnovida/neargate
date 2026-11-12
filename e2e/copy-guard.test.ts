@@ -6,8 +6,7 @@
  * fetch the CLI from npm. The patterns and the exemptions live in copy-rules.ts:
  *   - the README section starting `## Built on AgentGate` (the origin disclosure the event asks
  *     for) is the only place the retired words may appear; an npm fetch of the CLI appears nowhere;
- *   - the port's plan and review ledger (docs/superpowers/, .superpowers/), package-lock.json,
- *     build output and binary files are not scanned;
+ *   - package-lock.json, build output and binary files are not scanned;
  *   - guard tests that spell a retired word to refuse it are skipped by the word check, each with
  *     its reason.
  *

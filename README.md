@@ -247,7 +247,7 @@ NearGate is the NEAR port of AgentGate, the team's x402 gateway for Casper, buil
 
 | | |
 |---|---|
-| Pre-hackathon baseline | tag `pre-hackathon` = `181dc9c` (2026-07-24), the last Casper commit |
+| Pre-hackathon baseline | tag `pre-hackathon` = `5ee92e3` (2026-07-24), the last Casper commit |
 | Hackathon work | every commit after it, all from 2026-11-11 on, inside the NEAR HACKATHON window |
 | The diff | [pre-hackathon...hackathon-submission](../../compare/pre-hackathon...hackathon-submission) on GitHub; in a clone, `git diff --stat pre-hackathon hackathon-submission` |
 
