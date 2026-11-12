@@ -1,0 +1,38 @@
+{
+  "name": "@neargate/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pay HTTP 402 (x402) APIs in native NEAR from Node: read the NearGate registry, pay a gateway's invoice from a deposit, an escrow or gasless, and get the response.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "engines": {
+    "node": ">=22.22.2"
+  },
+  "license": "MIT",
+  "keywords": [
+    "near",
+    "x402",
+    "http-402",
+    "ai-agents",
+    "micropayments",
+    "sdk",
+    "web3"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "borsh": "2.0.0",
+    "near-api-js": "7.4.0"
+  },
+  "devDependencies": {
+    "@agentgate/chain": "*",
+    "@agentgate/client": "*",
+    "@agentgate/shared": "*",
+    "@types/node": "^22.0.0",
+    "tsup": "^8.3.0"
+  }
+}

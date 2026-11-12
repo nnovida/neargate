@@ -31,6 +31,7 @@ import { parseServiceIdArg } from './validate';
 import { resolveWrapGateway, wrapService } from './wrap';
 import { startAgentGateMcpServer } from './mcp';
 import { resolveCliEnv, type CliConfigFlags } from './cli-env';
+import { CLI_VERSION } from './version';
 
 interface WrapCmdOpts extends CliConfigFlags, SignerFlags {
   price: string;
@@ -94,7 +95,8 @@ const program = new Command();
 
 program
   .name('neargate')
-  .description('NearGate — wrap any API into an x402 service paid in NEAR, registered on-chain');
+  .description('NearGate — wrap any API into an x402 service paid in NEAR, registered on-chain')
+  .version(CLI_VERSION, '-V, --version', 'print the neargate version');
 
 withConfigFlags(
   withSignerFlags(

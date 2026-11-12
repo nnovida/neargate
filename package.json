@@ -25,7 +25,8 @@
     "near:bootstrap": "bash scripts/near/bootstrap-testnet.sh",
     "near:deploy": "bash scripts/near/deploy-registry.sh",
     "near:seed": "tsx scripts/near/seed-testnet.ts",
-    "smoke:live": "tsx scripts/near/smoke-live.ts"
+    "smoke:live": "tsx scripts/near/smoke-live.ts",
+    "npm:pack": "tsx scripts/npm-pack.ts"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

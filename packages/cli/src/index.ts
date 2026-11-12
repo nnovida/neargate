@@ -57,3 +57,4 @@ export {
   type SignerFlags,
   type SignerRole,
 } from './identity';
+export { CLI_VERSION } from './version';

@@ -2,7 +2,14 @@
 
 Wrap any HTTP API into a **paid x402 service on NEAR**: HTTP 402 micropayments in native NEAR, with on-chain discovery and a payment-backed reputation score kept by the `neargate-registry` contract. One command turns your endpoint into a machine-payable service that AI agents can discover, pay and rate on their own.
 
-The package installs one binary, `neargate`. From a clone of the repository: `npm install`, then `npm run neargate -- <command>`.
+The package installs one binary, `neargate`, and a library entry with the same commands as functions.
+
+```bash
+npm install -g @neargate/cli
+neargate list
+```
+
+From a clone of the [repository](https://github.com/nnovida/neargate): `npm install`, then `npm run neargate -- <command>`. Without `--mode mock` the CLI works on NEAR testnet against the deployed registry `neargate-app-registry.testnet` and the hosted gateway. To pay from your own code instead, use [`@neargate/sdk`](https://www.npmjs.com/package/@neargate/sdk).
 
 ## How a paid call works
 
@@ -53,10 +60,10 @@ neargate mcp --account buyer.testnet
 `mcp` serves NearGate as a Model Context Protocol **stdio server**. Tools: `neargate_list_services`, `neargate_get_service`, `neargate_get_invoice` (read-only, no key), `neargate_escrow_balance` (read-only: the prepaid escrow left, for the buyer account or any `account`) and `neargate_buy` (pays the 402 invoice in NEAR from the buyer key, capped by `maxNear` on the total attached; with `fromEscrow: true` it pays out of the prepaid escrow instead, which is what a key restricted by `agent-key add` can do). The buyer key is resolved only when `neargate_buy` runs (and by `neargate_escrow_balance` without an `account`), so the catalog tools work without one. Claude Desktop (`claude_desktop_config.json`):
 
 ```json
-{ "mcpServers": { "neargate": { "command": "node", "args": ["/path/to/repo/packages/cli/dist/bin.js", "mcp", "--account", "buyer.testnet"] } } }
+{ "mcpServers": { "neargate": { "command": "neargate", "args": ["mcp", "--account", "buyer.testnet"] } } }
 ```
 
-(`npm run build -w @neargate/cli` produces `packages/cli/dist/bin.js`.)
+(With the global install. From a clone, use `"command": "node"` with `"/path/to/repo/packages/cli/dist/bin.js"` as the first argument; `npm run build -w @neargate/cli` produces it.)
 
 ## Flags & environment
 
@@ -98,9 +105,17 @@ On an invalid value the CLI fails fast with a one-line message — e.g. `error: 
 - `pause <id>` / `resume <id>` — toggle a service you own
 - `demo-accounts` — mint faucet-funded buyer/seller accounts on the mock devnet (mock mode only)
 
+## Use it as a library
+
+```ts
+import { listServices, buyService } from '@neargate/cli';
+```
+
+The library entry exports every command as a function (`wrapService`, `mapService`, `listServices`, `buyService`, `serviceStatus`, `setServiceActive`, the escrow and agent-key functions) with its types. They take a chain client and a signer; the lower-level paying client and `createNearGateChain` are in `@neargate/sdk`.
+
 ## Try it offline
 
-`npm run demo` runs the whole loop on an in-process mock chain — register, 402 invoice, pay, serve, attest, score — with no network access and no keys. `npm run dev` keeps the same mock stack up for the CLI (`--mode mock`), the buyer agent and the dashboard.
+From a clone, `npm run demo` runs the whole loop on an in-process mock chain — register, 402 invoice, pay, serve, attest, score — with no network access and no keys. `npm run dev` keeps the same mock stack up for the CLI (`--mode mock`), the buyer agent and the dashboard.
 
 ## Notes
 

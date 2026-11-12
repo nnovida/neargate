@@ -139,6 +139,26 @@ describe('deploy/neargate.ecosystem.config.cjs', () => {
   });
 });
 
+describe('Dockerfiles: npm ci sees every workspace', () => {
+  // npm ci validates package-lock.json against every workspace manifest, so an image that does not
+  // copy one of them fails to build (Railway builds both images from these files).
+  const rootPkg = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')) as { workspaces: string[] };
+  const manifests = rootPkg.workspaces.flatMap((pattern) => {
+    if (!pattern.endsWith('/*')) return [`${pattern}/package.json`];
+    const parent = pattern.slice(0, -2);
+    return readdirSync(path.join(REPO_ROOT, parent), { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => `${parent}/${d.name}/package.json`);
+  });
+
+  it.each(['dashboard/Dockerfile', 'packages/middleware/Dockerfile'])('%s copies every workspace manifest', (file) => {
+    const dockerfile = readFileSync(path.join(REPO_ROOT, file), 'utf8');
+    expect(manifests.length).toBeGreaterThan(8);
+    const missing = manifests.filter((m) => !dockerfile.includes(`COPY ${m} ${path.posix.dirname(m)}/`));
+    expect(missing).toEqual([]);
+  });
+});
+
 describe('.dockerignore: secrets stay out of every image', () => {
   /** Docker's rule set: a later pattern overrides an earlier one, `!` re-includes, `**\/` spans directories. */
   function ignoreRules(): Array<{ negate: boolean; re: RegExp }> {

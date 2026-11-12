@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@agentgate/shared": ["../shared/src/index.ts"],
+      "@agentgate/shared/net-guard": ["../shared/src/net-guard.ts"],
+      "@agentgate/chain": ["../chain/src/index.ts"],
+      "@agentgate/chain/delegate": ["../chain/src/near-delegate.ts"],
+      "@agentgate/chain/devnet-key": ["../chain/src/devnet-key.ts"],
+      "@agentgate/client": ["../client/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

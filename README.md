@@ -59,6 +59,8 @@ curl -i https://neargate-gateway-production.up.railway.app/svc/1      # an HTTP 
 
 The same catalog, with each service's page, score and activity, is on the dashboard: https://neargate-dashboard-production.up.railway.app.
 
+Both are also on npm: `npm install -g @neargate/cli` installs the `neargate` binary, the same CLI without a clone, and `npm install @neargate/sdk` gives your own code the paying client ([packages/sdk/README.md](packages/sdk/README.md)).
+
 ## Do X → see Y
 
 ### Locally, on the mock chain (no keys)
@@ -171,7 +173,7 @@ The badges under the logo show the same stack.
 | Contract tests | near-workspaces 0.24.0 | sandbox tests against a real NEAR node, next to the near-sdk unit tests |
 | Chain access | NEAR testnet, near-api-js 7.4.0, borsh 2.0.0, near-cli-rs 0.30 | registry views and calls (`pay`, `pay_from_escrow`, `record_attestation`) and NEP-366 delegates; near-cli-rs runs the bootstrap and deploy scripts |
 | Gateway (x402) | Node.js ≥ 22.22.2, TypeScript 5.9, Express 4.22 with helmet 8, express-rate-limit 7 and undici 6 | the 402 paywall, payment checks, the gasless relay and the attestation queue |
-| CLI and agent tools | MCP SDK 1.29, Zod 3.25, commander 12, tsup 8 | `npm run neargate -- …` and the five MCP tools |
+| CLI, SDK and agent tools | MCP SDK 1.29, Zod 3.25, commander 12, tsup 8 | `npm run neargate -- …` and the five MCP tools; published to npm as `@neargate/cli` and `@neargate/sdk` (`npm run npm:pack` builds both) |
 | Buyer agent | Claude via the Messages API | picks a service, keeps to its budget and pays; model from `LLM_MODEL` (default `claude-sonnet-4-6`), and a deterministic MockLlm without `ANTHROPIC_API_KEY` |
 | Dashboard | Next.js 16.2, React 18.3, Tailwind CSS 3.4, SWR 2.4 | the catalog, service pages, activity feed and `/docs`, refreshed every 5 s |
 | Tests and CI | Vitest 3.2, tsx 4, GitHub Actions | `npm test`, and in CI on pull requests and pushes to `main`: typecheck, tests, dashboard build, the demo and `cargo test` |
@@ -250,7 +252,8 @@ packages/chain/               the NEAR client (near-api-js 7.4.0) and the mock-c
 packages/devnet/              the in-memory mock chain; it applies the registry's rules     :4030
 packages/middleware/          the gateway: 402 paywall, payment checks, relay, attestations   :4021
 packages/client/              fetchPaid: 402 → pay (deposit, escrow or gasless) → retry, with caps
-packages/cli/                 npm run neargate -- list, status, wrap, map, buy, escrow, agent-key, mcp
+packages/sdk/                 @neargate/sdk on npm: client + chain + shared in one bundle with types
+packages/cli/                 @neargate/cli on npm: list, status, wrap, map, buy, escrow, agent-key, mcp
 packages/buyer-agent/         an LLM buyer (Claude with ANTHROPIC_API_KEY, else a deterministic MockLlm)
 packages/oracle/              the sample API the demo wraps (USD/IDR and gold)               :4010
 dashboard/                    Next.js: catalog, service pages, activity, docs              :3000
@@ -273,7 +276,7 @@ NearGate is the NEAR port of AgentGate, the team's x402 gateway for Casper, buil
 
 **Built in the window:** the `neargate-registry` contract with its escrow and sandbox tests (it replaces the Casper contracts); the NEAR client on near-api-js and the mock chain's NEAR mirror; the NEAR x402 rail (pay through the registry, verified by view and by transaction) and the NEAR-key self-map; the escrow, the restricted agent keys and the NEP-366 gasless relay; the CLI, MCP server, client and buyer agent on NEAR; the dashboard on NEAR; the testnet scripts, the hosting files, this README and the guards.
 
-**Carried over from AgentGate and ported:** the monorepo layout and the product idea; the gateway's 402 proxy (invoice store, nonce burn, attestation queue and retries, SSRF guard, rate limits); the CLI and MCP structure; the buyer agent and its MockLlm; the mock-chain devnet idea; the sample oracle; the dashboard's Next.js shell. **Removed:** the Casper contracts, the casper-js-sdk and CSPR.cloud client, and the CEP-18 facilitator rail. Internal package and env names keep the AgentGate prefix: the `@agentgate/*` workspaces, `AGENTGATE_MODE` and `AGENTGATE_ADMIN_TOKEN`; the CLI workspace is `@neargate/cli`. NearGate publishes nothing to npm, so run the CLI from this repo with `npm run neargate -- …`.
+**Carried over from AgentGate and ported:** the monorepo layout and the product idea; the gateway's 402 proxy (invoice store, nonce burn, attestation queue and retries, SSRF guard, rate limits); the CLI and MCP structure; the buyer agent and its MockLlm; the mock-chain devnet idea; the sample oracle; the dashboard's Next.js shell. **Removed:** the Casper contracts, the casper-js-sdk and CSPR.cloud client, and the CEP-18 facilitator rail. Internal package and env names keep the AgentGate prefix: the `@agentgate/*` workspaces, `AGENTGATE_MODE` and `AGENTGATE_ADMIN_TOKEN`; the CLI workspace is `@neargate/cli`. The CLI and the SDK are published to npm as `@neargate/cli` and `@neargate/sdk`, built from the workspaces by `npm run npm:pack`; from this repo, run the CLI with `npm run neargate -- …`.
 
 **Libraries:** near-sdk 5.30.1 and near-workspaces 0.24.0 (contract and sandbox tests); near-api-js 7.4.0 and borsh (NEAR client); Express with helmet, express-rate-limit and undici (gateway); the MCP SDK (`@modelcontextprotocol/sdk`), commander and zod (CLI); Next.js 16, React 18, SWR and Tailwind CSS (dashboard), with the fonts Space Grotesk, Inter and JetBrains Mono bundled in `dashboard/app/fonts` (SIL OFL 1.1); vitest, tsx, tsup and TypeScript. No project template was used; the baseline is AgentGate itself.
 

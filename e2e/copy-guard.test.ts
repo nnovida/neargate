@@ -2,10 +2,10 @@
  * e2e/copy-guard.test.ts — the repo-wide copy guard (ruling R5).
  *
  * NearGate runs on NEAR. An AI screener reads the code as well as the README, so no tracked file
- * may carry the vocabulary of the chain the project ran on before the port, or tell a reader to
- * fetch the CLI from npm. The patterns and the exemptions live in copy-rules.ts:
+ * may carry the vocabulary of the chain the project ran on before the port. The patterns and the
+ * exemptions live in copy-rules.ts:
  *   - the README section starting `## Built on AgentGate` (the origin disclosure the event asks
- *     for) is the only place the retired words may appear; an npm fetch of the CLI appears nowhere;
+ *     for) is the only place the retired words may appear;
  *   - package-lock.json, build output and binary files are not scanned;
  *   - guard tests that spell a retired word to refuse it are skipped by the word check, each with
  *     its reason.
@@ -18,7 +18,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
-  NPM_CLI_FETCH,
   RETIRED_WORDS,
   UNSCANNED_FILES,
   UNSCANNED_PREFIXES,
@@ -86,35 +85,6 @@ describe('repo-wide copy guard', () => {
 
   it('no tracked file uses the retired chain vocabulary, except the README disclosure section', () => {
     expect(offenders(RETIRED_WORDS, WORD_GUARD_FILES, true)).toEqual([]);
-  });
-
-  it('no tracked file tells a reader to fetch the CLI from npm, the README included', () => {
-    expect(offenders(NPM_CLI_FETCH, {}, false)).toEqual([]);
-  });
-
-  it('the npm-fetch pattern catches every way to fetch the CLI from npm, and not the workspace name alone', () => {
-    // Built from parts, so this file never spells a form the fetch check refuses.
-    const cli = ['@neargate', 'cli'].join('/');
-    for (const fetch of [
-      `npx ${cli} list`,
-      `npx -y ${cli}@latest list`,
-      `npx --yes ${cli} list`,
-      `npm i -g ${cli}`,
-      `npm install ${cli}@latest`,
-      `npm install --global ${cli}`,
-      `npm exec ${cli} -- list`,
-    ]) {
-      expect(NPM_CLI_FETCH.test(fetch), fetch).toBe(true);
-    }
-    for (const ok of [
-      `"name": "${cli}",`,
-      `import { buy } from '${cli}';`,
-      `npm run build -w ${cli}`,
-      `the CLI workspace is \`${cli}\`; run it with \`npm run neargate -- list\``,
-      'npm run neargate -- list',
-    ]) {
-      expect(NPM_CLI_FETCH.test(ok), ok).toBe(false);
-    }
   });
 
   it('every file the word check skips exists and still needs its exemption', () => {

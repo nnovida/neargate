@@ -14,14 +14,6 @@
 export const RETIRED_WORDS = /casper|cspr|\bmotes\b|account-hash|deploy hash/i;
 
 /**
- * Fetching the CLI from npm: NearGate publishes nothing there, so a package of that name on npm
- * would be someone else's. Every npx, `npm install`, `npm i` and `npm exec` form counts, whatever
- * flags come between the command and the name (`--yes`, `-g`, …). The workspace's name alone (a
- * manifest, an import, `npm run build -w`) does not.
- */
-export const NPM_CLI_FETCH = /(?:\bnpx|\bnpm\s+(?:i|install|exec))\b[^\n]*@neargate\/cli/i;
-
-/**
  * The README section that discloses the AgentGate origin (the event asks for it). It is the only
  * place the retired words may appear; it runs from this heading to the next `## ` heading.
  */

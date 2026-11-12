@@ -288,7 +288,7 @@ export default function Page() {
       <H2 id="testnet">Testnet scripts</H2>
       <P>
         These root scripts take the same loop to NEAR testnet: the operator path, the one that set up
-        the hosted deployment. Run them from a clone; nothing is published to npm. The TypeScript
+        the hosted deployment. Run them from a clone (they are not part of the npm packages). The TypeScript
         scripts (<M>dev:live</M>, <M>near:seed</M>, <M>smoke:live</M>) read the root <M>.env</M>.
         Copy <M>.env.example</M>, then change what it ships for mock mode:
       </P>

@@ -41,15 +41,28 @@ export default function Page() {
       {/* ───────────────────────────── invocation ───────────────────────────── */}
       <H2 id="invocation">Invocation</H2>
       <P>
-        Nothing is published to npm: run the CLI from a clone of the repository. Everything after
-        the <M>--</M> is forwarded to the <M>neargate</M> binary:
+        The CLI is on npm as <M>@neargate/cli</M>. Installed globally, it is the{' '}
+        <M>neargate</M> binary:
+      </P>
+      <CommandBlock text="npm install -g @neargate/cli" />
+      <CommandBlock text="neargate <command> [args] [options]" />
+      <P>
+        From a clone of the repository, run it through the root script instead; everything after
+        the <M>--</M> is forwarded to the binary. The examples on this page use this form, and work
+        the same with <M>neargate</M> in place of <M>npm run neargate --</M>:
       </P>
       <CommandBlock text="npm run neargate -- <command> [args] [options]" />
+      <P>
+        To pay from your own code instead, <M>@neargate/sdk</M> (<M>npm install @neargate/sdk</M>)
+        bundles the paying client with its types: <M>createNearGateChain()</M> reads and pays on
+        the live deployment, and <M>createAgentGateClient(…).fetchPaid(url)</M> pays one call.
+      </P>
       <P>
         The entry point is <M>packages/cli/src/bin.ts</M> (a <M>commander</M> program named{' '}
         <M>neargate</M>). <M>npm run build -w @neargate/cli</M> bundles it to{' '}
         <M>packages/cli/dist/bin.js</M>, which you can run with <M>node</M> directly — the form the{' '}
-        <DocLink href="#mcp-claude-desktop">Claude Desktop</DocLink> config uses. There are eleven
+        <DocLink href="#mcp-claude-desktop">Claude Desktop</DocLink> config uses from a clone.{' '}
+        <M>neargate --version</M> prints the version. There are eleven
         commands: <DocLink href="#wrap">wrap</DocLink>, <DocLink href="#map">map</DocLink>,{' '}
         <DocLink href="#list">list</DocLink>, <DocLink href="#buy">buy</DocLink>,{' '}
         <DocLink href="#status">status</DocLink>, <DocLink href="#pause">pause</DocLink>,{' '}
@@ -760,8 +773,8 @@ export default function Page() {
       </P>
       <H3 id="mcp-claude-desktop">Claude Desktop</H3>
       <P>
-        Build the bundle once with <M>npm run build -w @neargate/cli</M>, then add the server to{' '}
-        <M>claude_desktop_config.json</M>, with the absolute path to your clone:
+        With the CLI installed globally (<M>npm install -g @neargate/cli</M>), add the server to{' '}
+        <M>claude_desktop_config.json</M>:
       </P>
       <CodeBlock
         label="claude_desktop_config.json"
@@ -769,8 +782,8 @@ export default function Page() {
           {
             mcpServers: {
               neargate: {
-                command: 'node',
-                args: ['/path/to/repo/packages/cli/dist/bin.js', 'mcp', '--account', 'buyer.testnet'],
+                command: 'neargate',
+                args: ['mcp', '--account', 'buyer.testnet'],
               },
             },
           },
@@ -778,6 +791,12 @@ export default function Page() {
           2,
         )}
       />
+      <P>
+        From a clone, build the bundle once with <M>npm run build -w @neargate/cli</M> and use{' '}
+        <M>&quot;command&quot;: &quot;node&quot;</M> with the absolute path{' '}
+        <M>/path/to/repo/packages/cli/dist/bin.js</M> as the first argument, before{' '}
+        <M>mcp</M>.
+      </P>
       <P>
         To try the read tools without a client, <M>scripts/mcp.sh</M> drives the server over stdio:{' '}
         <M>scripts/mcp.sh tools</M>, <M>list</M>, <M>service &lt;id&gt;</M>, <M>invoice &lt;id&gt;</M>.

@@ -9,7 +9,7 @@ import { DEFAULT_REGISTRY_CONTRACT_ID } from '@agentgate/shared';
  */
 export const DOCS_VERSION = {
   cli: '0.2.1', // @neargate/cli (the neargate CLI)
-  sdk: '0.1.0', // @agentgate/client
+  sdk: '0.1.0', // @neargate/sdk (bundles @agentgate/client, chain and shared)
   network: 'near-testnet',
   registryId: DEFAULT_REGISTRY_CONTRACT_ID,
 } as const;

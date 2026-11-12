@@ -10,7 +10,10 @@ export default defineConfig({
   // Real npm packages stay external (declared in dependencies).
   external: ['commander'],
   clean: true,
-  dts: false,
+  // Types for the library entry: resolve the workspace packages through tsconfig.build.json's
+  // paths and inline them, so the published types name no private package.
+  tsconfig: 'tsconfig.build.json',
+  dts: { entry: { index: 'src/index.ts' }, resolve: [/^@agentgate\//] },
   sourcemap: false,
   shims: false,
 });

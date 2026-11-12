@@ -12,8 +12,8 @@
  *   - every `npm run` script, relative link and #anchor it shows exists; every CLI line it shows runs
  *     as `npm run neargate -- …`, and every `scripts/mcp.sh` line names its server (MCP_CMD);
  *   - the X post fits one post and carries the event's tags; the demo-video script runs 90–120 s;
- *   - the LICENSE keeps both holders, the root package is the private `neargate`, and no package
- *     of the repo can be published to npm.
+ *   - the LICENSE keeps both holders, the root package is the private `neargate`, and every
+ *     workspace manifest stays private (npm gets the manifests `npm run npm:pack` writes).
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -215,7 +215,7 @@ describe('README.md: everything it points at exists', () => {
     expect(used.filter((s) => !scripts.includes(s))).toEqual([]);
   });
 
-  it('every CLI command it shows runs from the repo as `npm run neargate -- …` (nothing installs a `neargate` bin)', () => {
+  it('every CLI command it shows runs from the repo as `npm run neargate -- …`, which needs no global install', () => {
     const bare = README.split('\n').filter((line) => /`neargate (?:list|status|wrap|map|buy|escrow|agent-key|mcp|demo-accounts)\b/.test(line));
     expect(bare).toEqual([]);
   });
@@ -319,7 +319,7 @@ describe('LICENSE and the root package', () => {
     expect(root?.['name']).toBe('neargate');
   });
 
-  it('no package of the repo can be published to npm (the README says NearGate publishes nothing)', () => {
+  it('every workspace manifest stays private: npm gets only what `npm run npm:pack` builds', () => {
     const manifests = execFileSync('git', ['ls-files', '-z', '--', 'package.json', '*/package.json'], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
