@@ -1,306 +1,251 @@
-<div align="center">
+# NearGate
 
-# AgentGate
+**Pay-per-call APIs for AI agents on NEAR.** NearGate puts an HTTP 402 paywall (x402) in front of any HTTP API and settles every call in NEAR through its own registry contract. An agent reads the 402 invoice, pays the registry, retries with the transaction as proof and gets the response. The gateway then records an attestation on chain, so every service carries a score backed by real payments.
 
-### Stripe for AI agents on Casper
+An AI agent can hold a NEAR account, but it cannot sign up for an API key or type in a card number. With NearGate it pays per call by itself: no account at the seller, no API key, no subscription. Its owner keeps control: the agent can run on a NEAR function-call key that can only spend a prepaid escrow, under a per-call cap, and the gateway can pay the agent's gas (NEP-366).
 
-**Turn any HTTP API into a paid, on-chain service in one command — HTTP 402 micropayments in CSPR or WCSPR, with an on-chain registry and payment-backed reputation.**
+Built during NEAR HACKATHON ([nearhackathon.com](https://nearhackathon.com)) as the NEAR port of AgentGate, the team's earlier x402 gateway. What existed before and what is new: [Built on AgentGate](#disclosure).
 
-[![ci](https://example.invalid/AgentGate/actions/workflows/ci.yml/badge.svg)](https://example.invalid/AgentGate/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/@neargate/cli.svg)](https://www.npmjs.com/package/@neargate/cli)
-[![license](https://img.shields.io/npm/l/@neargate/cli.svg)](LICENSE)
-[![Casper Testnet](https://img.shields.io/badge/Casper-Testnet%20live-c2410c.svg)](https://agentgate.example.org)
+**Contents:** [Try it](#try-it-no-keys) · [Do X → see Y](#do-x--see-y) · [How it works](#how-it-works) · [NEAR features](#near-features-used) · [Deployed](#deployed-on-near-testnet) · [Tests](#tests) · [Error codes](#error-codes) · [Layout](#repository-layout) · [Built on AgentGate](#disclosure) · [Limits](#limits-and-trust-model) · [License](#license)
 
-**[Dashboard](https://agentgate.example.org)** · **[Gateway](https://gateway.example.org)** · **[npm](https://www.npmjs.com/package/@neargate/cli)** · **[Docs](https://agentgate.example.org/docs)** · **[Contract](https://testnet.cspr.live/contract-package/e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df)**
-
-[![AgentGate dashboard — live catalog of on-chain registered services](docs/assets/dashboard.png)](https://agentgate.example.org)
-
-</div>
-
----
-
-## Contents
-
-- [What is AgentGate](#what-is-agentgate)
-- [Try it in 30 seconds](#try-it-in-30-seconds)
-- [The one-liners](#the-one-liners)
-- [How it works](#how-it-works)
-- [Quickstart (offline)](#quickstart-offline)
-- [Configuration and modes](#configuration-and-modes)
-- [Repository layout](#repository-layout)
-- [Scripts and tests](#scripts-and-tests)
-- [Deployed addresses](#deployed-addresses)
-- [Deployment and hosting](#deployment-and-hosting)
-- [Roadmap](#roadmap)
-- [About](#about)
-
----
-
-## What is AgentGate
-
-AI agents can't pay for the APIs they use — no cards, no logins, no accounts. AgentGate is the payment layer that fixes this on Casper: a seller wraps an API in one command, a buyer agent discovers and pays it in one command, and every paid call leaves a verifiable on-chain receipt.
-
-**Everything below is live on Casper Testnet and verifiable right now.**
-
-- **One-command wrap** — any HTTP API becomes a paid, on-chain-registered service; the private upstream never touches the chain.
-- **One-command buy** — discover from the on-chain registry, pay a machine-readable 402 invoice, get the data back.
-- **On-chain multi-asset price list** — each service stores an `accepts[]` price list *in the contract* (registry v2): pay in **native CSPR**, or in **WCSPR through the official Casper x402 facilitator** — gas sponsored, no native-transfer floor, true sub-CSPR micropayments.
-- **Native MCP tools** — one line of config and any MCP-capable agent (Claude Desktop, custom clients) gets discover / inspect / pay as native tools.
-- **Payment-backed reputation** — each served call is attested on-chain, so trust scores are receipts of real value transfer, not marketing.
-- **Zero-config reads** — `list` and `status` read the public node with no keys, no `.env`, no clone.
-
----
-
-## Try it in 30 seconds
-
-Zero setup, no keys — reads the live on-chain registry straight from the public node (Node ≥ 22):
+## Try it (no keys)
 
 ```bash
-npx @neargate/cli@latest list          # the live on-chain service catalog
-curl -sS https://gateway.example.org/svc/2   # a real HTTP 402 invoice from the live gateway
+npm install && npm run demo
 ```
 
-<details>
-<summary><b>For judges / reviewers — drive the live MCP server in one paste</b></summary>
+Needs Node ≥ 22.22.2 (near-api-js 7.4.0 requires it). The demo boots a NEAR mock chain, the gateway and a sample API in one process, wraps the API as service #1 at 0.5 NEAR, buys one call and exits 0. It needs no key and no network:
 
-<br>
+```text
+> neargate@0.1.0 demo
+> tsx scripts/demo.ts
 
-The published CLI defaults to **live Casper Testnet** + the deployed registry, and the read tools use the public node RPC — no `.env`, no CSPR.cloud key, no clone. From any directory:
+registered service #1
+402 invoice: 0.5 NEAR + 0.002 NEAR storage
+paid: tx D7w5vMa1uqLrMet4z21dqbr6eCNGji7Vy2f7qXM64JYT
+served: 200
+attested: tx A8nVeRKNSqWF2kyNvokzr23MN67tij8jf376PAnCjAbk
+score: 1/1 (new)
+```
+
+The two hashes are the buyer's `pay` and the gateway's `record_attestation` on the mock chain; they change on every run.
+
+On NEAR testnet, also with no key:
 
 ```bash
-( printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"judge","version":"0.0.0"}}}' \
-  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"agentgate_list_services","arguments":{}}}' ; \
-  sleep 8 ) | npx -y @neargate/cli@latest mcp 2>/dev/null \
-  | jq -r 'select(.id==2) | .result.content[0].text | fromjson'
+npm run neargate -- list                  # the live catalog of the registry <registry-account>
+curl -i https://<gateway-host>/svc/1      # HTTP/1.1 402 Payment Required + the x402 invoice
 ```
 
-Cloned the repo? `scripts/mcp.sh` wraps the same handshake:
+> Pending the testnet deploy and the hosting: `<registry-account>`, `<gateway-host>` and `<dashboard-host>` are placeholders, and until the registry id is set `list` answers `CONFIG_INVALID`.
+
+## Do X → see Y
+
+### Locally, on the mock chain (no keys)
+
+Terminal 1 starts the mock chain, the gateway (with the gasless relayer on) and the sample API, seeds one paid call, prints two `export MOCK_…` lines and stays up. Terminal 2 serves the dashboard at http://localhost:3000. Paste the export lines into terminal 3.
 
 ```bash
-scripts/mcp.sh list
-scripts/mcp.sh invoice 2     # a real HTTP 402 invoice; the nonce changes each call
+RELAYER_ENABLED=1 GATEWAY_ACCOUNT_ID=gateway.mock npm run dev:seed   # terminal 1
+npm run dev:dashboard                                                # terminal 2
 ```
 
-Only `agentgate_buy` needs a funded buyer key — every read tool is zero-setup.
+| Do (terminal 3) | See |
+|---|---|
+| `npm run neargate -- list --mode mock` | `1  RWA FX & Gold Oracle  0.5  1/1  new  yes` |
+| `curl -i http://localhost:4021/svc/1` | `HTTP/1.1 402 Payment Required` and the x402 body: `payTo` the registry, `maxAmountRequired` (0.502 NEAR in yocto), a one-time `nonce`, `relayer: gateway.mock` |
+| `npm run neargate -- buy 1 --max 1 --mode mock` | the API's JSON on stdout; on stderr `paid: 0.5 NEAR + 0.002 NEAR storage`, the payment tx and `status: 200`. The score of #1 on the dashboard goes up by one. |
+| `npm run neargate -- escrow deposit 2 --mode mock` | `escrow: 1.998 NEAR` (the first deposit keeps 0.002 NEAR for the escrow's storage) |
+| `npm run neargate -- buy 1 --from-escrow --max 1 --mode mock` | `from: escrow (nothing attached; the escrow was debited)` |
+| `npm run neargate -- buy 1 --gasless --max 1 --mode mock` | `relayed: gasless — gateway.mock relayed the signed pay_from_escrow and paid the gas` |
+| `npm run neargate -- wrap http://localhost:4010/feed --price 0.25 --name "Gold Spot Feed" --mode mock` | `service id: 2`, the endpoint `http://localhost:4021/svc/2` and the register tx |
+| `MCP_CMD="npx tsx packages/cli/src/bin.ts mcp --mode mock" scripts/mcp.sh list` | the catalog as the MCP tool `neargate_list_services` returns it; `scripts/mcp.sh tools` lists all five tools |
 
-</details>
+### On NEAR testnet (needs a funded testnet account and its key)
 
----
-
-## The one-liners
-
-**Sell** — wrap any HTTP API into a paid service. Registers on-chain (signed by `--pem`) and maps your upstream on the gateway via an owner-signed challenge (no shared admin token):
+The CLI reads an account's key from `~/.near-credentials/testnet/<account>.json`, the legacy keychain that near-cli-rs writes with `save-to-legacy-keychain` (or from `--key-file`). A new faucet-funded account:
 
 ```bash
-npx @neargate/cli wrap https://api.example.com/data --price 2.5 --name "My Data API" --pem ./key.pem
+near account create-account sponsor-by-faucet-service <you>.testnet autogenerate-new-keypair --signature-scheme ed25519 save-to-legacy-keychain network-config testnet create
 ```
 
-**Buy** — pay one call to any listed service. The CLI pays the 402 invoice (native transfer, or an EIP-712 authorization on the facilitator rail) and prints the data — body to stdout, payment receipt to stderr:
-
-```bash
-npx @neargate/cli buy 2 --pem ./buyer.pem --max 5
-```
-
-**Hand it to an agent** — one command exposes the whole loop to any MCP-capable client as native tools:
-
-```bash
-npx @neargate/cli mcp          # a Model Context Protocol stdio server
-```
-
-Tools: `agentgate_list_services`, `agentgate_get_service`, `agentgate_get_invoice` (read-only, no key) and `agentgate_buy` (pays a 402 invoice from the buyer key, capped by `maxCspr`). Wire it into Claude Desktop's `claude_desktop_config.json`:
+| Do | See |
+|---|---|
+| **Buy:** `npm run neargate -- buy 1 --account <you>.testnet --max 0.05` | the response on stdout; on stderr the price + 0.002 NEAR storage, the `pay` tx and its nearblocks link. Seconds later the gateway's attestation lands and the service's score on the dashboard goes up by one. |
+| **Sell:** `npm run neargate -- wrap https://<your-api> --price 0.01 --name "My API" --account <you>.testnet --attestor <gateway-account> --gateway https://<gateway-host>` | the service id, its public `/svc/<id>` endpoint and the register tx (0.12 NEAR deposit). Your API's URL never goes on chain: it is sent only to the gateway, in a request signed with your full-access key. |
+| **Agent key:** `npm run neargate -- escrow deposit 0.5 --account <you>.testnet`, then `npm run neargate -- agent-key add --allowance 0.25 --account <you>.testnet` | the escrow balance; then the key file `~/.near-credentials/testnet/<you>.testnet.neargate-agent.json` (mode 0600) and the AddKey tx. The agent buys with `npm run neargate -- buy 1 --from-escrow --account <you>.testnet --key-file <that file> --max 0.05`. |
+| **Gasless:** `npm run neargate -- buy 1 --gasless --account <you>.testnet --key-file <that file> --max 0.05` | `relayed: gasless — <gateway-account> relayed the signed pay_from_escrow and paid the gas`. Your account's balance does not move; the escrow pays price + 0.002 NEAR. Needs a gateway running with `RELAYER_ENABLED=1`. |
+| **MCP:** `npm run build -w packages/cli`, then add the server below to `claude_desktop_config.json` | Claude Desktop gets five tools: `neargate_list_services`, `neargate_get_service`, `neargate_get_invoice`, `neargate_escrow_balance` and `neargate_buy` (capped by `maxNear`; `fromEscrow` and `gasless` work with an agent key) |
 
 ```json
-{ "mcpServers": { "agentgate": { "command": "npx", "args": ["-y", "@neargate/cli", "mcp"] } } }
+{ "mcpServers": { "neargate": { "command": "node", "args": ["/path/to/neargate-app/packages/cli/dist/bin.js", "mcp", "--registry", "<registry-account>", "--account", "<you>.testnet", "--key-file", "~/.near-credentials/testnet/<you>.testnet.neargate-agent.json"] } } }
 ```
 
----
+Every flag, the MCP tools in full and the docs pages behind them: [packages/cli/README.md](packages/cli/README.md), or `/docs` on the dashboard (`npm run dev:dashboard`, or `https://<dashboard-host>/docs`).
 
 ## How it works
 
-Sellers put a **402 paywall** in front of their API and register it in an on-chain registry with a per-asset **`accepts[]` price list**. Buyer agents discover services from the registry and pay on the rail the service advertises — a **native CSPR transfer carrying the invoice nonce as `transfer_id`**, or an **EIP-712 authorization settled by the official CSPR.cloud x402 facilitator** (gas sponsored). Either way the buyer retries with the payment proof, gets the data, and the gateway records an **on-chain attestation** that feeds each service's trust score. No accounts, no API keys, no subscriptions: HTTP 402 + Casper.
+1. **Register.** A seller calls `register_service` on `neargate-registry` with a name, a price in yoctoNEAR, a payment target, an attestor and the gateway's base URL, and attaches a 0.12 NEAR deposit that prepays the service's record, its score and its full attestation list. The API's own URL never goes on chain: the owner maps it on the gateway with a request signed by a full-access key of the owner account.
+2. **Challenge.** An unpaid `GET /svc/<id>` answers `402` with an x402 V1 body: `payTo` is the registry, `maxAmountRequired` is the price + 0.002 NEAR, and `extra` carries a single-use `nonce` and an expiry.
+3. **Pay through the registry.** `pay(service_id, nonce)` forwards exactly the price to the seller's payment target, keeps the 0.002 NEAR storage fee for the payment record and refunds any excess. A nonce can be paid once, ever.
+4. **Prove, verify, serve.** The agent retries with an `X-PAYMENT` header (base64 JSON: tx hash, nonce, payer). The gateway reads the registry's `get_payment(nonce)` and, live, the transaction itself (signer, receiver, method, arguments), burns the nonce, proxies the request and returns the response.
+5. **Attest and score.** The gateway calls `record_attestation`. The registry accepts it only for a payment it holds, once, and never for a payment by the owner or the payment target. The score `(total, success)` gives the tier: new, reliable (≥ 5 calls, ≥ 90 % ok) or trusted (≥ 25 calls, ≥ 95 % ok).
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Seller as Seller (CLI)
-    participant Chain as Casper (registry)
-    participant Gate as AgentGate gateway
+    participant Seller
+    participant Registry as neargate-registry (NEAR)
+    participant Gateway as NearGate gateway
     participant Agent as Buyer agent
     participant API as Upstream API
-
-    Seller->>Chain: register service (accepts[] price list, payment target, attestor)
-    Seller->>Gate: map upstream (owner-signed challenge → /services/:id/map)
-    Agent->>Chain: discover catalog + trust scores
-    Agent->>Gate: GET /svc/:id
-    Gate-->>Agent: 402 PaymentRequiredResponse (x402Version, error, accepts[])
-    Agent->>Chain: CSPR transfer (transfer_id = nonce)
-    Agent->>Gate: GET /svc/:id + X-PAYMENT: <base64 proof>
-    Gate->>Chain: verify transfer (target, amount, transfer_id, age)
-    Gate->>API: proxy (nonce burned first — single use)
-    API-->>Gate: data
-    Gate-->>Agent: 200 data
-    Gate--)Chain: attestation (success) → score → trust tier
+    Seller->>Registry: register_service(name, price, payment_target, attestor) + 0.12 NEAR
+    Seller->>Gateway: map the private API URL (signed by the owner key)
+    Agent->>Registry: list_services, get_score (free views)
+    Agent->>Gateway: GET /svc/1
+    Gateway-->>Agent: 402 invoice (payTo = registry, nonce, price + 0.002 NEAR)
+    Agent->>Registry: pay(1, nonce) with price + 0.002 NEAR attached
+    Registry->>Seller: exactly the price, to payment_target
+    Agent->>Gateway: GET /svc/1 + X-PAYMENT (tx hash, nonce, payer)
+    Gateway->>Registry: get_payment(nonce), and the tx via RPC
+    Gateway->>API: proxy the request (nonce burned first)
+    API-->>Gateway: 200 + data
+    Gateway-->>Agent: 200 + data
+    Gateway--)Registry: record_attestation(1, nonce, tx hash, success)
 ```
 
-The diagram shows the native rail. A service whose on-chain `accepts[]` includes a CEP-18 option (e.g. `0.1 WCSPR`) runs the **official x402 facilitator rail** instead: the 402 is an x402 v2 body derived from the contract, the buyer signs an EIP-712 authorization (`PAYMENT-SIGNATURE` header), and the CSPR.cloud facilitator verifies + settles on-chain with sponsored gas before the gateway proxies and attests.
+The buyer can pay on three rails. The invoice and the payment record are the same on all three:
 
-> Full component breakdown: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · engineering contract: [docs/SPEC.md](docs/SPEC.md).
+| Rail | What the buyer sends | Gas paid by | Can be signed by |
+|---|---|---|---|
+| Deposit (default) | `pay(service_id, nonce)` with price + 0.002 NEAR attached; then the tx hash as proof | the buyer | a full-access key |
+| Escrow (`--from-escrow`) | `pay_from_escrow(service_id, nonce)` with nothing attached (the escrow is debited); then the tx hash | the buyer | a full-access key or an agent key |
+| Gasless (`--gasless`) | that `pay_from_escrow`, signed as a NEP-366 delegate, as the proof itself; the gateway relays it | the gateway | a full-access key or an agent key |
 
----
+The full spec, every 402 reason and the gateway routes are on the dashboard's `/docs/protocol` page ([source](dashboard/app/docs/protocol/page.tsx)).
 
-## Quickstart (offline)
+## NEAR features used
 
-Requires Node ≥ 22. No keys, no network, no chain access needed:
+| NEAR feature | How NearGate uses it |
+|---|---|
+| Own smart contract (Rust, near-sdk 5.30.1) | `neargate-registry` ([contracts/](contracts/README.md)): the service catalog, pay-through payments, the escrow, attestations, scores and an activity ring. It has no admin. Every byte a caller makes it store is prepaid by that caller (0.12 NEAR per service, 0.002 NEAR per payment and per escrow entry), measured with `env::storage_usage()` and refused with `ERR_STORAGE_EXCEEDED` past the budget. |
+| NEP-297 events | `EVENT_JSON` logs with `standard: "neargate"` for `service_registered`, `payment`, `attestation`, `service_status`, `attestor_changed`, `escrow_deposit` and `escrow_withdraw`. |
+| Function-call access keys | `neargate agent-key add` gives an agent a key that NEAR itself restricts to the registry and the one method `pay_from_escrow`: it spends the prepaid escrow and nothing else, plus gas from the account's own balance up to its allowance. A function-call key cannot attach a deposit, so it could never sign `pay` (which carries the price as a deposit); that is why the escrow exists and `pay_from_escrow` attaches nothing. `withdraw_escrow` needs exactly 1 yoctoNEAR attached, so only a full-access key can take the escrow back. The sandbox test `agent_function_call_key_pays_from_escrow_only` proves both refusals (`DepositWithFunctionCall`, `MethodNameMismatch`). |
+| NEP-366 meta transactions | The gasless rail: the agent signs its `pay_from_escrow` as a `SignedDelegate` and sends it as the payment proof. Before relaying, the gateway checks its shape, its signature, that the key is the payer's and may call `pay_from_escrow`, its nonce and the escrow. It then relays it and pays only the gas. NEAR makes a relayer pay any deposit a relayed call attaches, so the gateway relays this one zero-deposit call and nothing else. Shipped: tested end to end on the mock chain (`e2e/gasless.test.ts`); its first testnet run comes with the deploy. |
+| Access keys as identity | Self-map: the gateway accepts a seller's private API URL only in a request signed by a key that `view_access_key` shows is a FullAccess key of the service owner. |
 
-```bash
-npm install
-npm run demo     # full loop: register → 402 → pay → serve → attest → score, exits 0
-```
+The track hints this touches: AGENT COMMERCE (07 Agent Economy: agents paying for APIs), AGENT SECURITY and FUNCTION CALL KEYS (06 AI Security & Defense), META TRANSACTIONS (08 Real-World Money).
 
-The demo boots a mock chain + oracle + gateway in-process, wraps the oracle at 0.5 CSPR, runs the LLM buyer agent (deterministic MockLlm — no API key needed), and prints the **payment deploy hash**, the **attestation tx hash**, and the final score.
+### NEAR Agent Connect (not integrated)
 
-### See it in the dashboard
+NearGate is the paying side of agentic commerce on NEAR. [Agent Connect](https://nearbuilders.org/build#agent-connect) (the NEAR Intents agent API) is a complementary agent wallet with owner rules: an agent withdraws within its owner's limits to its own NEAR account, then pays NearGate invoices from there, and NearGate's own caps (`--max`, `maxNear`, `BUDGET_EXCEEDED`, the escrow) add to those custody-side rules. It is not integrated: Agent Connect is a mainnet-only, experimental beta, and its owner-policy actions are transfers and withdrawals, not contract calls.
 
-```bash
-npm run dev:seed          # boots devnet+oracle+middleware AND seeds one wrapped
-                          # service + a real paid call, then STAYS UP
-npm run dev:dashboard     # in a second terminal → open the URL it prints
-```
+## Deployed on NEAR testnet
 
-### Manual dev loop
+| What | Value |
+|---|---|
+| Registry contract | `<registry-account>` (the CLI's default registry) |
+| Gateway | `https://<gateway-host>`, run by `<gateway-account>` (it signs the attestations and relays gasless payments) |
+| Dashboard | `https://<dashboard-host>`: catalog, service pages, activity feed and `/docs` |
+| `register_service` | `<tx-register>` |
+| `pay` | `<tx-pay>` |
+| `record_attestation` | `<tx-attest>` |
 
-```bash
-npm run dev               # empty stack: devnet :4030 + oracle :4010 + middleware :4021
-# paste the printed MOCK_BUYER_ACCOUNT / MOCK_SELLER_ACCOUNT export lines, then:
-npm run agentgate -- wrap http://localhost:4010/feed --price 0.5 --name "RWA FX & Gold Oracle"
-npm run agent -- --task "Get today's USD/IDR rate and gold price, summarize for a treasury report"
-npm run agentgate -- buy 1 --mode mock    # or skip the agent: pay once, print the data
-```
+Running your own deployment (testnet; needs near-cli-rs, and cargo-near for the deploy):
 
-Set `ANTHROPIC_API_KEY` to let the buyer agent use Claude instead of the MockLlm.
+| Script | Does |
+|---|---|
+| `npm run near:bootstrap` | creates four faucet accounts (registry, seller, gateway, buyer) with keys in `~/.near-credentials/testnet/`; `DRY_RUN=1` prints every command and touches no network |
+| `npm run near:deploy` | builds `neargate-registry` with cargo-near and deploys it with `new()` (no arguments, no admin) |
+| `npm run dev:live` | the gateway in live mode against that registry |
+| `npm run near:seed` | one real register → pay → attest through the running gateway, with the three nearblocks links |
+| `npm run smoke:live` | a read-only check: list, one service, an unpaid 402 |
 
-<details>
-<summary><b>Port notes and gotchas</b></summary>
+Hosting the gateway and the dashboard (pm2, Vercel or docker compose): [deploy/README.md](deploy/README.md). Contract build, ABI and storage accounting: [contracts/README.md](contracts/README.md).
 
-<br>
+## Tests
 
-- **Demo ports:** the demo binds `:4030` (devnet), `:4010` (oracle) and `:4021` (gateway). If one is taken (`EADDRINUSE`), override: `DEVNET_PORT=14030 ORACLE_PORT=14010 MIDDLEWARE_PORT=14021 npm run demo`.
-- **`npm run demo` won't show in the dashboard** — it boots its *own* in-memory chain, runs the loop, and exits, so its data is gone by the time you open a browser. Use `npm run dev:seed` (persistent + populated) to view it live. The dashboard polls the running stack every 5 s.
-- **Dashboard port:** defaults to `http://localhost:3000`, but if 3000 is taken Next.js silently moves to **3001** (or the next free port). Always open the URL printed in the `dev:dashboard` terminal.
-
-</details>
-
----
-
-## Configuration and modes
-
-`AGENTGATE_MODE=mock|live` (default `mock` for the repo stack; the published CLI defaults to `live`) selects the chain backend behind the `ChainClient` seam — everything above it is identical:
-
-| | `mock` | `live` (Casper Testnet) |
+| Suite | Command | Tests |
 |---|---|---|
-| Chain | in-memory devnet (`@agentgate/devnet`) | casper-js-sdk v5 + CSPR.cloud REST |
-| Signers | mock account strings | PEM keys |
-| Payment verify | devnet transfer lookup | CSPR.cloud `GET /transfers?deploy_hash=` |
-| Registry | devnet mirrors the Odra contract rules | deployed `AgentGateRegistry` contract |
-| Guardrails | default admin token OK, SSRF guard off | default token refused, SSRF guard on |
+| TypeScript: every package, the e2e flows on the mock chain (in-process servers on port 0), the dashboard | `npm test` | 1,200+ (vitest); no network |
+| Contract: unit tests and near-workspaces sandbox tests | `cd contracts && cargo test` (build the wasm first: [contracts/README.md](contracts/README.md#test)) | 55+ |
+| Typecheck, dashboard build, demo | `npm run typecheck`, `npm run build`, `npm run demo` | |
 
-All env vars are documented in [.env.example](.env.example). In **live mode** the gateway and background services require `CSPR_CLOUD_API_KEY` and a non-default `AGENTGATE_ADMIN_TOKEN` (enforced by config). The **CLI is looser**: `list`/`status` read the public node with no keys; only `status` attestation history needs `CSPR_CLOUD_API_KEY`. Live `wrap` needs **no** admin token — it maps the upstream by signing an ownership challenge with your `--pem` key (verified against the on-chain `owner`). Live `buy` needs only a funded buyer key (`--pem` or `BUYER_SIGNER_PEM_PATH`). Every value can also be passed as a flag (`--mode`, `--node-url`, `--registry`, `--pem`, `--api-key`, `--admin-token`; flag > env > default).
+The e2e suites cover the full loop, the escrow and gasless rails, the owner-signed self-map, the CLI as a subprocess and the demo's six lines. Two guards keep this README honest: `e2e/readme.test.ts` checks every `npm run` script, relative link and live value in it, and `e2e/copy-guard.test.ts` scans every tracked file for the previous chain's vocabulary and the retired hosts. In the contract suite, `pay_refunds_excess_and_forwards_exact_price`, `self_paid_payment_cannot_be_attested_onchain` and `pay_storage_cost_is_covered_by_fee` run against a real NEAR sandbox node.
 
----
+## Error codes
+
+The ones a buyer or seller meets most. The CLI prints `error: <CODE>: <message>`; MCP tools return the same code first.
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `BUDGET_EXCEEDED` | The invoice total (price + 0.002 NEAR) is above `--max`, `maxNear` or the agent's budget. | Nothing was paid. Raise the cap or pick another service. |
+| `PAID_NOT_SERVED` | The `pay` went through, but the gateway did not serve the call. The error names the tx and the nonce. | Do not buy again: that pays twice. Re-present the same proof (an `X-PAYMENT` for that tx and nonce) once the gateway answers. |
+| `GASLESS_NOT_SERVED` | `--gasless`: the gateway did not serve the call. The escrow paid only if the gateway's relay landed. | Do not sign a new delegate for that invoice while the relay may still land: check the relay tx it names, or `escrow balance`, first. |
+| `PRICE_MISMATCH` | Escrow or gasless: the invoice total is not the on-chain price + 0.002 NEAR. | Nothing was sent. Do not pay this gateway's invoice from the escrow. |
+| `ERR_ESCROW_INSUFFICIENT` | The escrow holds less than price + 0.002 NEAR. | `escrow deposit` more. |
+| `RELAYER_UNAVAILABLE` | `--gasless`, but the gateway offers no relayer. | Use `--from-escrow`. |
+| `TX_TIMEOUT` | A transaction was sent, but its outcome is unknown. | Check the named tx on nearblocks before retrying. |
+| `CONFIG_INVALID` | A bad flag or variable, e.g. live mode with no registry id. | Set `REGISTRY_CONTRACT_ID` (or pass `--registry`). |
+| `GATEWAY_REQUIRED` | A live `wrap` with no `--gateway` and no hosted default. | Pass `--gateway`; the registry stores it for good. |
+| `settlement_pending` (402) | The payment is not visible yet, or a gasless relay is in flight. | Retry the same proof after `Retry-After`. |
+| `tx_mismatch` (402) | The tx is not a successful `pay` of this nonce and service, signed by the named payer. | Present the right transaction. |
+| `ERR_*` (contract) | The registry refused a call, e.g. `ERR_NONCE_USED`, `ERR_SELF_PAYMENT`, `ERR_DEPOSIT_TOO_LOW`. | The full list: [contracts/README.md](contracts/README.md#errors). |
 
 ## Repository layout
 
+```text
+contracts/registry/           neargate-registry, the NEAR contract (Rust, near-sdk 5.30.1)
+contracts/integration-tests/  near-workspaces sandbox tests
+packages/shared/              types, config, yocto money, the x402 codec, trust tiers
+packages/chain/               the NEAR client (near-api-js 7.4.0) and the mock-chain client
+packages/devnet/              the in-memory mock chain; it applies the registry's rules     :4030
+packages/middleware/          the gateway: 402 paywall, payment checks, relay, attestations   :4021
+packages/client/              fetchPaid: 402 → pay (deposit, escrow or gasless) → retry, with caps
+packages/cli/                 npm run neargate -- list, status, wrap, map, buy, escrow, agent-key, mcp
+packages/buyer-agent/         an LLM buyer (Claude with ANTHROPIC_API_KEY, else a deterministic MockLlm)
+packages/oracle/              the sample API the demo wraps (USD/IDR and gold)               :4010
+dashboard/                    Next.js: catalog, service pages, activity, docs              :3000
+scripts/                      demo.ts, dev.ts, live.ts, near/ (bootstrap, deploy, seed, smoke), mcp.sh
+e2e/                          end-to-end tests and the README and copy guards
+deploy/                       the hosting runbook
 ```
-packages/
-  shared/        types · config · bigint money · trust tiers (zero runtime deps)
-  devnet/        in-memory mock chain HTTP server                         :4030
-  chain/         ChainClient: MockChainHttpClient + LiveCasperClient
-  middleware/    the product core — 402 paywall proxy + owner-signed self-map   :4021
-  client/        agent-side fetchPaid (parse 402 → pay → retry)
-  oracle/        demo RWA feed: USD/IDR + gold spot + confidence          :4010
-  buyer-agent/   LLM decision loop (AnthropicLlm / MockLlm)
-  cli/           agentgate wrap | buy | list | status | pause | resume | demo-accounts
-dashboard/       Next.js 16 landing + catalog + live activity + docs      :3000
-contracts/       AgentGateRegistry (Rust/Odra) — registry, scores, attestations
-e2e/             full-loop test, in-process servers on port 0
-scripts/         dev.ts (stack) · demo.ts (one-shot scripted demo)
-```
 
----
+## Built on AgentGate (Casper)
 
-## Scripts and tests
+<a id="disclosure"></a>
 
-| Command | What it does |
+NearGate is the NEAR port of AgentGate, the team's x402 gateway for Casper, built before this event. This repository carries AgentGate's full git history, so the line between old and new is exact:
+
+| | |
 |---|---|
-| `npm run demo` | one-shot full loop, offline, exits 0 with both tx hashes |
-| `npm run dev` | boots devnet + oracle + middleware, seeds demo accounts |
-| `npm run dev:dashboard` | Next.js dashboard at :3000 |
-| `npm run agentgate -- …` | the `agentgate` CLI |
-| `npm run agent -- --task "…"` | run the buyer agent once |
-| `npm run typecheck` | `tsc --noEmit` in every package + dashboard + root scripts/e2e |
-| `npm test` | vitest: all package units + the e2e loop (399 tests) |
-| `npm run build` | dashboard `next build` |
+| Pre-hackathon baseline | tag `pre-hackathon` = `8dba09a` (2026-07-24), the last Casper commit |
+| Hackathon work | every commit after it, all from 2026-11-11 on, inside the NEAR HACKATHON window |
+| The diff | `<REPO_URL>/compare/pre-hackathon...hackathon-submission`; in a clone, `git diff --stat pre-hackathon hackathon-submission` |
 
-Contract tests: `cd contracts/agentgate-registry && cargo odra test` (22 OdraVM tests, incl. the v2 `accepts[]` paths), plus `contracts/spend-guard` (25 tests via `cargo test`).
+**Built in the window:** the `neargate-registry` contract with its escrow and sandbox tests (it replaces the Casper contracts); the NEAR client on near-api-js and the mock chain's NEAR mirror; the NEAR x402 rail (pay through the registry, verified by view and by transaction) and the NEAR-key self-map; the escrow, the restricted agent keys and the NEP-366 gasless relay; the CLI, MCP server, client and buyer agent on NEAR; the dashboard on NEAR; the testnet scripts, the hosting files, this README and the guards.
 
----
+**Carried over from AgentGate and ported:** the monorepo layout and the product idea; the gateway's 402 proxy (invoice store, nonce burn, attestation queue and retries, SSRF guard, rate limits); the CLI and MCP structure; the buyer agent and its MockLlm; the mock-chain devnet idea; the sample oracle; the dashboard's Next.js shell. **Removed:** the Casper contracts, the casper-js-sdk and CSPR.cloud client, and the CEP-18 facilitator rail. Internal package and env names keep the AgentGate prefix: the `@agentgate/*` workspaces, the CLI workspace `@neargate/cli`, `AGENTGATE_MODE` and `AGENTGATE_ADMIN_TOKEN`. NearGate publishes nothing to npm; the package of that name on npm is AgentGate's old CLI, so run the CLI from this repo with `npm run neargate -- …`.
 
-## Deployed addresses
+**Libraries:** near-sdk 5.30.1 and near-workspaces 0.24.0 (contract and sandbox tests); near-api-js 7.4.0 and borsh (NEAR client); Express with helmet, express-rate-limit and undici (gateway); the MCP SDK (`@modelcontextprotocol/sdk`), commander and zod (CLI); Next.js 16, React 18, SWR and Tailwind CSS (dashboard); vitest, tsx, tsup and TypeScript. No project template was used; the baseline is AgentGate itself.
 
-**Live on Casper Testnet** (Casper 2.0, network `casper-test`) — **registry v2** with the on-chain multi-asset `accepts[]` price list (unlocked/upgradable package). The full loop — register (accepts[]) → pay (native CSPR transfer **or** WCSPR via the x402 facilitator) → attest → score — runs on-chain; every catalog service carries a genuine payment-backed attestation. Set `REGISTRY_CONTRACT_PACKAGE_HASH` to the package hash for live mode (the published CLI already defaults to it).
+**AI code:** AI coding assistants were used throughout the window to write, test and review the code and the docs. The event's rules ask for this disclosure.
 
-| Artifact | Value |
+## Limits and trust model
+
+| Limit | What it means |
 |---|---|
-| `AgentGateRegistry` **v2** package hash | `hash-e09869a12ffcdbf58f53b3c7119b168beca5385a3f538415384a9ec80b9bf8df` |
-| Install (unlocked/upgradable) tx | [`825e0e0f…`](https://testnet.cspr.live/transaction/825e0e0fbdefa2ca25b526bde27493948b5e369132ddf96e8d801954d8ad702a) |
-| `register_service` #1 with 2-asset `accepts[]` (native 2.5 CSPR + 0.1 WCSPR) | [`38836425…`](https://testnet.cspr.live/transaction/38836425b749f0fe492cd1fbf90c5b523516bdb7840460c7f83e797a7e4699e1) |
-| #2 native buy via `agentgate buy` (2.5 CSPR, `transfer_id` = nonce) | [`1fa1078c…`](https://testnet.cspr.live/transaction/1fa1078ca4e5f2bfa4d61516332c18175f6b6eb30c7c6de96f0ae36fdfec60b1) |
-| #2 `record_attestation` | [`62d44ea7…`](https://testnet.cspr.live/transaction/62d44ea7c2a27b9240e183112fcb2b425f894e7bcfd528d7152d3cbf0b8677f4) |
-| #1 facilitator settle (0.1 WCSPR, gas sponsored) | [`c190bcc5…`](https://testnet.cspr.live/transaction/c190bcc528f32c197f8c4f59ade398816bff2320c70891252860b2f0ef96e6e8) |
-| #1 `record_attestation` (references the settle tx) | [`ba36811b…`](https://testnet.cspr.live/transaction/ba36811b9533b56b38f6b0dea60600b3c242f7a72d661bec47d1dbffdb467430) |
-| Legacy **v1** registry (locked; rollback target, still readable) | `hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9` |
+| Testnet only | Nothing is deployed to mainnet, and the contract has not been audited. |
+| The registry account still holds its full-access key | The contract has no admin method, but the account it is deployed on keeps the key it was deployed with, so that key can replace the code. Deleting the key would make the code final; it stays on testnet so fixes can ship. |
+| A score's payments are trustless; its success flag is reported | The registry guarantees that every counted call is a real payment it received, counted once and never paid by the owner or the payment target. The `success` flag is whatever the service's attestor (the gateway) or its owner reports: the registry lets the owner attest too, so an owner can record a verdict before the gateway does. |
+| The wash-trade guard covers only the owner and the payment target | A seller paying from a third account makes a real payment that counts. Each one costs at least the 0.002 NEAR fee, and the price returns to the seller. |
+| A leaked agent key | can spend the whole escrow, on any active service, plus gas from the account balance up to the key's allowance. Keep both small; revoke the key by deleting it with the full-access key. |
+| Tx proofs can be front-run | Once a buyer's `pay` transaction is public, anyone watching can present it first and receive the response; the buyer then gets `invoice_used` (`PAID_NOT_SERVED`). That is inherent to paying first and proving after. On the gasless rail nothing redeemable is public before the buyer's request reaches the gateway. |
+| One gateway process | Receipts, rate limits and in-flight relays live in the gateway's memory, so run one instance. Without `INVOICE_STORE_PATH` a restart forgets open invoices. |
+| Native NEAR only | The registry stores up to four price options per service, but only native NEAR is settled; NEP-141 tokens are next. |
 
----
+Security reports: [SECURITY.md](SECURITY.md). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Deployment and hosting
+## License
 
-The registry is **deployed to Casper Testnet** (addresses above). **Currently hosted:** the live-mode gateway runs at **https://gateway.example.org** and the dashboard at **https://agentgate.example.org** (cloudflared tunnels → local PM2 services). The CLI is published to npm as [`@neargate/cli`](https://www.npmjs.com/package/@neargate/cli).
-
-<details>
-<summary><b>Deploy runbook and self-hosting</b></summary>
-
-<br>
-
-- **Contract deploy:** [docs/DEPLOY.md](docs/DEPLOY.md), including the wasm toolchain requirement (**binaryen ≥ 123** + `wasm-strip`; older binaryen leaves a bulk-memory `DataCount` section that makes stored entry-point calls revert with *"Sections out of order"*) and the verify-against-deployed-contract notes.
-- **Hosting the services:** [docs/HOSTING.md](docs/HOSTING.md) — dashboard → Vercel (root `vercel.json`), middleware + oracle → Railway (per-package Dockerfiles + `railway.json`), plus a self-contained `docker-compose.hosting.yml` demo stack.
-- **Gateway runbook:** `deploy/agentgate.ecosystem.config.cjs` in [docs/DEPLOY-GATEWAY.md](docs/DEPLOY-GATEWAY.md).
-
-</details>
-
----
-
-## Roadmap
-
-**Shipped**
-
-- Native CSPR rail — transfer with the invoice nonce bound as `transfer_id`
-- Official x402 facilitator rail — WCSPR via CSPR.cloud, EIP-712, gas sponsored
-- On-chain multi-asset `accepts[]` price list — registry v2 (unlocked/upgradable)
-- MCP server for any agent framework — `npx @neargate/cli mcp`
-- CLI **v0.2.1** published to npm
-
-**Next**
-
-- Mainnet deploy
-- CSPR.cloud streaming for real-time catalog updates
-- Staking-weighted attestations with slashing
-
----
-
-## About
-
-Built solo by its author for the [Casper Agentic Buildathon 2026](https://dorahacks.io/hackathon/casper-agentic-buildathon) — Casper Innovation Track (Agentic AI × DeFi/RWA on Casper).
-
-**License:** [MIT](LICENSE)
+MIT, see [LICENSE](LICENSE).

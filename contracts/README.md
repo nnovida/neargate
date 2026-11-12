@@ -62,14 +62,18 @@ already have, and `NEARGATE_REGISTRY_WASM` to test a wasm at another path.
 Fund the contract account with at least 3 NEAR. Once the activity ring is full it locks about 2.5 NEAR for
 storage: the code (about 200 KB, 2.0 NEAR) plus up to 0.47 NEAR for the ring (see Storage accounting).
 
+The commands here use near-cli-rs 0.30.1. near-cli-rs 0.30.1 stores keys in the legacy keychain
+`~/.near-credentials/testnet/<account>.json`, hence `save-to-legacy-keychain` and `sign-with-legacy-keychain`
+below. The NearGate CLI and `scripts/near/` read keys from the same place.
+
 ```bash
 near account create-account sponsor-by-faucet-service neargate-registry.testnet \
-  autogenerate-new-keypair save-to-keychain network-config testnet create     # or any funded testnet account
+  autogenerate-new-keypair save-to-legacy-keychain network-config testnet create     # or any funded testnet account
 
 near contract deploy neargate-registry.testnet \
   use-file contracts/target/near/neargate_registry/neargate_registry.wasm \
   with-init-call new json-args '{}' prepaid-gas '100 Tgas' attached-deposit '0 NEAR' \
-  network-config testnet sign-with-keychain send
+  network-config testnet sign-with-legacy-keychain send
 ```
 
 `new()` takes no arguments and sets no admin. It burns about 17 Tgas.
@@ -83,11 +87,11 @@ near contract call-function as-transaction neargate-registry.testnet register_se
   "gateway_base_url": "https://gateway.example.com",
   "accepts": [{"asset": "near", "amount": "10000000000000000000000", "decimals": 24, "symbol": "NEAR"}],
   "payment_target": "seller.testnet", "attestor": "gateway.testnet"
-}' prepaid-gas '30 Tgas' attached-deposit '0.12 NEAR' sign-as owner.testnet network-config testnet sign-with-keychain send
+}' prepaid-gas '30 Tgas' attached-deposit '0.12 NEAR' sign-as owner.testnet network-config testnet sign-with-legacy-keychain send
 
 # pay for one call: price 0.01 + fee 0.002 NEAR (anything above is refunded)
 near contract call-function as-transaction neargate-registry.testnet pay json-args '{"service_id": 1, "nonce": "424242"}' \
-  prepaid-gas '30 Tgas' attached-deposit '0.012 NEAR' sign-as buyer.testnet network-config testnet sign-with-keychain send
+  prepaid-gas '30 Tgas' attached-deposit '0.012 NEAR' sign-as buyer.testnet network-config testnet sign-with-legacy-keychain send
 
 # read
 near contract call-function as-read-only neargate-registry.testnet get_payment json-args '{"nonce": "424242"}' network-config testnet now
@@ -98,20 +102,25 @@ Paying from an escrow:
 ```bash
 # fund the escrow: the first deposit keeps 0.002 NEAR for the entry's storage, later ones are credited in full
 near contract call-function as-transaction neargate-registry.testnet deposit_escrow json-args '{}' \
-  prepaid-gas '30 Tgas' attached-deposit '1 NEAR' sign-as buyer.testnet network-config testnet sign-with-keychain send
+  prepaid-gas '30 Tgas' attached-deposit '1 NEAR' sign-as buyer.testnet network-config testnet sign-with-legacy-keychain send
 
-# give the agent a key that can only call pay_from_escrow on the registry
+# give the agent a key that can only call pay_from_escrow on the registry. buyer.testnet.json already
+# exists, so the new key is saved as ~/.near-credentials/testnet/buyer.testnet/ed25519_<agent public key>.json
+# (`npm run neargate -- agent-key add --allowance 0.25 --account buyer.testnet` does the same and writes
+# ~/.near-credentials/testnet/buyer.testnet.neargate-agent.json instead)
 near account add-key buyer.testnet grant-function-call-access --allowance '0.25 NEAR' \
   --contract-account-id neargate-registry.testnet --function-names pay_from_escrow \
-  autogenerate-new-keypair save-to-keychain network-config testnet sign-with-keychain send
+  autogenerate-new-keypair save-to-legacy-keychain network-config testnet sign-with-legacy-keychain send
 
-# the agent pays: no deposit, the escrow is debited price + 0.002 NEAR
+# the agent pays with that key file (sign-with-legacy-keychain would sign with a full-access key):
+# no deposit, the escrow is debited price + 0.002 NEAR
 near contract call-function as-transaction neargate-registry.testnet pay_from_escrow json-args '{"service_id": 1, "nonce": "424243"}' \
-  prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as buyer.testnet network-config testnet sign-with-keychain send
+  prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as buyer.testnet network-config testnet \
+  sign-with-access-key-file ~/.near-credentials/testnet/buyer.testnet/ed25519_<agent public key>.json send
 
 # withdraw (full-access key only: exactly 1 yoctoNEAR attached)
 near contract call-function as-transaction neargate-registry.testnet withdraw_escrow json-args '{"amount": "500000000000000000000000"}' \
-  prepaid-gas '30 Tgas' attached-deposit '1 yoctoNEAR' sign-as buyer.testnet network-config testnet sign-with-keychain send
+  prepaid-gas '30 Tgas' attached-deposit '1 yoctoNEAR' sign-as buyer.testnet network-config testnet sign-with-legacy-keychain send
 
 near contract call-function as-read-only neargate-registry.testnet escrow_of json-args '{"account_id": "buyer.testnet"}' network-config testnet now
 ```
@@ -169,10 +178,11 @@ the relayer pay for every purchase. The buyer therefore funds an escrow in the r
 key** may sign: NEAR refuses a function-call key's transaction that attaches a deposit
 (`DepositWithFunctionCall`) or calls a method outside its list (`MethodNameMismatch`).
 
-**An agent key restricted to `pay_from_escrow` can spend the escrow and nothing else; withdrawing needs
-a full-access key.** `withdraw_escrow` requires exactly 1 yoctoNEAR attached, which no function-call key
-can attach. The escrow balance is the most such a key can spend, and it can spend it on any active
-service, so fund the escrow with what the agent may spend.
+**An agent key restricted to `pay_from_escrow` can spend the escrow and nothing else, plus gas up to its
+allowance; withdrawing needs a full-access key.** `withdraw_escrow` requires exactly 1 yoctoNEAR attached,
+which no function-call key can attach. The escrow balance is the most such a key can spend on purchases,
+and it can spend it on any active service, so fund the escrow with what the agent may spend. The gas its
+transactions burn comes out of the key's allowance, which NEAR deducts from the account's own balance.
 
 ## Storage accounting
 

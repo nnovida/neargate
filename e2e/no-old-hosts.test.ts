@@ -1,8 +1,9 @@
 /**
- * e2e/no-old-hosts.test.ts — the hostnames and repository of the Casper-era project are retired.
- * Until the team hosts NearGate, DEFAULT_GATEWAY_URL and DEFAULT_DASHBOARD_URL are empty and no
- * page links a repository, so none of those strings may be left in the shipped code, scripts,
- * deploy files or the env template (README.md is a later task's file and is not scanned).
+ * e2e/no-old-hosts.test.ts — the hostnames and repository of the original AgentGate deployment are
+ * retired. Until the team hosts NearGate, DEFAULT_GATEWAY_URL and DEFAULT_DASHBOARD_URL are empty and
+ * no page links a repository, so none of those strings may be left in the shipped code, scripts,
+ * deploy files or the env template. e2e/copy-guard.test.ts applies the same host check to every
+ * tracked file, README.md and docs/ included.
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';

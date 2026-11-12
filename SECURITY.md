@@ -4,18 +4,18 @@
 
 | Version | Supported |
 | ------- | --------- |
-| `@neargate/cli` latest (0.1.x) | ✅ |
-| older pre-release snapshots | ❌ |
+| `main` of this repository (NearGate, NEAR testnet) | ✅ |
+| older snapshots | ❌ |
 
-The on-chain registry contract currently supported is the Casper Testnet
-package `hash-10f92725551941ffe5be84cd340ce0f31f9f25d1f8ed959cc1a6c3383c3e27e9`.
+The supported on-chain contract is the `neargate-registry` deployment on NEAR
+testnet named in the README's "Deployed on NEAR testnet" section.
 
 ## Reporting a Vulnerability
 
 Please **do not open a public issue** for security problems.
 
-Preferred: use GitHub's private vulnerability reporting —
-[Report a vulnerability](https://example.invalid/AgentGate/security/advisories/new).
+Preferred: use GitHub's private vulnerability reporting on this repository
+(the **Security** tab → **Report a vulnerability**).
 
 Alternatively, email **contributors@agentgate.invalid** with:
 
@@ -29,9 +29,13 @@ public disclosure.
 
 ## Scope notes
 
-- The gateway only ever sees payment *proofs* (transaction hashes); it never
-  holds user private keys. Signing keys for the demo deployment live outside
-  the repository.
-- Testnet CSPR has no monetary value, but vulnerabilities in the payment
-  verification path (invoice nonce, transfer matching, attestation binding)
-  are still treated as high severity.
+- The gateway never holds user private keys. It sees payment *proofs*:
+  transaction hashes, or, on the gasless rail, a buyer's signed
+  `pay_from_escrow` delegate, which it can only relay as signed. Its own
+  account key (attestations and relays) and every other signing key live
+  outside the repository.
+- Testnet NEAR has no monetary value, but vulnerabilities in the payment
+  verification path (invoice nonce, payment and transaction matching, delegate
+  checks, attestation binding) are still treated as high severity.
+- Known limits, such as front-running of `tx` proofs and the blast radius of a
+  leaked agent key, are listed in the README's "Limits and trust model".

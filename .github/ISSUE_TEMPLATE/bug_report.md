@@ -10,7 +10,7 @@ assignees: ''
 A clear, concise description of what went wrong.
 
 **To reproduce**
-Steps to reproduce (include the exact command, e.g. `npx @neargate/cli@latest list`):
+Steps to reproduce (include the exact command, e.g. `npm run neargate -- list`):
 
 1. …
 2. …
@@ -24,8 +24,8 @@ Paste the actual output or error (redact any keys/paths you don't want public).
 **Environment**
 - OS:
 - Node version (`node -v`):
-- Mode: mock / live (Casper Testnet)
-- CLI/package version (`npx @neargate/cli@latest --version` or npm version):
+- Mode: mock / live (NEAR testnet)
+- Commit (`git rev-parse --short HEAD`):
 
 **Additional context**
 Transaction hashes, service id, or screenshots if relevant.

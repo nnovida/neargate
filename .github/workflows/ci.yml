@@ -15,9 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # near-api-js 7.4.0 needs Node >= 22.22.2 (the root package.json engines floor).
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.22.2
           cache: npm
 
       - name: Install
@@ -26,7 +27,7 @@ jobs:
       - name: Typecheck (all workspaces + root scripts/e2e)
         run: npm run typecheck
 
-      - name: Test (package units + e2e loop)
+      - name: Test (package units, e2e flows, dashboard, README and copy guards)
         run: npm test
 
       - name: Build dashboard
@@ -36,24 +37,29 @@ jobs:
         run: npm run demo
 
   contracts:
-    name: cargo odra test (OdraVM)
+    name: cargo test (unit + near-workspaces sandbox)
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: contracts/agentgate-registry
+        working-directory: contracts
     steps:
       - uses: actions/checkout@v4
 
-      # rustup picks the pinned nightly from rust-toolchain.toml automatically.
+      # rustup installs the toolchain pinned in contracts/rust-toolchain.toml (1.95.0 + wasm32).
       - name: Install Rust toolchain (pinned via rust-toolchain.toml)
-        run: rustup show
+        run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: contracts/agentgate-registry
+          workspaces: contracts
 
-      - name: Install cargo-odra
-        run: cargo install cargo-odra --locked
+      - name: Install cargo-near
+        run: cargo install --locked cargo-near --version 0.22.0
 
-      - name: Test (OdraVM)
-        run: cargo odra test
+      # The sandbox tests deploy this wasm; they fail with a message naming this command without it.
+      - name: Build the contract wasm
+        working-directory: contracts/registry
+        run: cargo near build non-reproducible-wasm
+
+      - name: Test (unit + sandbox)
+        run: cargo test
