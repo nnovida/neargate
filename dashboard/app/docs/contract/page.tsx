@@ -186,8 +186,10 @@ export default function Page() {
         be attested and not be self-paid. It marks the payment attested, bumps the score (
         <M>total + 1</M>, and <M>success + 1</M> when <M>success</M>), prepends the attestation (the
         list is truncated at 100) and writes an activity entry. <M>payment_tx_hash</M> is
-        informational, at most 64 bytes. Not payable: its storage is prepaid by the registration
-        deposit.
+        informational, at most 64 bytes. Not payable: the score and the attestation list are
+        prepaid by the registration deposit, while the activity entry overwrites a slot of the
+        200-slot ring and any growth of that slot is paid from the registry account’s own balance
+        (at most about 0.5 NEAR in all; <M>near:deploy</M> wants 3 NEAR on the account for this).
       </P>
       <H3 id="m-set-active">set_active · set_attestor</H3>
       <CodeBlock code={'set_active(service_id: u64, active: bool)\nset_attestor(service_id: u64, attestor: AccountId)'} />
@@ -213,19 +215,20 @@ export default function Page() {
       <H3 id="shapes">JSON shapes</H3>
       <P>Views are snake_case JSON; <M>U128</M> amounts are decimal strings.</P>
       <CodeBlock
-        label="ServiceView"
+        label="ServiceView (get_service of service #1 on the deployed registry)"
         code={JSON.stringify(
           {
             id: 1,
-            name: 'RWA FX & Gold Oracle',
-            description: '…',
-            gateway_base_url: 'https://gateway.example.org',
-            accepts: [{ asset: 'near', amount: '500000000000000000000000', decimals: 24, symbol: 'NEAR' }],
-            payment_target: 'seller.testnet',
-            owner: 'seller.testnet',
-            attestor: 'gateway.testnet',
+            name: 'USD exchange rates',
+            description:
+              'Latest USD exchange rates from open.er-api.com, wrapped by the NearGate testnet seed script',
+            gateway_base_url: 'https://neargate-gateway-production.up.railway.app',
+            accepts: [{ asset: 'near', amount: '10000000000000000000000', decimals: 24, symbol: 'NEAR' }],
+            payment_target: 'neargate-app-seller.testnet',
+            owner: 'neargate-app-seller.testnet',
+            attestor: 'neargate-app-gateway.testnet',
             active: true,
-            created_at_ms: 1794407336851,
+            created_at_ms: 1794495083358,
           },
           null,
           2,
@@ -243,7 +246,8 @@ export default function Page() {
             <span key="5f">
               <Fields>{'{ kind, service_id, account, amount?, success?, nonce?, payment_tx_hash?, timestamp_ms, block_height }'}</Fields>
               ; <M>kind</M> is <M>service_registered</M>, <M>payment</M> or <M>attestation</M>, and{' '}
-              <M>account</M> is the owner, the payer or the attestor accordingly.
+              <M>account</M> is the owner, the payer, or whoever recorded the attestation (the
+              attestor or the owner) accordingly.
             </span>,
           ],
         ]}
@@ -353,7 +357,8 @@ export default function Page() {
       />
       <P>
         One more code is NEAR’s, not the contract’s: <M>ERR_INSUFFICIENT_BALANCE</M> means the signer
-        cannot fund the deposit plus gas. <M>pay_from_escrow</M> checks, in this order:{' '}
+        cannot fund the deposit plus gas, or would be left short of its storage stake after the
+        transaction. <M>pay_from_escrow</M> checks, in this order:{' '}
         <M>ERR_DEPOSIT_NOT_ALLOWED</M>, <M>ERR_SERVICE_NOT_FOUND</M>, <M>ERR_SERVICE_INACTIVE</M>,{' '}
         <M>ERR_NO_NATIVE_PRICE</M>, <M>ERR_ESCROW_INSUFFICIENT</M>, <M>ERR_INVALID_NONCE</M>,{' '}
         <M>ERR_NONCE_USED</M>; <M>withdraw_escrow</M>: <M>ERR_ONE_YOCTO_REQUIRED</M>, then{' '}
@@ -364,7 +369,7 @@ export default function Page() {
       <CodeBlock
         label="from the repository root"
         code={[
-          '(cd contracts/registry && cargo near build non-reproducible-wasm)',
+          `(cd contracts/registry && cargo near build non-reproducible-wasm --env 'RUSTFLAGS=-C link-arg=-s --remap-path-prefix=$HOME=/build')`,
           '# -> contracts/target/near/neargate_registry/neargate_registry.wasm',
           '(cd contracts && cargo test)',
         ].join('\n')}
@@ -373,11 +378,14 @@ export default function Page() {
         The toolchain is pinned in <M>contracts/rust-toolchain.toml</M>; <M>cargo-near</M> is a
         separate install. <M>npm run near:deploy</M> builds and deploys the contract onto the
         registry account and reads <M>services_count</M> back; see the{' '}
-        <DocLink href="/docs/quickstart#testnet">quickstart</DocLink>. Reads need no key:
+        <DocLink href="/docs/quickstart#testnet">quickstart</DocLink>. The build above is the one it
+        runs: the path remap keeps the builder’s home directory out of the wasm published on-chain,
+        and <M>near:deploy</M> refuses a wasm that still holds a path under <M>$HOME</M> (including
+        one passed in <M>NEARGATE_REGISTRY_WASM</M>). Reads need no key:
       </P>
       <CodeBlock
         label="with the near CLI"
-        code={`near contract call-function as-read-only <registry account> get_service json-args '{"service_id":1}' network-config testnet now`}
+        code={`near contract call-function as-read-only ${DEFAULT_REGISTRY_CONTRACT_ID || '<registry account>'} get_service json-args '{"service_id":1}' network-config testnet now`}
       />
 
       <NextLinks

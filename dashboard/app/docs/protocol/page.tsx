@@ -1,5 +1,10 @@
 import type { Metadata } from 'next';
 import {
+  DEFAULT_GATEWAY_ACCOUNT_ID,
+  DEFAULT_GATEWAY_URL,
+  DEFAULT_REGISTRY_CONTRACT_ID,
+} from '@agentgate/shared';
+import {
   Callout,
   CodeBlock,
   DocHeader,
@@ -14,6 +19,12 @@ import {
   StepFlow,
   Sub,
 } from '@/components/docs';
+
+// The 402 example below is the hosted gateway's answer for service #1; placeholders stand in for a
+// build without the hosted defaults.
+const HOSTED_REGISTRY = DEFAULT_REGISTRY_CONTRACT_ID || '<registry account id>';
+const HOSTED_GATEWAY = DEFAULT_GATEWAY_URL || '<gateway>';
+const HOSTED_RELAYER = DEFAULT_GATEWAY_ACCOUNT_ID || '<gateway account id>';
 
 export const metadata: Metadata = {
   alternates: { canonical: '/docs/protocol' },
@@ -101,10 +112,11 @@ export default function Page() {
       <P>
         An unpaid call to <M>/svc/:id</M> answers <M>402</M> with this JSON (<M>x402Version: 1</M>).
         There is always exactly one <M>accepts[]</M> entry, paying in native NEAR. Amounts are{' '}
-        <M>yoctoNEAR</M> decimal strings (1 NEAR = 10<sup>24</sup> yocto).
+        <M>yoctoNEAR</M> decimal strings (1 NEAR = 10<sup>24</sup> yocto). This is what the hosted
+        gateway answers for service #1, a 0.01 NEAR service, with the relay on:
       </P>
       <CodeBlock
-        label="402 response (example)"
+        label="402 response (GET /svc/1 on the hosted gateway)"
         code={JSON.stringify(
           {
             x402Version: 1,
@@ -113,23 +125,25 @@ export default function Page() {
               {
                 scheme: 'exact',
                 network: 'near-testnet',
-                maxAmountRequired: '502000000000000000000000',
+                maxAmountRequired: '12000000000000000000000',
                 asset: 'NEAR',
-                payTo: '<registry account id>',
-                resource: '<gateway>/svc/1',
-                description: 'RWA FX & Gold Oracle',
+                payTo: HOSTED_REGISTRY,
+                resource: `${HOSTED_GATEWAY}/svc/1`,
+                description: 'USD exchange rates',
                 maxTimeoutSeconds: 300,
                 extra: {
-                  nonce: '3673826824572287',
+                  nonce: '1983699248480309',
                   serviceId: 1,
-                  expiresAtMs: 1794407336851,
+                  expiresAtMs: 1794520151523,
                   settlement: 'neargate-registry-pay',
-                  contractId: '<registry account id>',
+                  contractId: HOSTED_REGISTRY,
                   method: 'pay',
-                  priceYocto: '500000000000000000000000',
+                  priceYocto: '10000000000000000000000',
                   storageFeeYocto: '2000000000000000000000',
-                  seller: '<payment target account id>',
+                  seller: 'neargate-app-seller.testnet',
                   caip2: 'near:testnet',
+                  relayer: HOSTED_RELAYER,
+                  relayMethod: 'pay_from_escrow',
                 },
               },
             ],
@@ -140,6 +154,30 @@ export default function Page() {
       />
       <PropList
         items={[
+          {
+            name: 'error',
+            required: true,
+            type: 'string',
+            desc: (
+              <>
+                Why the gateway is challenging: <M>X-PAYMENT header is required</M> on a first call,
+                else one of the <DocLink href="#invoice-rejection-fields">rejection reasons</DocLink>.
+              </>
+            ),
+          },
+          {
+            name: 'transaction / code',
+            required: false,
+            type: 'string',
+            desc: (
+              <>
+                Top-level, gasless rail only: <M>transaction</M> is the relay transaction on a{' '}
+                <M>settlement_pending</M> whose relay timed out (it may still land), and{' '}
+                <M>code</M> is the chain’s code after <M>relay_failed</M> (for example{' '}
+                <M>ERR_ESCROW_INSUFFICIENT</M>).
+              </>
+            ),
+          },
           {
             name: 'network',
             required: true,
@@ -264,7 +302,7 @@ export default function Page() {
           [<M key="1">X-PAYMENT header is required</M>, 'The first call: there was no proof.'],
           [<M key="2">invalid_payment_header</M>, 'The header is not valid base64 JSON of the expected shape, or names a different network than the gateway.'],
           [<M key="3">relayer_disabled</M>, 'The proof is a delegate (gasless) payload and this gateway relays none (RELAYER_ENABLED is off); pay with a tx proof. The invoice stays open.'],
-          [<M key="4">unknown_nonce</M>, 'The gateway issued no invoice with that nonce for this service (or forgot it after a restart without a persistent invoice store).'],
+          [<M key="4">unknown_nonce</M>, 'The gateway issued no invoice with that nonce for this service, or no longer remembers it: an invoice is dropped about a minute after it expires (so a used or expired nonce presented later gets this reason), and a restart forgets every invoice unless INVOICE_STORE_PATH keeps them.'],
           [<M key="5">invoice_used</M>, 'That invoice was already redeemed. A nonce serves one call.'],
           [<M key="6">invoice_expired</M>, 'The invoice is older than its time to live.'],
           [<M key="7">not_found</M>, 'The registry holds no payment for the nonce.'],
@@ -272,7 +310,7 @@ export default function Page() {
           [<M key="9">amount_too_low</M>, 'The price the registry forwarded is below the service price.'],
           [<M key="10">expired</M>, 'The registry payment is older than the invoice time to live.'],
           [<M key="11">already_attested</M>, 'The payment was already attested, which only follows a served call.'],
-          [<M key="12">tx_mismatch</M>, 'Live: the transaction is not a successful pay or pay_from_escrow of this nonce and service on this registry, signed by the named payer.'],
+          [<M key="12">tx_mismatch</M>, 'Live: the transaction is not a successful pay or pay_from_escrow of this nonce and service on this registry, signed by the named payer. The gasless rail answers it in either mode when its relayed payment does not match the invoice.'],
           [<M key="13">settlement_pending</M>, 'Live: the payment is not yet visible. On the gasless rail: the relay is in flight, timed out, or landed and its record is not read yet. The same invoice stays valid: retry the identical proof after the Retry-After seconds (2).'],
         ]}
       />
@@ -342,7 +380,10 @@ export default function Page() {
       <P>
         For a request carrying a proof the gateway checks, in this order, and answers a <M>402</M>{' '}
         with the matching <DocLink href="#invoice-rejection-fields">reason</DocLink> at the first
-        failure:
+        failure. One exception in live mode: when the registry holds no payment for the nonce, the
+        gateway looks at the transaction before answering, so a transaction that does not match
+        gives <M>tx_mismatch</M>, one still executing (or executed but not yet readable) gives{' '}
+        <M>settlement_pending</M>, and only an unknown or failed one gives <M>not_found</M>.
       </P>
       <DocTable
         head={['#', 'Check', 'Reason on failure']}
@@ -371,12 +412,24 @@ export default function Page() {
         ]}
       />
       <P>
-        Other statuses the paywall route can answer: <M>404 service_not_found</M>,{' '}
-        <M>403 service_inactive</M> (the owner paused it), <M>503 service_unavailable</M> (no
-        upstream is mapped on this gateway, or in live mode the upstream host is not public — and a
-        call that cannot be delivered is never charged), <M>415 unsupported_media_type</M> (a
-        request body that is not JSON, refused before any invoice) and <M>429 rate_limited</M> (60
-        requests per minute per client on <M>/svc</M>).
+        Other statuses the paywall route can answer before any invoice, so nothing is charged:{' '}
+        <M>404 service_not_found</M>, <M>403 service_inactive</M> (the owner paused it),{' '}
+        <M>503 service_unavailable</M> (no upstream is mapped on this gateway, or in live mode the
+        upstream host is not public), <M>415 unsupported_media_type</M> (a request body that is not
+        JSON), <M>400 invalid_json</M> (a JSON body that does not parse),{' '}
+        <M>413 payload_too_large</M> (a body over 256 KB) and <M>429 rate_limited</M> (60 requests
+        per minute per client on <M>/svc</M>). The gateway caches each service record for 60 s, so
+        a pause or resume can take up to a minute to show here.
+      </P>
+      <P>
+        After a verified payment the nonce is burned before the upstream is called, so these
+        answers come <strong className="text-white">after the buyer paid</strong>, with{' '}
+        <M>X-PAYMENT-RESPONSE</M> set: <M>502 upstream_unreachable</M>,{' '}
+        <M>504 upstream_timeout</M>, <M>502 upstream_response_too_large</M> (over 1 MiB) and{' '}
+        <M>502 upstream_request_too_large</M>. The receipt records it as{' '}
+        <M>skipped_upstream_failed</M> and no attestation is sent. A failure inside the gateway
+        answers <M>500 internal_error</M>, or the lower-cased code of a known error with its own
+        status (an RPC failure while verifying, for example).
       </P>
 
       <H2 id="gasless">The gasless rail (a relayed pay_from_escrow)</H2>
@@ -433,7 +486,7 @@ export default function Page() {
         rows={[
           [
             '1',
-            'The delegate decodes (strict base64, at most 4096 bytes, canonical borsh, ed25519), its sender is the payer, its receiver the registry, and it holds one FunctionCall pay_from_escrow with this invoice’s arguments, no deposit and 30 TGas.',
+            'The delegate decodes (canonical borsh, ed25519; base64 and size were already checked with the header), its sender is the payer, its receiver the registry, and it holds one FunctionCall pay_from_escrow with this invoice’s arguments, no deposit and 30 TGas.',
             'delegate_malformed, delegate_wrong_sender, delegate_wrong_receiver, delegate_wrong_action, delegate_wrong_args, delegate_deposit_not_zero, delegate_gas_too_high, delegate_gas_too_low',
           ],
           ['2', 'The signature verifies over NEAR’s delegate encoding.', 'bad_signature'],
@@ -507,15 +560,20 @@ export default function Page() {
         call is not a reason to pay again</strong>. Re-present the same proof; if the gateway
         answers <M>settlement_pending</M> wait and resend it; only an invoice the gateway never
         issued or that expired unused needs a new payment. The client package turns a paid call that
-        was not served into <M>PAID_NOT_SERVED</M> carrying exactly that proof. Invoices live in the
+        was not served into <M>PAID_NOT_SERVED</M> carrying exactly that proof (on the gasless
+        rail, <M>GASLESS_NOT_SERVED</M>, which says whether the escrow paid). Invoices live in the
         gateway’s memory unless <M>INVOICE_STORE_PATH</M> points at a JSON file, so without one a
         gateway restart forgets open invoices (<M>unknown_nonce</M>).
       </P>
 
       <H2 id="attestation">Attestation and trust score</H2>
       <P>
-        After it has answered the buyer, the gateway — the service’s <em>attestor</em> — calls{' '}
-        <M>record_attestation(service_id, nonce, payment_tx_hash, success)</M>. <M>success</M> is
+        After it has answered the buyer, the gateway calls{' '}
+        <M>record_attestation(service_id, nonce, payment_tx_hash, success)</M> as its own account (
+        <M>GATEWAY_ACCOUNT_ID</M>). The registry accepts it only from the service’s{' '}
+        <em>attestor</em> or owner, so a service must name its gateway’s account as attestor when it
+        registers (<DocLink href="/docs/cli#wrap">wrap --attestor</DocLink>); otherwise every
+        attestation is rejected and paid calls are never scored. <M>success</M> is
         whether the upstream answered with a 2xx. It never blocks the buyer: a failed attempt is
         retried with exponential backoff (5 s, 10 s, 20 s — four attempts) and, with{' '}
         <M>ATTESTATION_QUEUE_PATH</M> set, an attestation that never confirmed is replayed when the

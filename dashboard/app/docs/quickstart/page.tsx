@@ -1,4 +1,10 @@
 import type { Metadata } from 'next';
+import {
+  DEFAULT_DASHBOARD_URL,
+  DEFAULT_GATEWAY_ACCOUNT_ID,
+  DEFAULT_GATEWAY_URL,
+  DEFAULT_REGISTRY_CONTRACT_ID,
+} from '@agentgate/shared';
 import { CommandBlock } from '@/components/copy';
 import {
   Callout,
@@ -18,8 +24,11 @@ export const metadata: Metadata = {
   alternates: { canonical: '/docs/quickstart' },
   title: 'Quickstart',
   description:
-    'From a clean clone to a verified register → 402 → pay → serve → attest → score loop in about a minute, offline on the mock chain; then view it in the dashboard, drive a wrap and a buy by hand, and the NEAR testnet scripts.',
+    'Try the live NearGate deployment on NEAR testnet, then go from a clean clone to a verified register → 402 → pay → serve → attest → score loop in about a minute, offline on the mock chain; view it in the dashboard, drive a wrap and a buy by hand, and run the NEAR testnet scripts.',
 };
+
+/** The hosted deployment exists only when the shared defaults name it. */
+const HOSTED = DEFAULT_GATEWAY_URL !== '' && DEFAULT_REGISTRY_CONTRACT_ID !== '';
 
 export default function Page() {
   return (
@@ -27,8 +36,51 @@ export default function Page() {
       <DocHeader
         kicker="GET STARTED"
         title="Quickstart"
-        lede="Go from a clone to a working payment loop in about a minute. Everything up to the testnet section runs in mock mode against an in-process devnet — no keys, no network, no NEAR account needed."
+        lede="Try the live deployment on NEAR testnet, or go from a clone to a working payment loop in about a minute. Everything from the offline demo up to the testnet section runs in mock mode against an in-process devnet — no keys and no NEAR account needed."
       />
+
+      {HOSTED ? (
+        <>
+          <H2 id="live">Try the live deployment</H2>
+          <P>
+            NearGate runs on NEAR testnet: the registry <M>{DEFAULT_REGISTRY_CONTRACT_ID}</M>, the
+            gateway at <M>{DEFAULT_GATEWAY_URL}</M>
+            {DEFAULT_DASHBOARD_URL !== '' ? (
+              <>
+                {' '}and this dashboard at <M>{DEFAULT_DASHBOARD_URL}</M>
+              </>
+            ) : null}
+            , with gasless relaying on. Service #1, <em>USD exchange rates</em> at 0.01 NEAR, is
+            live: see it in the <DocLink href="/catalog">catalog</DocLink> or on{' '}
+            <DocLink href="/services/1">/services/1</DocLink>. Its unpaid call answers the x402
+            invoice, with no install:
+          </P>
+          <CommandBlock wrap text={`curl -i ${DEFAULT_GATEWAY_URL}/svc/1`} />
+          <P>
+            From a clone (<M>npm install</M> once), the CLI targets this deployment by default:{' '}
+            <M>list</M> and <M>status</M> need no key.
+          </P>
+          <CommandBlock text="npm run neargate -- list" />
+          <CommandBlock text="npm run neargate -- status 1" />
+          <P>
+            To buy a call you need a funded testnet account whose key is in{' '}
+            <M>~/.near-credentials/testnet/</M>; the near CLI’s faucet sponsor creates one:
+          </P>
+          <CommandBlock
+            wrap
+            text="near account create-account sponsor-by-faucet-service <you>.testnet autogenerate-new-keypair --signature-scheme ed25519 save-to-legacy-keychain network-config testnet create"
+          />
+          <CommandBlock wrap text="npm run neargate -- buy 1 --max 0.02 --account <you>.testnet" />
+          <P>
+            It pays 0.01 NEAR + 0.002 NEAR storage to the registry, prints the rates on stdout and a
+            receipt with the explorer link on stderr; the gateway then attests the call and the
+            score on <DocLink href="/services/1">/services/1</DocLink> grows. To put your own API
+            behind this gateway, <DocLink href="/docs/cli#wrap">wrap</DocLink> it with{' '}
+            <M>--attestor {DEFAULT_GATEWAY_ACCOUNT_ID || '<gateway account>'}</M> so the
+            gateway’s attestations count.
+          </P>
+        </>
+      ) : null}
 
       <H2 id="prerequisites">Prerequisites</H2>
       <P>
@@ -60,9 +112,10 @@ export default function Page() {
         ]}
       />
       <Callout tone="info" title="Two modes, one code path">
-        <M>AGENTGATE_MODE</M> selects the chain backend: <M>mock</M> (the in-process devnet, fully
-        offline; the stack and the demo use it) or <M>live</M> (NEAR testnet). The <M>neargate</M>{' '}
-        CLI defaults to <M>live</M>, so the manual CLI commands below pass <M>--mode mock</M>.
+        <M>AGENTGATE_MODE</M> selects the chain backend: <M>mock</M> (the in-process devnet, no
+        NEAR at all; the local stack and the demo use it) or <M>live</M> (NEAR testnet; the hosted
+        gateway and dashboard use it). The <M>neargate</M> CLI defaults to <M>live</M>, so the
+        manual CLI commands below pass <M>--mode mock</M>.
         Everything above the chain seam is identical. See{' '}
         <DocLink href="/docs#modes">Mock vs live modes</DocLink>.
       </Callout>
@@ -133,7 +186,9 @@ export default function Page() {
               <>
                 Boots devnet + oracle + gateway, then wraps the oracle at 0.5 NEAR and runs one
                 paid call (score 1/1). Plain <M>npm run dev</M> does the same without the seeding
-                step.
+                step. Unlike the demo, this oracle fetches live FX and gold rates when it can reach
+                its public sources and falls back to its fixed sample when offline (
+                <M>ORACLE_STATIC=1</M> always serves the sample).
               </>
             ),
             code: 'npm run dev:seed',
@@ -148,7 +203,8 @@ export default function Page() {
             body: (
               <>
                 Usually <M>http://localhost:3000</M>. If that port is taken Next.js moves to the
-                next free one and prints it — open the URL the terminal shows.
+                next free one and prints it — open the URL terminal 2 shows (Next.js does not read{' '}
+                <M>DASHBOARD_PORT</M>).
               </>
             ),
           },
@@ -231,8 +287,31 @@ export default function Page() {
 
       <H2 id="testnet">Testnet scripts</H2>
       <P>
-        These root scripts take the same loop to NEAR testnet. They are the operator path, run from
-        a clone with a <M>.env</M> copied from <M>.env.example</M>; nothing is published to npm.
+        These root scripts take the same loop to NEAR testnet: the operator path, the one that set up
+        the hosted deployment. Run them from a clone; nothing is published to npm. The TypeScript
+        scripts (<M>dev:live</M>, <M>near:seed</M>, <M>smoke:live</M>) read the root <M>.env</M>.
+        Copy <M>.env.example</M>, then change what it ships for mock mode:
+      </P>
+      <CodeBlock
+        label=".env (live)"
+        code={[
+          'AGENTGATE_MODE=live',
+          '# empty = the deployed default registry; set it to the one near:deploy printed',
+          'REGISTRY_CONTRACT_ID=<prefix>-registry.testnet',
+          'GATEWAY_ACCOUNT_ID=<prefix>-gateway.testnet',
+          'SELLER_ACCOUNT_ID=<prefix>-seller.testnet',
+          'BUYER_ACCOUNT_ID=<prefix>-buyer.testnet',
+          '# a long random token: live mode refuses dev-admin-token',
+          'AGENTGATE_ADMIN_TOKEN=<random>',
+          '# near:seed: the public https URL of the gateway (stored on-chain for good)',
+          'GATEWAY_PUBLIC_URL=https://<gateway host>',
+        ].join('\n')}
+      />
+      <P>
+        The two shell scripts (<M>near:bootstrap</M>, <M>near:deploy</M>) do not read{' '}
+        <M>.env</M>: set <M>NEARGATE_PREFIX</M>, <M>FORCE_REDEPLOY</M> and <M>DRY_RUN</M> in the
+        shell. The prefix defaults to <M>neargate-&lt;MMDD&gt;</M>, today’s date, so set it if you
+        run them on different days.
       </P>
       <DocTable
         head={['Script', 'What it does']}
@@ -251,14 +330,18 @@ export default function Page() {
             <span key="dd">
               Builds <M>neargate-registry</M> with <M>cargo near</M>, deploys it onto the registry
               account with <M>new</M> (no arguments, no admin) and reads <M>services_count</M> back.
-              It refuses an account that already holds a contract unless <M>FORCE_REDEPLOY=1</M>.
+              The account must hold at least 3 NEAR first (<M>MIN_REGISTRY_BALANCE_NEAR</M>). It
+              refuses an account that already holds a contract unless <M>FORCE_REDEPLOY=1</M>, which
+              upgrades the code only: it skips <M>new</M> and keeps the existing state.
             </span>,
           ],
           [
             <M key="l">npm run dev:live</M>,
             <span key="ld">
               Starts the gateway in live mode against the deployed registry; it prints the registry,
-              the attestor account and the next steps.
+              the attestor account and the next steps. It needs the live <M>.env</M> above and the
+              gateway account’s key (<M>GATEWAY_PRIVATE_KEY</M>, <M>GATEWAY_KEY_PATH</M> or{' '}
+              <M>~/.near-credentials</M>).
             </span>,
           ],
           [
@@ -268,15 +351,18 @@ export default function Page() {
               NEAR, the buyer buys one call, then the script polls the gateway’s{' '}
               <DocLink href="/docs/protocol#receipts">receipt</DocLink> until the attestation is
               recorded. It needs a running gateway reachable at <M>GATEWAY_PUBLIC_URL</M>, because
-              the registry stores that URL for good.
+              the registry stores that URL for good, and registers <M>GATEWAY_ACCOUNT_ID</M> as the
+              service’s attestor, so that must be the account the gateway at that URL signs with.
+              Each run registers a new service.
             </span>,
           ],
           [
             <M key="m">npm run smoke:live</M>,
             <span key="md">
-              A read-only check of the live deployment: lists the services, shows one, and requests
-              an unpaid invoice from its gateway, which must answer a valid 402. Nothing is paid or
-              signed.
+              A read-only check of the live deployment: lists the services, shows one (
+              <M>SMOKE_SERVICE_ID</M>, default 1), and requests an unpaid invoice from its gateway,
+              which must answer a valid 402. Nothing is paid or signed. It needs only{' '}
+              <M>AGENTGATE_MODE=live</M>.
             </span>,
           ],
         ]}

@@ -91,7 +91,8 @@ describe('CLI docs page: buy --gasless', () => {
 
   it('says buy re-presents while the relay settles, and advises only what the CLI can do', () => {
     for (const needle of [
-      "waiting: the gateway’s relay (tx <tx hash>, <explorer>/txns/<tx hash>) is settling",
+      // The CLI's own line, ASCII apostrophe included (formatGaslessWait in packages/cli/src/buy.ts).
+      "waiting: the gateway's relay (tx <tx hash>, <explorer>/txns/<tx hash>) is settling",
       'for at most 150 s; it prints one waiting: line on stderr',
       'escrowPaid',
       'npm run neargate -- escrow balance before buying again: buying again signs a NEW payment',

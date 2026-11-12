@@ -105,9 +105,9 @@ withConfigFlags(
       .requiredOption('--price <near>', 'price per call in NEAR (e.g. 0.5; buyers also attach a 0.002 NEAR storage fee)')
       .requiredOption('--name <name>', 'service name (at most 64 bytes)')
       .option('--description <d>', 'service description (at most 280 bytes)', '')
-      .option('--gateway <url>', 'gateway base URL (required in live mode; default in mock: http://localhost:<MIDDLEWARE_PORT|4021>)')
+      .option('--gateway <url>', 'gateway base URL (default in live mode: the hosted gateway; in mock: http://localhost:<MIDDLEWARE_PORT|4021>)')
       .option('--payment-target <accountId>', 'account that receives the price (default: the seller account)')
-      .option('--attestor <accountId>', 'account allowed to record attestations (default: the seller account)')
+      .option('--attestor <accountId>', 'account allowed to record attestations (default: the seller account; behind a live gateway, name its GATEWAY_ACCOUNT_ID)')
       .option('--admin-token <token>', 'gateway admin bearer token, mock mode (leaks into shell history/ps)'),
     'seller',
   ),
@@ -129,7 +129,7 @@ withConfigFlags(
     gateway,
     paymentTarget: opts.paymentTarget,
     attestor: opts.attestor,
-    // Empty (live, no hosted dashboard yet) means no link is printed.
+    // Empty (live, a build with no hosted dashboard) means no link is printed.
     dashboardBaseUrl:
       config.mode === 'live' ? DEFAULT_DASHBOARD_URL : `http://localhost:${config.dashboardPort}`,
     chain,

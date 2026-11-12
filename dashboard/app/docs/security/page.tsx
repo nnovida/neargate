@@ -96,8 +96,8 @@ export default function Page() {
       <P>
         A proof is never trusted for what it claims. The gateway reads the registry’s payment record
         for the nonce (service, amount, age, not yet attested) and, in live mode, the transaction
-        itself: signed by the named payer, received by the registry, holding a <M>pay</M> action
-        with the same service id and nonce, and succeeded (<M>tx_mismatch</M> otherwise). The full
+        itself: signed by the named payer, received by the registry, holding a <M>pay</M> or{' '}
+        <M>pay_from_escrow</M> action with the same service id and nonce, and succeeded (<M>tx_mismatch</M> otherwise). The full
         order is on <DocLink href="/docs/protocol#verification">How it works</DocLink>.
       </P>
       <H3 id="payment-client">The buyer’s client refuses a bad invoice</H3>
@@ -203,7 +203,7 @@ export default function Page() {
         rows={[
           [
             'At mapping time',
-            'The upstream must be an http(s) URL; in live mode it must not be a private host: localhost names, loopback, RFC 1918, link-local (cloud metadata), CGNAT, IPv6 unique-local and link-local, IPv4-mapped private addresses, multicast and reserved ranges.',
+            'The upstream must be an http(s) URL of at most 2048 characters with no user name or password in it; in live mode its host must not be private: localhost names, 0.0.0.0/8, loopback, RFC 1918, link-local (cloud metadata), CGNAT, 192.0.0.0/16, the 198.18.0.0/15 benchmark range, IPv4 multicast, reserved and broadcast (224.0.0.0 and up), and in IPv6 the unspecified and loopback addresses, unique-local, link-local and IPv4-mapped private addresses.',
           ],
           [
             'At request time (live)',
@@ -211,7 +211,7 @@ export default function Page() {
           ],
           [
             'On the connection (live)',
-            'The proxy pins the connection to the IP that passed the check, closing the gap between the check and the fetch.',
+            'The proxy resolves the host once more right before it connects, refuses it if any address is private, and pins the connection to the first address of that lookup, so the address it checked is the one it uses. If the pinning connector cannot be built, it connects without the pin.',
           ],
           [
             'Redirects',
@@ -288,8 +288,9 @@ export default function Page() {
         ]}
       />
       <P>
-        Mock mode has no keys, so the restriction itself is a live-chain property (agent keys need
-        live mode). The registry’s own rules around it are in the{' '}
+        The offline devnet models only one public, full-access key per account (it signs the mock
+        gasless delegates), never a restricted one, so the restriction itself is a live-chain
+        property (agent keys need live mode). The registry’s own rules around it are in the{' '}
         <DocLink href="/docs/contract#escrow">contract reference</DocLink>.
       </P>
 
@@ -356,7 +357,7 @@ export default function Page() {
         rows={[
           [
             'Key resolution (live)',
-            'A secret key in the environment, else a key file, else ~/.near-credentials/<network>/<account>.json. It is resolved before any chain call, so a missing or bad key fails fast.',
+            'A secret key in the environment, else a key file, else ~/.near-credentials/<network>/<account>.json. The CLI resolves it before any chain call, so a missing or bad key fails fast. The gateway loads its key (GATEWAY_PRIVATE_KEY or a key file) only when it first signs, so it boots and verifies payments without one; a missing key then shows as failed attestations and relay_failed (RELAYER_ERROR) on the gasless rail.',
           ],
           [
             'Never printed',

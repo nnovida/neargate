@@ -4,11 +4,19 @@
  * change here must be deliberate: update this test with the new hosts.
  */
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_DASHBOARD_URL, DEFAULT_GATEWAY_URL } from '@agentgate/shared';
+import {
+  DEFAULT_DASHBOARD_URL,
+  DEFAULT_GATEWAY_ACCOUNT_ID,
+  DEFAULT_GATEWAY_URL,
+} from '@agentgate/shared';
 
 describe('the hosted defaults', () => {
   it('name the hosted gateway and dashboard', () => {
     expect(DEFAULT_GATEWAY_URL).toBe('https://neargate-gateway-production.up.railway.app');
     expect(DEFAULT_DASHBOARD_URL).toBe('https://neargate-dashboard-production.up.railway.app');
+  });
+
+  it('name the account the hosted gateway attests as', () => {
+    expect(DEFAULT_GATEWAY_ACCOUNT_ID).toBe('neargate-app-gateway.testnet');
   });
 });

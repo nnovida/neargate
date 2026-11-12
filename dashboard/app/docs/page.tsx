@@ -1,5 +1,11 @@
 import type { Metadata } from 'next';
 import {
+  DEFAULT_DASHBOARD_URL,
+  DEFAULT_GATEWAY_ACCOUNT_ID,
+  DEFAULT_GATEWAY_URL,
+  DEFAULT_REGISTRY_CONTRACT_ID,
+} from '@agentgate/shared';
+import {
   CardGrid,
   Callout,
   DocHeader,
@@ -56,7 +62,7 @@ export default function Page() {
         request with an <M>X-PAYMENT</M> header (base64 JSON naming the transaction, the nonce and
         the payer). The gateway checks the registry’s payment record for that nonce, burns the nonce
         so it can never be reused, proxies to the seller’s upstream API and returns the response,
-        then records a success attestation on-chain.
+        then records an attestation of the outcome on-chain.
       </P>
       <Callout tone="info" title="PAYMENTS GO THROUGH THE REGISTRY">
         <P>
@@ -68,6 +74,23 @@ export default function Page() {
           never custodies funds.
         </P>
       </Callout>
+
+      {DEFAULT_GATEWAY_URL !== '' && DEFAULT_REGISTRY_CONTRACT_ID !== '' ? (
+        <Callout tone="ok" title="LIVE ON NEAR TESTNET">
+          <P>
+            The registry <M>{DEFAULT_REGISTRY_CONTRACT_ID}</M>, the gateway{' '}
+            <M>{DEFAULT_GATEWAY_URL}</M>
+            {DEFAULT_DASHBOARD_URL !== '' ? (
+              <>
+                {' '}and this dashboard (<M>{DEFAULT_DASHBOARD_URL}</M>)
+              </>
+            ) : null}{' '}
+            run in live mode, with the gasless relay on, and service #1 is open for paid calls. The
+            CLI targets them by default. Start with{' '}
+            <DocLink href="/docs/quickstart#live">Try the live deployment</DocLink>.
+          </P>
+        </Callout>
+      ) : null}
 
       <H2 id="when-to-use">When to use NearGate</H2>
       <P>
@@ -125,21 +148,30 @@ export default function Page() {
       <P>
         An operator runs the gateway (the 402 reverse proxy — the <M>@agentgate/middleware</M>{' '}
         package) against a deployed registry. In live mode the gateway needs a NEAR account of its
-        own: it signs the attestations and is registered as each service’s attestor. The operator
-        sets <M>REGISTRY_CONTRACT_ID</M>, the gateway account and key, and a non-default admin
-        token. The <DocLink href="/docs/quickstart#testnet">quickstart</DocLink> lists the testnet
+        own (<M>GATEWAY_ACCOUNT_ID</M>): it signs the attestations and, with{' '}
+        <M>RELAYER_ENABLED</M>, relays gasless payments and pays their gas. The registry accepts
+        an attestation only from the service’s attestor or owner, so each service it serves must
+        name that account as attestor (<M>neargate wrap --attestor</M>; the seed script does it
+        {DEFAULT_GATEWAY_ACCOUNT_ID !== '' ? (
+          <>
+            ; the hosted gateway’s account is <M>{DEFAULT_GATEWAY_ACCOUNT_ID}</M>
+          </>
+        ) : null}
+        ). The operator sets <M>REGISTRY_CONTRACT_ID</M>, the gateway account and key, and a
+        non-default admin token. The <DocLink href="/docs/quickstart#testnet">quickstart</DocLink> lists the testnet
         scripts that create the accounts, deploy the contract and seed a first service.
       </P>
 
       <H2 id="modes">Mock vs live modes</H2>
       <P>
         A single environment variable — <M>AGENTGATE_MODE</M> — selects the chain backend behind the{' '}
-        <M>ChainClient</M> seam. The stack (gateway, buyer agent, dashboard) defaults to <M>mock</M>,
-        while the <M>neargate</M> CLI defaults to <M>live</M>. Everything above the seam is the same,
-        so you build and test offline and flip one variable to go on-chain.
+        <M>ChainClient</M> seam. A local stack (gateway, buyer agent, dashboard) defaults to{' '}
+        <M>mock</M>, while the <M>neargate</M> CLI defaults to <M>live</M>, and the hosted gateway
+        and dashboard run <M>live</M>. Everything above the seam is the same, so you build and test
+        offline and flip one variable to go on-chain.
       </P>
       <DocTable
-        head={['Concern', 'mock (default for the stack)', 'live (NEAR testnet)']}
+        head={['Concern', 'mock (default for a local stack)', 'live (NEAR testnet, the hosted deployment)']}
         rows={[
           [
             'Chain backend',
@@ -162,13 +194,13 @@ export default function Page() {
             'Payment check',
             'The devnet’s payment record for the nonce',
             <span key="v">
-              The registry’s <M>get_payment</M> view, plus the RPC’s record of the <M>pay</M>{' '}
-              transaction
+              The registry’s <M>get_payment</M> view, plus the RPC’s record of the <M>pay</M> or{' '}
+              <M>pay_from_escrow</M> transaction
             </span>,
           ],
           [
             'Signers',
-            'Mock account ids, no keys',
+            'Mock account ids; no key files (the devnet signs with one public key per account)',
             'ed25519 keys: a near-cli credentials file, a key file, or a secret key in the environment',
           ],
           [
@@ -199,7 +231,7 @@ export default function Page() {
           {
             href: '/docs/quickstart',
             title: 'Quickstart',
-            desc: 'Run the offline demo (register → 402 → pay → serve → attest → score), bring the stack up with seeded data and open this dashboard, then the testnet scripts.',
+            desc: 'Try the live testnet deployment, run the offline demo (register → 402 → pay → serve → attest → score), bring a local stack up with seeded data, then the testnet scripts.',
           },
           {
             href: '/docs/cli',

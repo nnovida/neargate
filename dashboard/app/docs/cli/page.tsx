@@ -1,5 +1,10 @@
 import type { Metadata } from 'next';
-import { DEFAULT_DASHBOARD_URL, DEFAULT_GATEWAY_URL } from '@agentgate/shared';
+import {
+  DEFAULT_DASHBOARD_URL,
+  DEFAULT_GATEWAY_ACCOUNT_ID,
+  DEFAULT_GATEWAY_URL,
+  DEFAULT_REGISTRY_CONTRACT_ID,
+} from '@agentgate/shared';
 import { CommandBlock } from '@/components/copy';
 import { DEFAULT_EXPLORER_URL } from '@/lib/explorer';
 import {
@@ -53,17 +58,23 @@ export default function Page() {
         <DocLink href="#agent-key">agent-key</DocLink> and <DocLink href="#mcp">mcp</DocLink>.
         Every command exits <M>0</M> on success and <M>1</M> on error; failures print one line to
         stderr, <M>error: &lt;CODE&gt;: &lt;message&gt;</M> (see{' '}
-        <DocLink href="#error-codes">Error codes</DocLink>); a usage mistake is reported by the
-        argument parser without a code.
+        <DocLink href="#error-codes">Error codes</DocLink>). Two kinds of failure carry no code: a
+        usage mistake, reported by the argument parser, and a raw network failure outside the
+        stable codes (for example <M>error: fetch failed</M> when <M>buy</M> cannot reach the
+        gateway). One partial failure exits <M>0</M>: a <M>wrap</M> whose registration landed but
+        whose gateway mapping failed (see <DocLink href="#wrap">wrap</DocLink>).
       </P>
 
       {/* ───────────────────────────── environment ───────────────────────────── */}
       <H2 id="environment">Environment &amp; flags</H2>
       <P>
         Each setting can be a <strong>flag or an environment variable</strong>; precedence is{' '}
-        <M>flag &gt; env var &gt; built-in default</M>. The CLI defaults to <M>live</M> mode, so{' '}
-        <M>list</M> and <M>status</M> read NEAR testnet with no key; pass <M>--mode mock</M> (or set{' '}
-        <M>AGENTGATE_MODE=mock</M>) to use the offline devnet from <M>npm run dev</M>.
+        <M>flag &gt; env var &gt; built-in default</M>. The CLI defaults to <M>live</M> mode on the
+        deployed registry, so <M>list</M> and <M>status</M> read NEAR testnet with no key; pass{' '}
+        <M>--mode mock</M> (or set <M>AGENTGATE_MODE=mock</M>) to use the offline devnet from{' '}
+        <M>npm run dev</M>. Every command loads the whole configuration first, so a malformed
+        environment variable it does not even use (say <M>TRUST_PROXY=yes</M>) stops it with{' '}
+        <M>CONFIG_INVALID</M>.
       </P>
       <H3 id="config-flags">Config flags</H3>
       <P>Accepted by every command:</P>
@@ -83,21 +94,16 @@ export default function Page() {
           {
             name: '--registry <contract id>',
             type: 'REGISTRY_CONTRACT_ID',
-            desc: 'The registry contract account. Default: the shared default registry id; the badge at the top of each docs page shows it (not deployed until it is set).',
-          },
-          {
-            name: '--admin-token <token>',
-            type: 'AGENTGATE_ADMIN_TOKEN',
-            default: 'dev-admin-token',
-            desc: (
-              <>
-                Read by <M>wrap</M> in mock mode only. A flag lands in shell history and{' '}
-                <M>ps</M>, so prefer the environment variable.
-              </>
-            ),
+            default: DEFAULT_REGISTRY_CONTRACT_ID,
+            desc: 'The registry contract account. Default: the shared registry the hosted gateway and dashboard use; the badge at the top of each docs page shows it.',
           },
         ]}
       />
+      <P>
+        <M>wrap</M> also takes <M>--admin-token</M> (<M>AGENTGATE_ADMIN_TOKEN</M>, default{' '}
+        <M>dev-admin-token</M>), read in mock mode only; no other command accepts the flag. A flag
+        lands in shell history and <M>ps</M>, so prefer the environment variable.
+      </P>
       <H3 id="signer-flags">Signer flags and key resolution</H3>
       <P>
         Commands that write to the chain take the account to act as. The same two flags mean the{' '}
@@ -126,10 +132,11 @@ export default function Page() {
       />
       <P>
         In <strong>mock</strong> mode the account is <M>--account</M>, else{' '}
-        <M>MOCK_SELLER_ACCOUNT</M> / <M>MOCK_BUYER_ACCOUNT</M> (print a pair with{' '}
+        <M>MOCK_SELLER_ACCOUNT</M> / <M>MOCK_BUYER_ACCOUNT</M> (default <M>seller.mock</M> /{' '}
+        <M>buyer.mock</M>; print a funded pair with{' '}
         <DocLink href="#demo-accounts">demo-accounts</DocLink>); mock signers carry no key and{' '}
-        <M>--key-file</M> is ignored with a note. In <strong>live</strong> mode the key is resolved
-        before any chain call, first match wins:
+        <M>--key-file</M> is ignored with a note. In <strong>live</strong> mode the CLI resolves the
+        key before any chain call, first match wins:
       </P>
       <DocTable
         head={['Source, in order', 'Notes']}
@@ -156,7 +163,7 @@ export default function Page() {
             <span key="r3">
               3 · <M>~/.near-credentials/&lt;network&gt;/&lt;account&gt;.json</M>
             </span>,
-            'Where the near CLI keeps keys; npm run near:bootstrap writes it here.',
+            'Where the near CLI keeps keys; npm run near:bootstrap writes it here. With no secret, no key file and no file here, the command stops with SIGNER_MISSING.',
           ],
         ]}
       />
@@ -186,8 +193,22 @@ export default function Page() {
             default: DEFAULT_EXPLORER_URL,
             desc: (
               <>
-                Base of the explorer link <M>buy</M> prints under its payment transaction, in live
-                mode.
+                Base of every explorer link the CLI prints in live mode: <M>buy</M>’s payment and
+                its gasless <M>waiting:</M> line, <M>escrow deposit</M> / <M>withdraw</M>,{' '}
+                <M>agent-key add</M>, and the <M>TX_TIMEOUT</M> and <M>GASLESS_NOT_SERVED</M>{' '}
+                messages.
+              </>
+            ),
+          },
+          {
+            name: 'UPSTREAM_TIMEOUT_MS',
+            type: 'number (ms)',
+            required: false,
+            default: '30000',
+            desc: (
+              <>
+                How long <M>wrap</M> and <M>map</M> wait for the gateway’s mapping answer, and{' '}
+                <M>demo-accounts</M> for the devnet faucet.
               </>
             ),
           },
@@ -292,9 +313,20 @@ export default function Page() {
               <>
                 Gateway base URL, stored on-chain (at most 200 bytes, no query string or fragment);
                 readers derive the endpoint <M>&lt;gateway&gt;/svc/&lt;id&gt;</M>. Live mode needs{' '}
-                <M>https://</M> unless the host is localhost (<M>INSECURE_URL</M>), and, while no
-                hosted gateway default is set, the flag itself (<M>GATEWAY_REQUIRED</M>). Mock mode
-                defaults to the local gateway.
+                <M>https://</M> unless the host is localhost (<M>INSECURE_URL</M>).{' '}
+                {DEFAULT_GATEWAY_URL === '' ? (
+                  <>
+                    Live mode has no hosted default in this build, so it needs the flag itself (
+                    <M>GATEWAY_REQUIRED</M>).
+                  </>
+                ) : (
+                  <>
+                    Without the flag, live mode uses the hosted gateway{' '}
+                    <M>{DEFAULT_GATEWAY_URL}</M>.
+                  </>
+                )}{' '}
+                Mock mode defaults to the local gateway,{' '}
+                <M>http://localhost:&lt;MIDDLEWARE_PORT&gt;</M>.
               </>
             ),
           },
@@ -310,7 +342,20 @@ export default function Page() {
             type: 'NEAR account id',
             required: false,
             default: 'the seller account',
-            desc: 'The account allowed to record attestations besides the owner. In production this is the gateway’s account.',
+            desc: (
+              <>
+                The account allowed to record attestations besides the owner. A live gateway
+                attests as its own account (<M>GATEWAY_ACCOUNT_ID</M>), so set this to the account
+                of the gateway that serves the service: with the default, every attestation that
+                gateway sends is rejected (<M>ERR_NOT_AUTHORIZED</M>) and paid calls never reach the
+                score.{' '}
+                {DEFAULT_GATEWAY_ACCOUNT_ID === '' ? null : (
+                  <>
+                    The hosted gateway attests as <M>{DEFAULT_GATEWAY_ACCOUNT_ID}</M>.
+                  </>
+                )}
+              </>
+            ),
           },
         ]}
       />
@@ -333,11 +378,24 @@ export default function Page() {
           'register tx:     <tx hash>',
         ].join('\n')}
       />
+      {DEFAULT_GATEWAY_URL === '' || DEFAULT_GATEWAY_ACCOUNT_ID === '' ? null : (
+        <>
+          <P>
+            On testnet, behind the hosted gateway (no <M>--gateway</M> needed), with the gateway as
+            attestor so its attestations count:
+          </P>
+          <CommandBlock
+            wrap
+            text={`npm run neargate -- wrap https://<your api> --price 0.01 --name "<name>" --attestor ${DEFAULT_GATEWAY_ACCOUNT_ID} --account <seller>.testnet`}
+          />
+        </>
+      )}
       <Callout tone="warn" title="IF THE MAPPING FAILS, DO NOT RE-RUN WRAP">
         The registration is <em>not</em> rolled back when the gateway mapping fails: the service
         exists on-chain and its endpoint answers <M>503</M> until it is mapped. <M>wrap</M> prints
-        the exact retry to stderr and notes the failure on stdout. Re-running <M>wrap</M> would
-        register a duplicate; use <DocLink href="#map">map</DocLink> instead.
+        the exact retry to stderr (a <M>warning:</M> line) and notes the failure on stdout, then
+        exits <M>0</M>, because the registration succeeded. Re-running <M>wrap</M> would register a
+        duplicate; use <DocLink href="#map">map</DocLink> instead.
       </Callout>
 
       {/* ───────────────────────────── map ───────────────────────────── */}
@@ -435,7 +493,7 @@ export default function Page() {
             ),
           },
           { name: '--method <method>', type: 'string', required: false, default: 'GET', desc: 'HTTP method of the paid request.' },
-          { name: '--body <json>', type: 'string', required: false, desc: 'JSON request body to send with the paid request.' },
+          { name: '--body <json>', type: 'string', required: false, desc: 'JSON request body to send with the paid request. It must parse as JSON (INVALID_INPUT otherwise, before anything is paid): the gateway refuses other bodies.' },
           {
             name: '--gateway <url>',
             type: 'url',
@@ -449,7 +507,7 @@ export default function Page() {
       <CodeBlock
         label="stderr"
         code={[
-          'waiting:  the gateway’s relay (tx <tx hash>, <explorer>/txns/<tx hash>) is settling; presenting the same signed delegate again for up to 150 s      (with --gasless, only while its relay settles)',
+          "waiting:  the gateway's relay (tx <tx hash>, <explorer>/txns/<tx hash>) is settling; presenting the same signed delegate again for up to 150 s      (with --gasless, only while its relay settles; the explorer link in live mode only)",
           'service:  #1 RWA FX & Gold Oracle',
           'url:      http://localhost:4021/svc/1',
           'paid:     0.5 NEAR + 0.002 NEAR storage',
@@ -533,8 +591,8 @@ export default function Page() {
         <strong className="text-white">only the account’s full-access key can sign it</strong>: from
         an agent key NEAR rejects the call (<M>TX_FAILED</M>, “Deposit is not allowed with function
         call”). An amount above the escrow is refused with <M>ERR_ESCROW_INSUFFICIENT</M> before
-        anything is sent. Prints <M>account</M>, <M>withdrawn</M>, <M>escrow</M> (what is left) and{' '}
-        <M>tx</M>.
+        anything is sent. Prints <M>account</M>, <M>withdrawn</M>, <M>escrow</M> (what is left),{' '}
+        <M>tx</M> and, in live mode, <M>explorer</M>.
       </P>
       <H3 id="escrow-balance">escrow balance</H3>
       <CommandBlock text="npm run neargate -- escrow balance [account]" />
@@ -589,7 +647,7 @@ export default function Page() {
         code={[
           'account:     buyer.testnet',
           'public key:  ed25519:…',
-          'key file:    ~/.near-credentials/testnet/buyer.testnet.neargate-agent.json',
+          'key file:    /home/<you>/.near-credentials/testnet/buyer.testnet.neargate-agent.json',
           "allowance:   0.25 NEAR (the key's gas; it can call pay_from_escrow on the registry and nothing else)",
           'add_key tx:  <tx hash>',
           'explorer:    <NEAR_EXPLORER_URL>/txns/<tx hash>',
@@ -697,6 +755,8 @@ export default function Page() {
         more. A failing tool returns an error result that leads with the stable
         code (<M>BUDGET_EXCEEDED</M>, <M>SERVICE_INACTIVE</M>, <M>PAID_NOT_SERVED</M>…), so an agent
         can branch on it; the codes are the ones in <DocLink href="#error-codes">Error codes</DocLink>.
+        A raw network failure carries no code: for example a <M>neargate_get_invoice</M> whose
+        gateway is unreachable or does not answer within 30 s returns the bare message.
       </P>
       <H3 id="mcp-claude-desktop">Claude Desktop</H3>
       <P>
@@ -739,16 +799,16 @@ export default function Page() {
       <DocTable
         head={['Code', 'Meaning']}
         rows={[
-          [<M key="1">INVALID_INPUT</M>, 'A text flag is blank, has control characters or is over its byte limit (name 64, description 280).'],
-          [<M key="2">INVALID_URL</M>, 'A URL is not http(s), has a query string or fragment, or the gateway URL is over 200 bytes.'],
-          [<M key="21">GATEWAY_REQUIRED</M>, 'Live wrap with no --gateway while there is no hosted gateway default. Nothing is sent: pass --gateway <your gateway’s base URL>.'],
-          [<M key="3">INSECURE_URL</M>, 'Live wrap with a plain http:// gateway that is not localhost: the mapping request would travel in cleartext.'],
+          [<M key="1">INVALID_INPUT</M>, 'A text flag is blank, has control characters or is over its byte limit (name 64, description 280); buy --body is not valid JSON; escrow balance names two different accounts (the argument and --account).'],
+          [<M key="2">INVALID_URL</M>, 'A URL is not http(s), has a query string or fragment, or the gateway URL is over 200 bytes. map: the on-chain endpoint does not end in <gateway>/svc/<id>.'],
+          [<M key="21">GATEWAY_REQUIRED</M>, 'Live wrap with no --gateway in a build whose hosted gateway default (DEFAULT_GATEWAY_URL) is empty; a build with the hosted gateway never raises it. Nothing is sent: pass --gateway <your gateway’s base URL>.'],
+          [<M key="3">INSECURE_URL</M>, 'Live wrap with a plain http:// gateway that is not localhost, or map of a service whose registered gateway is one: the mapping request would travel in cleartext.'],
           [<M key="4">INVALID_SERVICE_ID</M>, 'The <id> argument is not a positive integer.'],
           [<M key="5">INVALID_ACCOUNT_ID</M>, 'An account flag is not a NEAR account id.'],
           [<M key="6">INVALID_AMOUNT</M>, 'A NEAR amount (--price, --max, maxNear, an escrow amount, --allowance) is not a plain non-negative decimal of at most 24 places, or is above the u128 maximum; an escrow amount or an agent key allowance of zero is refused too.'],
           [<M key="7">INVALID_PRICE</M>, '--price is below the registry minimum of 0.000001 NEAR.'],
           [<M key="8">CONFIG_INVALID</M>, 'A flag or environment variable is invalid — for example a malformed REGISTRY_CONTRACT_ID or an unknown NEAR_NETWORK.'],
-          [<M key="9">SIGNER_MISSING</M>, 'No account for the command’s role: pass --account or set the role’s *_ACCOUNT_ID (mock: MOCK_*_ACCOUNT).'],
+          [<M key="9">SIGNER_MISSING</M>, 'Live mode: no account for the command’s role (pass --account or set the role’s *_ACCOUNT_ID), or no key for it: no secret, no key file and no ~/.near-credentials file. Mock mode falls back to MOCK_*_ACCOUNT, which defaults to seller.mock / buyer.mock.'],
           [<M key="10">SIGNER_KEY_INVALID</M>, 'A secret key or key file is not a valid ed25519 NEAR key. The message names the source, never the key.'],
           [<M key="11">SIGNER_KEY_UNREADABLE</M>, 'The key file cannot be read.'],
           [<M key="12">SIGNER_KEY_MISMATCH</M>, 'The key file is for a different account than the one you are signing as.'],
@@ -756,7 +816,7 @@ export default function Page() {
           [<M key="14">LIVE_ONLY</M>, 'map or agent-key in mock mode. The mock gateway maps through its admin route, which wrap does for you; agent keys are NEAR access keys, which the devnet does not model.'],
           [<M key="15">MOCK_ONLY</M>, 'demo-accounts outside mock mode.'],
           [<M key="16">NOT_SERVICE_OWNER</M>, 'map: your key’s account is not the service owner.'],
-          [<M key="17">MAPPING_FAILED</M>, 'The gateway did not map the upstream (non-2xx, a redirect, a network error or a timeout). The registration stays; retry with map.'],
+          [<M key="17">MAPPING_FAILED</M>, 'map: the gateway did not map the upstream (non-2xx, a redirect, a network error or a timeout); retry it. wrap raises no code for this: it warns, prints the retry and exits 0, because the registration stands.'],
           [<M key="18">SERVICE_NOT_FOUND</M>, 'No service with that id on this registry.'],
           [<M key="19">SERVICE_INACTIVE</M>, 'buy / neargate_get_invoice: the owner paused the service. Nothing is paid.'],
           [<M key="20">FAUCET_UNREACHABLE</M>, 'demo-accounts cannot reach the devnet faucet. Start it with npm run dev. FAUCET_FAILED means the faucet answered an error; GATEWAY_TIMEOUT that it did not answer in time.'],
@@ -949,7 +1009,8 @@ export default function Page() {
         ]}
       />
 
-      <H3 id="codes-chain">Chain and RPC (live mode)</H3>
+      <H3 id="codes-chain">Chain and RPC</H3>
+      <P>Live mode, except the devnet codes in the last row.</P>
       <DocTable
         head={['Code', 'Meaning, and whether to retry']}
         rows={[
@@ -988,9 +1049,10 @@ export default function Page() {
             <M key="5">TX_TIMEOUT</M>,
             <span key="5m">
               The transaction <strong className="text-white">was sent</strong>, but its outcome is
-              unknown: the RPC timed out or failed after the transaction went out. The message
-              names the transaction hash and its explorer page,{' '}
-              <M>&lt;explorer&gt;/txns/&lt;hash&gt;</M>.
+              unknown: the RPC timed out or failed after the transaction went out. When the client
+              knows the hash, the message names it and its explorer page,{' '}
+              <M>&lt;explorer&gt;/txns/&lt;hash&gt;</M>; when the RPC stopped waiting before
+              returning one, it says only that the transaction may still land.
               <Sub>
                 Do not retry blindly: the transaction may still land. Check it on the explorer
                 first, or a retry can register or pay twice.
@@ -1030,8 +1092,8 @@ export default function Page() {
           [
             <M key="10">ERR_INSUFFICIENT_BALANCE</M>,
             <span key="10m">
-              The signer cannot cover the deposit plus gas, or would be left unable to cover its
-              own storage.
+              The signer cannot cover the deposit plus gas, or would be left short of its own
+              storage stake after the transaction.
               <Sub>Fund the account.</Sub>
             </span>,
           ],
@@ -1039,7 +1101,9 @@ export default function Page() {
             <M key="11">devnet_unreachable</M>,
             <span key="11m">
               Mock mode: the offline devnet is not running (devnet_timeout: it did not answer).
-              <Sub>Start it with npm run dev.</Sub>
+              The devnet can also answer devnet_bad_response (a reply in the wrong shape),
+              devnet_error or its own error code, and a bad DEVNET_URL gives invalid_devnet_url.
+              <Sub>Start it with npm run dev; check DEVNET_URL.</Sub>
             </span>,
           ],
         ]}

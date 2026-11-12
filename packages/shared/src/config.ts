@@ -38,6 +38,14 @@ export const DEFAULT_GATEWAY_URL: string = 'https://neargate-gateway-production.
  */
 export const DEFAULT_DASHBOARD_URL: string = 'https://neargate-dashboard-production.up.railway.app';
 
+/**
+ * The account the hosted gateway (DEFAULT_GATEWAY_URL) signs attestations as: its
+ * GATEWAY_ACCOUNT_ID on Railway. A service served by that gateway must name it as its attestor
+ * (`neargate wrap --attestor`), or every attestation the gateway sends is rejected. Changes
+ * together with DEFAULT_GATEWAY_URL; '' when there is no hosted gateway.
+ */
+export const DEFAULT_GATEWAY_ACCOUNT_ID: string = 'neargate-app-gateway.testnet';
+
 /** Per-network RPC and explorer defaults (overridable via NEAR_RPC_URL / NEAR_EXPLORER_URL). */
 const NEAR_DEFAULTS: Record<NearNetwork, { rpcUrl: string; explorerUrl: string }> = {
   testnet: { rpcUrl: 'https://rpc.testnet.near.org', explorerUrl: 'https://testnet.nearblocks.io' },
