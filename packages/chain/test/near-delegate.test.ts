@@ -187,6 +187,14 @@ describe('inspectPayDelegate refuses every delegate but this invoice\'s zero-dep
       { actions: [payCall({ args: '{"service_id":1,"nonce":"9","nonce":"4242"}' })] },
       'wrong_args',
     ],
+    ['args with an extra key', { actions: [payCall({ args: '{"service_id":1,"nonce":"4242","memo":"x"}' })] }, 'wrong_args'],
+    ['the service id as a string', { actions: [payCall({ args: '{"service_id":"1","nonce":"4242"}' })] }, 'wrong_args'],
+    ['the invoice nonce as a number', { actions: [payCall({ args: '{"service_id":1,"nonce":4242}' })] }, 'wrong_args'],
+    [
+      'the invoice nonce spelled with a \\u escape (the same string once parsed)',
+      { actions: [payCall({ args: '{"service_id":1,"nonce":"\\u0034242"}' })] },
+      'wrong_args',
+    ],
     ['a deposit attached (the relayer would pay it)', { actions: [payCall({ deposit: 1n })] }, 'deposit_not_zero'],
     ['more gas than the cap', { actions: [payCall({ gas: PAY_DELEGATE_GAS + 1n })] }, 'gas_too_high'],
     ['less gas than the relayer attaches', { actions: [payCall({ gas: PAY_DELEGATE_GAS - 1n })] }, 'gas_too_low'],
@@ -312,16 +320,20 @@ describe('judgeRelayOutcome: never trust the outer status (task-10c context, R58
     expect(verdict.error.message).toMatch(/^ERR_ESCROW_INSUFFICIENT: the escrow holds/);
   });
 
-  it('a failed delegate receipt (NEAR refused the delegate itself) is a definitive failure', () => {
+  it('a failed delegate receipt (NEAR refused the delegate itself) is a definitive DELEGATE_REJECTED', () => {
+    // As the RPC shows it: the tx's status follows the failed delegate receipt (near-api-js throws
+    // on it before this is reached; judged here all the same), and no registry receipt exists.
     const refused = outcome('tx-relay-ok.json');
-    refused.receipts_outcome[0].outcome.status = {
-      Failure: { ActionError: { index: 0, kind: { DelegateActionInvalidNonce: { ak_nonce: 13, delegate_nonce: 13 } } } },
-    };
+    const failure = { Failure: { ActionError: { index: 0, kind: { DelegateActionInvalidNonce: { ak_nonce: 13, delegate_nonce: 13 } } } } };
+    refused.status = failure;
+    refused.receipts_outcome[0].outcome.status = failure;
+    refused.receipts_outcome[0].outcome.receipt_ids = [refused.receipts_outcome[4].id];
+    refused.receipts_outcome.splice(1, 3);
     const verdict = judgeRelayOutcome(refused, REGISTRY);
     expect(verdict.status).toBe('failed');
     if (verdict.status !== 'failed') throw new Error('unreachable');
-    expect(verdict.error.code).toBe('TX_FAILED');
-    expect(verdict.error.message).toMatch(/DelegateActionInvalidNonce/);
+    expect(verdict.error).toMatchObject({ code: 'DELEGATE_REJECTED', httpStatus: 400 });
+    expect(verdict.error.message).toMatch(/^NEAR rejected the relayed delegate: .*DelegateActionInvalidNonce/);
   });
 
   it('unknown, never paid, when the outcome does not show the inner receipt or it has not run', () => {

@@ -7,18 +7,25 @@
  *   - in-process: deposit → `buy --gasless` → the buyer signs a NEP-366 `pay_from_escrow`
  *     delegate, the gateway relays it (it is the relay's signer), the escrow pays exactly price +
  *     0.002 NEAR and the buyer's account balance does not move; the call is served and attested;
+ *   - two back-to-back gasless buys with the same key: distinct delegate nonces, both served;
+ *   - a relay whose devnet answer times out after the devnet ran it: settlement_pending naming the
+ *     relay tx, then the client presents the same delegate again and is served, relayed once;
  *   - the real `neargate` bin as a subprocess: `buy --gasless` prints the body and a receipt
  *     saying the gateway relayed it.
  *
  * The gateway's chain client is its own MockChainHttpClient, so the test sees what it relays.
+ * What the mock cannot show: the devnet charges no gas to anyone, so "the buyer's balance did
+ * not move" holds whoever would have paid the gas, and "the gateway is the relay's signer" checks
+ * the signer the gateway handed relayPay, not who NEAR charged. The live testnet run (7b) is the
+ * proof that the relayer pays the gas.
  */
 import { execFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { MockChainHttpClient, decodeSignedDelegate } from '@agentgate/chain';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { MockChainHttpClient, decodeSignedDelegate, devnetRelayTxHash } from '@agentgate/chain';
 import { buyService, createDemoAccounts, depositToEscrow, wrapService } from '@neargate/cli';
 import { startServer as startDevnet } from '@agentgate/devnet';
 import { startServer as startMiddleware } from '@agentgate/middleware';
@@ -65,6 +72,8 @@ describe('gasless rail (e2e, mock stack)', () => {
   let chain: MockChainHttpClient;
   /** What the gateway relayed: the delegate, the relayer it signed as, the relay tx. */
   const relays: Array<{ signedDelegate: string; relayer: AnySigner; txHash: string }> = [];
+  /** Every relayPay call the gateway made, answered or not. */
+  const relayAttempts: string[] = [];
   let seller: MockSigner;
   let serviceId: number;
 
@@ -88,6 +97,7 @@ describe('gasless rail (e2e, mock stack)', () => {
     const gatewayChain = new MockChainHttpClient(devnetUrl);
     const relayPay = gatewayChain.relayPay.bind(gatewayChain);
     gatewayChain.relayPay = async (signedDelegate, relayer) => {
+      relayAttempts.push(signedDelegate);
       const result = await relayPay(signedDelegate, relayer);
       relays.push({ signedDelegate, relayer, txHash: result.txHash });
       return result;
@@ -115,6 +125,10 @@ describe('gasless rail (e2e, mock stack)', () => {
     serviceId = wrapped.serviceId;
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   afterAll(async () => {
     await middleware?.close().catch(() => undefined);
     await oracle?.close().catch(() => undefined);
@@ -133,11 +147,14 @@ describe('gasless rail (e2e, mock stack)', () => {
 
     expect(result).toMatchObject({ status: 200, paid: true, gasless: true, relayer: GATEWAY_ACCOUNT, payFrom: 'escrow' });
     expect((result.body as { attribution: string }).attribution).toBe('static-fixture'); // the oracle's bytes
-    expect(await balanceOf(buyer.accountId)).toBe(accountBefore); // not a yocto of gas from the buyer
+    // The devnet charges no gas, so this holds whoever would pay it: it shows the escrow, not the
+    // account, paid the call. Who pays the gas is the live run's to prove (7b).
+    expect(await balanceOf(buyer.accountId)).toBe(accountBefore);
     expect(escrowBefore - (await escrowOf(buyer.accountId))).toBe(TOTAL); // price + 0.002 NEAR, to the yocto
     expect((await balanceOf(seller.accountId)) - sellerBefore).toBe(PRICE);
 
-    // One relay, signed by the gateway account, of the buyer's own pay_from_escrow delegate.
+    // One relay of the buyer's own pay_from_escrow delegate, which the gateway handed relayPay to
+    // sign as the gateway account (what the gateway passed; the devnet charges no one).
     expect(relays).toHaveLength(relaysBefore + 1);
     const relay = relays.at(-1)!;
     expect(relay.relayer).toEqual({ kind: 'mock', accountId: GATEWAY_ACCOUNT });
@@ -157,6 +174,50 @@ describe('gasless rail (e2e, mock stack)', () => {
       await sleep(200);
     }
     expect(attested).toMatchObject({ paymentTxHash: relay.txHash, success: true });
+  });
+
+  it('two back-to-back gasless buys with the same key sign distinct delegate nonces; both are relayed and served', async () => {
+    const buyer = await escrowBuyer();
+    const relaysBefore = relays.length;
+    const first = await buyService({ chain, signer: buyer, id: serviceId, gasless: true });
+    const second = await buyService({ chain, signer: buyer, id: serviceId, gasless: true });
+    expect(first.result).toMatchObject({ status: 200, paid: true, gasless: true });
+    expect(second.result).toMatchObject({ status: 200, paid: true, gasless: true });
+    const nonces = relays.slice(relaysBefore).map((r) => decodeSignedDelegate(r.signedDelegate)?.nonce);
+    expect(nonces).toHaveLength(2);
+    expect(nonces[1]).toBe(nonces[0]! + 1n);
+  });
+
+  it("a relay whose devnet answer times out after the devnet ran it is settlement_pending, then served on the client's retry: relayed once", async () => {
+    const buyer = await escrowBuyer();
+    const escrowBefore = await escrowOf(buyer.accountId);
+    const attemptsBefore = relayAttempts.length;
+    // The gateway's relay POST reaches the devnet, which runs it; its answer then times out.
+    const realFetch = globalThis.fetch;
+    let armed = true;
+    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (!armed || !url.endsWith('/registry/relay')) return realFetch(input, init);
+      armed = false;
+      await realFetch(input, init);
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    });
+
+    const waits: Array<{ attempt: number; transaction?: string }> = [];
+    const { result } = await buyService({
+      chain,
+      signer: buyer,
+      id: serviceId,
+      gasless: true,
+      onGaslessWait: ({ attempt, transaction }) => waits.push({ attempt, ...(transaction !== undefined ? { transaction } : {}) }),
+    });
+
+    expect(armed).toBe(false); // the relay's answer did time out
+    expect(relayAttempts).toHaveLength(attemptsBefore + 1); // relayed once: the retry was served from it
+    const relayTx = devnetRelayTxHash(relayAttempts.at(-1)!);
+    expect(waits).toEqual([{ attempt: 1, transaction: relayTx }]); // one settlement_pending, naming the relay tx
+    expect(result).toMatchObject({ status: 200, paid: true, gasless: true, txHash: relayTx });
+    expect(escrowBefore - (await escrowOf(buyer.accountId))).toBe(TOTAL); // paid once
   });
 
   it('an escrow below price + fee is refused before anything is signed or relayed', async () => {

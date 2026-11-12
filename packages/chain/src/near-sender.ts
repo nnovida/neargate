@@ -2,7 +2,7 @@ import { Account, getTransactionLastResult } from 'near-api-js';
 import type { Action } from 'near-api-js';
 import { AgentGateError, isNearTxHash } from '@agentgate/shared';
 import type { NearKeySigner, NearNetwork } from '@agentgate/shared';
-import { TxTimeoutError, badResponse, mapCallError } from './near-errors';
+import { TxTimeoutError, badResponse, mapCallError, type CallErrorContext } from './near-errors';
 import { loadNearSigner } from './near-keys';
 import { withTimeout, type NearRpc } from './near-rpc';
 import { CallSigner } from './near-signer';
@@ -54,6 +54,7 @@ export class TxSender {
    * the parsed execution error on a `Failure` status, so contract panics keep their `ERR_*`
    * codes. Once the tx is signed, anything short of NEAR's verdict on it (a failed or timed-out
    * send, a reply without its outcome, the call's 120 s bound) is TX_TIMEOUT naming that tx.
+   * `mapError` maps any failure (default `mapCallError`; a relay's is `mapRelayError`).
    */
   async send(
     signer: NearKeySigner,
@@ -61,6 +62,7 @@ export class TxSender {
     method: string,
     action: Action,
     waitUntil: WaitUntil,
+    mapError: (err: unknown, ctx: CallErrorContext) => AgentGateError = mapCallError,
   ): Promise<{ txHash: string; result: unknown; outcome: unknown }> {
     const { ctx } = this;
     const loaded = await loadNearSigner({
@@ -91,7 +93,7 @@ export class TxSender {
         },
       );
     } catch (err) {
-      throw mapCallError(err, {
+      throw mapError(err, {
         what,
         method,
         network: ctx.network,

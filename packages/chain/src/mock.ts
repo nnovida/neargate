@@ -19,11 +19,13 @@ import type {
   ServiceScore,
   VerifyPaymentQuery,
   VerifyResult,
+  ViewFinality,
   Yocto,
 } from '@agentgate/shared';
 import { YOCTO_RE, assertNonEmpty, assertServiceId, assertYocto, checkVerifyQuery, judgePaymentRecord } from './checks';
-import { deriveDevnetKey } from './devnet-key';
-import { PAY_DELEGATE_TTL_BLOCKS, buildEscrowPayDelegate, relayablePayDelegate } from './near-delegate';
+import { deriveDevnetKey, devnetRelayTxHash } from './devnet-key';
+import { PAY_DELEGATE_METHOD, PAY_DELEGATE_TTL_BLOCKS, buildEscrowPayDelegate, relayablePayDelegate } from './near-delegate';
+import { TxTimeoutError } from './near-errors';
 
 /** Devnet is local/in-process, but never let a hung socket block a request forever. */
 const DEVNET_REQUEST_TIMEOUT_MS = 30_000;
@@ -211,9 +213,10 @@ export class MockChainHttpClient implements ChainClient {
 
   /**
    * The devnet's one key of an account (its derived devnet key, full access): its nonce, which a
-   * relayed delegate moves, or null for any other key or an account the devnet does not know.
+   * relayed delegate moves, or null for any other key or an account the devnet does not know. The
+   * devnet settles each call at once, so every finality reads the same.
    */
-  async accessKey(accountId: string, publicKey: string): Promise<AccessKeyInfo | null> {
+  async accessKey(accountId: string, publicKey: string, _finality?: ViewFinality): Promise<AccessKeyInfo | null> {
     assertNonEmpty(accountId, 'accountId');
     assertNonEmpty(publicKey, 'publicKey');
     const result = await this.request<{ nonce?: unknown; permission?: unknown }>(
@@ -268,15 +271,29 @@ export class MockChainHttpClient implements ChainClient {
    * the way NEAR does (signature, key, nonce, expiry), then runs `pay_from_escrow` as the
    * delegate's sender; the relayer attaches nothing. Only a zero-deposit `pay_from_escrow` to the
    * registry is relayed (invalid_query before the devnet sees anything else). NEAR refusing the
-   * delegate is TX_FAILED naming the DelegateAction error; the inner call failing keeps its ERR_* code.
+   * delegate is DELEGATE_REJECTED naming the DelegateAction error; the inner call failing keeps its
+   * ERR_* code. An answer that timed out leaves the outcome unknown (the devnet may have run the
+   * relay): TX_TIMEOUT naming the tx the devnet gives that relay (`devnetRelayTxHash`), as a live
+   * relay's would.
    */
   async relayPay(signedDelegate: string, relayer: AnySigner): Promise<{ txHash: string }> {
     const mockSigner = requireMockSigner(relayer);
     relayablePayDelegate(signedDelegate, this.registryId);
-    return await this.post<{ txHash: string }>('/registry/relay', {
-      relayer: mockSigner.accountId,
-      signedDelegate,
-    });
+    try {
+      return await this.post<{ txHash: string }>('/registry/relay', {
+        relayer: mockSigner.accountId,
+        signedDelegate,
+      });
+    } catch (err) {
+      if (err instanceof AgentGateError && err.code === 'devnet_timeout') {
+        throw new TxTimeoutError(
+          `the devnet did not answer the ${PAY_DELEGATE_METHOD} relay within ${DEVNET_REQUEST_TIMEOUT_MS / 1000} s`,
+          devnetRelayTxHash(signedDelegate),
+          undefined,
+        );
+      }
+      throw err;
+    }
   }
 
   /** The account's escrow in yocto; `"0"` for an account that never deposited. */

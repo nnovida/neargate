@@ -96,8 +96,8 @@ const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=
  * before it is borsh-decoded.
  */
 export const SIGNED_DELEGATE_MAX = 4096;
-/** The base64 length of SIGNED_DELEGATE_MAX bytes: the longest `signedDelegate` the codec takes. */
-const SIGNED_DELEGATE_MAX_CHARS = Math.ceil(SIGNED_DELEGATE_MAX / 3) * 4;
+/** The base64 length of SIGNED_DELEGATE_MAX bytes: no longer `signedDelegate` decodes to SIGNED_DELEGATE_MAX bytes or fewer. */
+export const SIGNED_DELEGATE_MAX_CHARS = Math.ceil(SIGNED_DELEGATE_MAX / 3) * 4;
 /** One dot-separated part of a NEAR account id. */
 const ACCOUNT_PART_RE = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
 
@@ -140,6 +140,12 @@ export function isEd25519PublicKey(s: unknown): s is string {
 /** Non-empty, strict, padded standard base64 (no URL-safe alphabet, no whitespace). */
 export function isBase64(s: unknown): s is string {
   return typeof s === 'string' && s !== '' && BASE64_RE.test(s);
+}
+
+/** The number of bytes a strict, padded base64 string decodes to. */
+function base64DecodedLength(b64: string): number {
+  const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+  return (b64.length / 4) * 3 - padding;
 }
 
 export type Caip2 = 'near:testnet' | 'near:mainnet' | 'near:mock';
@@ -189,9 +195,10 @@ function decodePayload(payload: Record<string, unknown>): NearExactPayload {
     typeof signedDelegate !== 'string' ||
     signedDelegate === '' ||
     signedDelegate.length > SIGNED_DELEGATE_MAX_CHARS ||
-    !BASE64_RE.test(signedDelegate)
+    !BASE64_RE.test(signedDelegate) ||
+    base64DecodedLength(signedDelegate) > SIGNED_DELEGATE_MAX
   ) {
-    throw badPayment('payload.signedDelegate must be a base64 SignedDelegate');
+    throw badPayment(`payload.signedDelegate must be a base64 SignedDelegate of at most ${SIGNED_DELEGATE_MAX} bytes`);
   }
   return { kind, signedDelegate, nonce, payer };
 }

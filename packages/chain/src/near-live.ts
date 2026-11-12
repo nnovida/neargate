@@ -38,7 +38,7 @@ import {
   judgeRelayOutcome,
   relayablePayDelegate,
 } from './near-delegate';
-import { TxTimeoutError, badResponse } from './near-errors';
+import { TxTimeoutError, badResponse, mapRelayError } from './near-errors';
 import { loadNearSigner } from './near-keys';
 import { NearRpc, type TxStatus, type ViewFinality } from './near-rpc';
 import { TxSender, type WaitUntil } from './near-sender';
@@ -211,11 +211,11 @@ export class LiveNearClient implements ChainClient {
   }
 
   /**
-   * The access key `publicKey` of the account (`view_access_key`, `final`): its nonce and permission,
-   * or null when the account holds no such key (or `publicKey` is no NEAR key). A permission it does
-   * not know is RPC_BAD_RESPONSE.
+   * The access key `publicKey` of the account (`view_access_key`, at `finality`, `final` unless
+   * asked): its nonce and permission, or null when the account holds no such key (or `publicKey` is
+   * no NEAR key). A permission it does not know is RPC_BAD_RESPONSE.
    */
-  async accessKey(accountId: string, publicKey: string): Promise<AccessKeyInfo | null> {
+  async accessKey(accountId: string, publicKey: string, finality: ViewFinality = 'final'): Promise<AccessKeyInfo | null> {
     assertAccountId(accountId, 'accountId');
     assertNonEmpty(publicKey, 'publicKey');
     let key: string;
@@ -224,7 +224,7 @@ export class LiveNearClient implements ChainClient {
     } catch {
       return null; // not a NEAR public key, so no account holds it
     }
-    const found = await this.rpc.viewAccessKey(accountId, key);
+    const found = await this.rpc.viewAccessKey(accountId, key, finality);
     return found === null ? null : parseAccessKey(found, `the access key lookup for ${accountId}`);
   }
 
@@ -384,8 +384,9 @@ export class LiveNearClient implements ChainClient {
    * Signs (sends nothing) the gasless rail's NEP-366 delegate: one zero-deposit
    * `pay_from_escrow(service_id, nonce)` to this registry with 30 TGas, as the signer's account,
    * with the key `loadNearSigner` resolves (the agent's function-call key works). The delegate
-   * nonce is that key's nonce + 1 and it expires 100 blocks past the final height. A key the
-   * account does not hold is SIGNER_KEY_NOT_FOUND, before anything is signed.
+   * nonce is that key's nonce + 1, read at `optimistic` (a nonce spent in a block that is not final
+   * yet, by the last buy's relay say, is spent), and it expires 100 blocks past the final height. A
+   * key the account does not hold is SIGNER_KEY_NOT_FOUND, before anything is signed.
    */
   async signPayDelegate(input: { serviceId: number; nonce: string }, signer: AnySigner): Promise<string> {
     const near = requireNearSigner(signer);
@@ -396,7 +397,7 @@ export class LiveNearClient implements ChainClient {
       secretKey: near.secretKey,
       network: this.nearNetwork,
     });
-    const key = await this.accessKey(near.accountId, loaded.publicKey);
+    const key = await this.accessKey(near.accountId, loaded.publicKey, 'optimistic');
     if (key === null) {
       throw new AgentGateError(
         'SIGNER_KEY_NOT_FOUND',
@@ -422,7 +423,8 @@ export class LiveNearClient implements ChainClient {
    * relayed (invalid_query before anything is sent otherwise): NEAR has the relayer pay the inner
    * call's deposit, so the relayer's exposure stays gas only. The outer status is never trusted:
    * the registry's receipt decides (`judgeRelayOutcome`). Its failure keeps the contract's ERR_*
-   * code, naming the tx; an outcome that does not show it is TX_TIMEOUT naming the tx.
+   * code, naming the tx; NEAR refusing the delegate itself is DELEGATE_REJECTED (`mapRelayError`);
+   * an outcome that does not show the registry's receipt is TX_TIMEOUT naming the tx.
    */
   async relayPay(signedDelegate: string, relayer: AnySigner): Promise<{ txHash: string }> {
     const near = requireNearSigner(relayer);
@@ -434,6 +436,7 @@ export class LiveNearClient implements ChainClient {
       `${PAY_DELEGATE_METHOD} relay`,
       action,
       'EXECUTED_OPTIMISTIC',
+      mapRelayError,
     );
     const verdict = judgeRelayOutcome(outcome, this.registryId);
     if (verdict.status === 'paid') return { txHash };

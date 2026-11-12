@@ -345,6 +345,26 @@ describe('NearGate MCP server', () => {
     await client.close();
   });
 
+  it('neargate_buy gasless not served: the tool error advises only what an MCP agent can do (the escrow balance tool; a new buy is a new payment)', async () => {
+    const chain = makeChain();
+    chain.escrows.set('buyer.mock', '5000000000000000000000000');
+    const offer = gatewayFetch({ relayer: 'gateway.mock', relayMethod: 'pay_from_escrow' });
+    const impl = (async (url: unknown, init?: RequestInit) => {
+      if (!new Headers(init?.headers).has('X-PAYMENT')) return offer.impl(String(url), init);
+      return Response.json({ x402Version: 1, error: 'invoice_used', accepts: [] }, { status: 402 });
+    }) as typeof fetch;
+    const client = await connectClient({ chain, signerProvider: async () => BUYER, fetchImpl: impl, explorerUrl: 'https://testnet.nearblocks.io' });
+    const res = await client.callTool({ name: 'neargate_buy', arguments: { id: 1, gasless: true } });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    const text = textOf(res);
+    expect(text).toMatch(/^GASLESS_NOT_SERVED/);
+    expect(text).toContain('invoice_used');
+    expect(text).toContain('the neargate_escrow_balance tool');
+    expect(text).toContain('buying again signs a NEW payment');
+    expect(text).not.toMatch(/present the same/i);
+    await client.close();
+  });
+
   it('neargate_buy gasless against a gateway that relays nothing is a tool error (RELAYER_UNAVAILABLE); nothing is signed', async () => {
     const chain = makeChain();
     chain.escrows.set('buyer.mock', '5000000000000000000000000');

@@ -3,6 +3,7 @@ import type { Action } from 'near-api-js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ESCROW_STORAGE_FEE_YOCTO, PAYMENT_STORAGE_FEE_YOCTO, REGISTRATION_DEPOSIT_YOCTO, nearToYocto } from '@agentgate/shared';
 import { PAY_DELEGATE_GAS, buildEscrowPayDelegate, payDelegateArgs } from '@agentgate/chain/delegate';
+import { devnetRelayTxHash } from '@agentgate/chain/devnet-key';
 import { deriveDevnetKey, startServer } from '../src/index';
 import type { RunningServer } from '../src/index';
 
@@ -161,9 +162,14 @@ describe('POST /registry/relay {relayer, signedDelegate}', () => {
     const buyer = await escrowBuyer();
     const nonce = freshNonce();
     const balanceBefore = (await get(`/accounts/${buyer.accountId}/balance`)).body.balanceYocto as string;
-    const res = await relay(await payDelegate(buyer, { nonce }));
+    const signedDelegate = await payDelegate(buyer, { nonce });
+    const res = await relay(signedDelegate);
     expect(res.status).toBe(200);
-    expect(typeof res.body.txHash).toBe('string');
+    // The relay's tx is named by its delegate: what a mock client whose answer timed out names too.
+    expect(res.body.txHash).toBe(devnetRelayTxHash(signedDelegate));
+    expect((await get('/registry/activity?limit=5')).body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: 'payment', nonce, txHash: devnetRelayTxHash(signedDelegate) })]),
+    );
     expect((await get(`/registry/payments/${nonce}`)).body).toMatchObject({ payer: buyer.accountId, serviceId, amountYocto: PRICE });
     expect((await get(`/registry/escrow/${buyer.accountId}`)).body.escrowYocto).toBe(
       (BigInt(nearToYocto('1')) - BigInt(ESCROW_STORAGE_FEE_YOCTO) - BigInt(TOTAL)).toString(),
@@ -172,7 +178,7 @@ describe('POST /registry/relay {relayer, signedDelegate}', () => {
     expect((await get(accessKeyPath(buyer.accountId, deriveDevnetKey(buyer.accountId).publicKey))).body.nonce).toBe('1');
   });
 
-  it('refuses a delegate NEAR would refuse, as TX_FAILED naming the DelegateAction error; the key nonce is not spent', async () => {
+  it('refuses a delegate NEAR would refuse, as DELEGATE_REJECTED naming the DelegateAction error; the key nonce is not spent', async () => {
     const buyer = await escrowBuyer();
     const publicKey = deriveDevnetKey(buyer.accountId).publicKey;
     const forged = Buffer.from(await payDelegate(buyer), 'base64');
@@ -187,7 +193,7 @@ describe('POST /registry/relay {relayer, signedDelegate}', () => {
     ];
     for (const [signedDelegate, error] of cases) {
       const res = await relay(signedDelegate);
-      expect(res, error).toMatchObject({ status: 400, body: { error: 'TX_FAILED' } });
+      expect(res, error).toMatchObject({ status: 400, body: { error: 'DELEGATE_REJECTED' } });
       expect(res.body.message).toMatch(new RegExp(error));
     }
     expect((await get(accessKeyPath(buyer.accountId, publicKey))).body.nonce).toBe('0');

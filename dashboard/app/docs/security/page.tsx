@@ -308,8 +308,9 @@ export default function Page() {
         service.
       </Callout>
       <P>
-        Every refusal comes before the relay, so a delegate the gateway refuses costs it nothing (the
-        full list is on <DocLink href="/docs/protocol#gasless-checks">How it works</DocLink>):
+        Every refusal below comes before the relay, so a delegate the gateway refuses there costs it
+        nothing (the full list is on{' '}
+        <DocLink href="/docs/protocol#gasless-checks">How it works</DocLink>):
       </P>
       <DocTable
         head={['A delegate that…', 'Refused as']}
@@ -318,17 +319,21 @@ export default function Page() {
           ['Expires within 20 blocks, or carries a nonce NEAR would call too large', 'delegate_expired, delegate_nonce_too_large'],
           ['Is not signed by the key it names (a forged or altered delegate)', <M key="2">bad_signature</M>],
           ['Names a key the payer does not hold, or a function-call key not allowed to call pay_from_escrow on the registry', 'unknown_key, key_not_allowed'],
-          ['Carries a nonce the key already used', <M key="4">stale_nonce</M>],
+          ['Carries a nonce the key already used (read at optimistic finality, so a block not yet final counts), or one this gateway relayed for that key and that may still run, or is relaying now', <M key="4">stale_nonce</M>],
           ['Comes from an escrow that cannot pay price + 0.002 NEAR', <M key="5">escrow_insufficient</M>],
           ['Is for an invoice already paid, or whose relay is in flight or may still land', 'invoice_used, settlement_pending (never relayed twice)'],
         ]}
       />
       <P>
         What can still cost gas is a delegate that passes every check and then fails on chain — the
-        buyer drained its escrow or used the key’s nonce in between. NEAR spends the delegate’s
-        nonce, the gateway answers <M>relay_failed</M> with the chain’s code, and the relayer has
-        paid one relay’s gas; the <DocLink href="#limits">rate limit</DocLink> on <M>/svc</M> bounds
-        how often. Keep the gateway account funded for that gas, as for its attestations.
+        buyer drained its escrow, or used or deleted the key, in between. The gateway answers{' '}
+        <M>relay_failed</M> with a code that says whose failure it was: the registry’s{' '}
+        <M>ERR_*</M> when NEAR ran the delegate (its nonce is then spent), <M>DELEGATE_REJECTED</M>{' '}
+        when NEAR refused the delegate itself, <M>RELAYER_ERROR</M> when the relay failed on the
+        gateway’s side (the detail stays in the gateway’s log, never in the answer). The relayer has
+        paid at most one relay’s gas; the <DocLink href="#limits">rate limit</DocLink> on{' '}
+        <M>/svc</M> bounds how often. Keep the gateway account funded for that gas, as for its
+        attestations.
       </P>
       <H3 id="front-running">Front-running</H3>
       <P>
@@ -338,7 +343,9 @@ export default function Page() {
         gets <M>invoice_used</M> (<M>PAID_NOT_SERVED</M>). That is inherent to paying first and
         proving after. On the gasless rail nothing a third party can redeem is public before the
         request reaches the gateway: the signed delegate travels only in the buyer’s own request, and
-        the gateway burns the nonce for that request before it proxies. After a relay timeout the
+        the gateway burns the nonce for that request before it proxies. Between the relay landing
+        and the burn the payment is already public on chain; the protection there is{' '}
+        <M>invoice_used</M> for anything this gateway process did not relay. After a relay timeout the
         payment is public on chain, so the retry has the same front-running residual as the tx
         rails; so does any <M>settlement_pending</M> answer that names the relay transaction.
       </P>

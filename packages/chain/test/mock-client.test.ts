@@ -1,6 +1,6 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { startServer } from '@agentgate/devnet';
 import type { RunningServer } from '@agentgate/devnet';
 import {
@@ -19,9 +19,11 @@ import type { ChainClient, MockSigner, RegisterServiceInput } from '@agentgate/s
 import {
   LiveNearClient,
   MockChainHttpClient,
+  TxTimeoutError,
   createChainClient,
   decodeSignedDelegate,
   deriveDevnetKey,
+  devnetRelayTxHash,
   payDelegateArgs,
   verifyDelegateSignature,
 } from '../src/index';
@@ -783,6 +785,7 @@ describe('MockChainHttpClient — gasless rail (blockHeight, accessKey, signPayD
     const { txHash } = await chain.relayPay(signed, RELAYER);
 
     expect(isNearTxHash(txHash)).toBe(true);
+    expect(txHash).toBe(devnetRelayTxHash(signed)); // the devnet names each relay by its delegate
     expect(await chain.getPayment(nonce)).toMatchObject({ serviceId, payer: buyer.accountId, amountYocto: PRICE });
     expect(BigInt(await chain.escrowOf(buyer.accountId))).toBe(escrowBefore - BigInt(DEPOSIT));
     expect(await chain.getBalance(buyer.accountId)).toBe(accountBefore);
@@ -793,15 +796,42 @@ describe('MockChainHttpClient — gasless rail (blockHeight, accessKey, signPayD
     expect(decodeSignedDelegate(await chain.signPayDelegate({ serviceId, nonce: freshNonce() }, buyer))?.nonce).toBe(2n);
   });
 
-  it('relaying the same delegate again is TX_FAILED (DelegateActionInvalidNonce): no second payment', async () => {
+  it('relaying the same delegate again is DELEGATE_REJECTED (DelegateActionInvalidNonce): no second payment', async () => {
     const buyer = await escrowBuyer('2');
     const nonce = freshNonce();
     const signed = await chain.signPayDelegate({ serviceId, nonce }, buyer);
     await chain.relayPay(signed, RELAYER);
     const escrowAfterFirst = await chain.escrowOf(buyer.accountId);
-    await expectAgentGateError(chain.relayPay(signed, RELAYER), 'TX_FAILED', 400);
+    await expectAgentGateError(chain.relayPay(signed, RELAYER), 'DELEGATE_REJECTED', 400);
     await expect(chain.relayPay(signed, RELAYER)).rejects.toThrow(/DelegateActionInvalidNonce/);
     expect(await chain.escrowOf(buyer.accountId)).toBe(escrowAfterFirst);
+  });
+
+  it("a relay whose answer times out is TX_TIMEOUT naming the devnet's relay tx (it may have run), never a definitive failure", async () => {
+    const realFetch = globalThis.fetch;
+    for (const ran of [true, false]) {
+      const buyer = await escrowBuyer('1');
+      const nonce = freshNonce();
+      const signed = await chain.signPayDelegate({ serviceId, nonce }, buyer);
+      vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        if (!String(input).endsWith('/registry/relay')) return realFetch(input, init);
+        if (ran) await realFetch(input, init); // the devnet ran the relay; its answer never came back
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      });
+      let err: unknown;
+      try {
+        await chain.relayPay(signed, RELAYER);
+      } catch (error) {
+        err = error;
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      expect(err, `ran: ${ran}`).toBeInstanceOf(TxTimeoutError);
+      expect(err).toMatchObject({ code: 'TX_TIMEOUT', httpStatus: 504, txHash: devnetRelayTxHash(signed) });
+      expect((err as Error).message).toContain(`tx ${devnetRelayTxHash(signed)} may still land`);
+      if (ran) expect(await chain.getPayment(nonce)).toMatchObject({ payer: buyer.accountId });
+      else expect(await chain.getPayment(nonce)).toBeNull();
+    }
   });
 
   it('relayPay surfaces the inner failure with its contract code; the delegate nonce is spent all the same', async () => {

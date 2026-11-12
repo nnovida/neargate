@@ -181,14 +181,14 @@ The ones a buyer or seller meets most. The CLI prints `error: <CODE>: <message>`
 |---|---|---|
 | `BUDGET_EXCEEDED` | The invoice total (price + 0.002 NEAR) is above `--max`, `maxNear` or the agent's budget. | Nothing was paid. Raise the cap or pick another service. |
 | `PAID_NOT_SERVED` | The `pay` went through, but the gateway did not serve the call. The error names the tx and the nonce. | Do not buy again: that pays twice. Re-present the same proof (an `X-PAYMENT` for that tx and nonce) once the gateway answers. |
-| `GASLESS_NOT_SERVED` | `--gasless`: the gateway did not serve the call. The escrow paid only if the gateway's relay landed. | Do not sign a new delegate for that invoice while the relay may still land: check the relay tx it names, or `escrow balance`, first. |
+| `GASLESS_NOT_SERVED` | `--gasless`: the gateway did not serve the call, after `buy` re-presented the signed delegate for as long as the relay was settling (up to 150 s). The escrow paid only if the gateway's relay landed; the message says whether it did not, or may have. | If it may have paid, or after `invoice_used`, check the relay tx it links and `escrow balance` before buying again: buying again signs a new payment. |
 | `PRICE_MISMATCH` | Escrow or gasless: the invoice total is not the on-chain price + 0.002 NEAR. | Nothing was sent. Do not pay this gateway's invoice from the escrow. |
 | `ERR_ESCROW_INSUFFICIENT` | The escrow holds less than price + 0.002 NEAR. | `escrow deposit` more. |
 | `RELAYER_UNAVAILABLE` | `--gasless`, but the gateway offers no relayer. | Use `--from-escrow`. |
 | `TX_TIMEOUT` | A transaction was sent, but its outcome is unknown. | Check the named tx on nearblocks before retrying. |
 | `CONFIG_INVALID` | A bad flag or variable, e.g. live mode with no registry id. | Set `REGISTRY_CONTRACT_ID` (or pass `--registry`). |
 | `GATEWAY_REQUIRED` | A live `wrap` with no `--gateway` and no hosted default. | Pass `--gateway`; the registry stores it for good. |
-| `settlement_pending` (402) | The payment is not visible yet, or a gasless relay is in flight. | Retry the same proof after `Retry-After`. |
+| `settlement_pending` (402) | The payment is not visible yet, or a gasless relay is in flight, timed out or not read yet. | Retry the same proof after `Retry-After`; `buy --gasless` does it on its own. |
 | `tx_mismatch` (402) | The tx is not a successful `pay` of this nonce and service, signed by the named payer. | Present the right transaction. |
 | `ERR_*` (contract) | The registry refused a call, e.g. `ERR_NONCE_USED`, `ERR_SELF_PAYMENT`, `ERR_DEPOSIT_TOO_LOW`. | The full list: [contracts/README.md](contracts/README.md#errors). |
 
@@ -240,8 +240,8 @@ NearGate is the NEAR port of AgentGate, the team's x402 gateway for Casper, buil
 | A score's payments are trustless; its success flag is reported | The registry guarantees that every counted call is a real payment it received, counted once and never paid by the owner or the payment target. The `success` flag is whatever the service's attestor (the gateway) or its owner reports: the registry lets the owner attest too, so an owner can record a verdict before the gateway does. |
 | The wash-trade guard covers only the owner and the payment target | A seller paying from a third account makes a real payment that counts. Each one costs at least the 0.002 NEAR fee, and the price returns to the seller. |
 | A leaked agent key | can spend the whole escrow, on any active service, plus gas from the account balance up to the key's allowance. Keep both small; revoke the key by deleting it with the full-access key. |
-| Tx proofs can be front-run | Once a buyer's `pay` transaction is public, anyone watching can present it first and receive the response; the buyer then gets `invoice_used` (`PAID_NOT_SERVED`). That is inherent to paying first and proving after. On the gasless rail nothing redeemable is public before the buyer's request reaches the gateway. |
-| One gateway process | Receipts, rate limits and in-flight relays live in the gateway's memory, so run one instance. Without `INVOICE_STORE_PATH` a restart forgets open invoices. |
+| Tx proofs can be front-run | Once a buyer's `pay` transaction is public, anyone watching can present it first and receive the response; the buyer then gets `invoice_used` (`PAID_NOT_SERVED`). That is inherent to paying first and proving after. On the gasless rail nothing redeemable is public before the buyer's request reaches the gateway; between the relay landing and the burn the payment is public, and the gateway answers `invoice_used` to anything it did not relay itself. After a relay timeout the payment is public before the buyer's retry, so that retry can be front-run. |
+| One gateway process | Receipts, rate limits, the relays not yet served and the delegate nonces relayed live in the gateway's memory, so run one instance. Without `INVOICE_STORE_PATH` a restart forgets open invoices. A restart always forgets the relays: the retry of a relay that landed before it gets `invoice_used`, and a delegate whose relay had not landed yet can be relayed again (NEAR runs it once, so it cannot pay twice, but that answer may not say it paid). Check `escrow balance` before buying again. |
 | Native NEAR only | The registry stores up to four price options per service, but only native NEAR is settled; NEP-141 tokens are next. |
 
 Security reports: [SECURITY.md](SECURITY.md). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).

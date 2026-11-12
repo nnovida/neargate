@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { GaslessNotServedError, type GaslessWait } from '@agentgate/client';
 import type {
   AnySigner,
   AttestationRecord,
@@ -8,7 +9,7 @@ import type {
   Yocto,
 } from '@agentgate/shared';
 import { encodeXPaymentResponse, nativeNearOption } from '@agentgate/shared';
-import { buyService, formatBuyBody, formatBuyReceipt } from '../src/buy';
+import { buyService, formatBuyBody, formatBuyReceipt, formatGaslessWait } from '../src/buy';
 
 type PayInput = { serviceId: number; nonce: string; depositYocto: Yocto };
 
@@ -516,6 +517,72 @@ describe('buyService --gasless', () => {
     await expect(buyService({ ...baseOpts(chain, impl), gasless: true })).rejects.toMatchObject({ code: 'RELAYER_UNAVAILABLE' });
     expect(chain.delegates).toEqual([]);
     expect(calls).toHaveLength(1);
+  });
+
+  /** A gateway that offers the relay and answers each proof with the next of `answers` (the last repeats). */
+  function settlingGateway(answers: Array<() => Response | Promise<Response>>): { impl: typeof fetch; proofs: number } {
+    const state = { impl: undefined as unknown as typeof fetch, proofs: 0 };
+    state.impl = (async (_url: unknown, init?: RequestInit) => {
+      if (!new Headers(init?.headers).has('X-PAYMENT')) return invoice402({}, { relayer: RELAYER, relayMethod: 'pay_from_escrow' });
+      state.proofs += 1;
+      return answers[Math.min(state.proofs, answers.length) - 1]!();
+    }) as typeof fetch;
+    return state;
+  }
+
+  function pendingAnswer(): Response {
+    return Response.json(
+      { x402Version: 1, error: 'settlement_pending', accepts: [], transaction: RELAY_TX },
+      { status: 402, headers: { 'retry-after': '2' } },
+    );
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('while the relay settles, the same delegate is presented again until served: one wait report per settlement_pending', async () => {
+    vi.useFakeTimers();
+    const chain = makeFakeChain(makeService(1));
+    const gateway = settlingGateway([pendingAnswer, pendingAnswer, () => relayingGateway().impl('x', { headers: { 'X-PAYMENT': 'p' } })]);
+    const waits: GaslessWait[] = [];
+    const run = buyService({ ...baseOpts(chain, gateway.impl), gasless: true, onGaslessWait: (w) => waits.push(w) });
+    await vi.runAllTimersAsync();
+    const bought = await run;
+    expect(bought.result).toMatchObject({ paid: true, status: 200, gasless: true, txHash: RELAY_TX });
+    expect(gateway.proofs).toBe(3);
+    expect(chain.delegates).toHaveLength(1); // signed once
+    expect(waits.map((w) => [w.attempt, w.transaction])).toEqual([[1, RELAY_TX], [2, RELAY_TX]]);
+  });
+
+  it('not served in time: GASLESS_NOT_SERVED that links the relay tx and names the escrow balance read the surface has', async () => {
+    const chain = makeFakeChain(makeService(1));
+    const gateway = settlingGateway([pendingAnswer]);
+    const err = await buyService({
+      ...baseOpts(chain, gateway.impl),
+      gasless: true,
+      gaslessWaitMs: 0,
+      explorerUrl: 'https://testnet.nearblocks.io/',
+      escrowBalanceHint: '`neargate escrow balance`',
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GaslessNotServedError);
+    expect(err).toMatchObject({ code: 'GASLESS_NOT_SERVED', reason: 'settlement_pending', escrowPaid: 'unknown', txHash: RELAY_TX });
+    const message = (err as Error).message;
+    expect(message).toContain(`https://testnet.nearblocks.io/txns/${RELAY_TX}`);
+    expect(message).toContain('`neargate escrow balance`');
+    expect(message).toContain('buying again signs a NEW payment');
+    expect(message).not.toContain(SIGNED_DELEGATE);
+  });
+
+  it('formatGaslessWait: the one stderr line while the relay settles, with the explorer link in live mode', () => {
+    const wait: GaslessWait = { attempt: 1, transaction: RELAY_TX, retryInMs: 2_000, capMs: 150_000 };
+    expect(formatGaslessWait(wait, { explorerUrl: 'https://testnet.nearblocks.io' })).toBe(
+      `waiting:  the gateway's relay (tx ${RELAY_TX}, https://testnet.nearblocks.io/txns/${RELAY_TX}) is settling; ` +
+        'presenting the same signed delegate again for up to 150 s',
+    );
+    expect(formatGaslessWait({ attempt: 1, retryInMs: 2_000, capMs: 150_000 })).toBe(
+      "waiting:  the gateway's relay is settling; presenting the same signed delegate again for up to 150 s",
+    );
   });
 });
 

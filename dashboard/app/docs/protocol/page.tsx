@@ -273,7 +273,7 @@ export default function Page() {
           [<M key="10">expired</M>, 'The registry payment is older than the invoice time to live.'],
           [<M key="11">already_attested</M>, 'The payment was already attested, which only follows a served call.'],
           [<M key="12">tx_mismatch</M>, 'Live: the transaction is not a successful pay or pay_from_escrow of this nonce and service on this registry, signed by the named payer.'],
-          [<M key="13">settlement_pending</M>, 'Live: the payment is not yet visible (or, on the gasless rail, the relay is in flight or timed out). The same invoice stays valid: retry the identical proof after the Retry-After seconds (2).'],
+          [<M key="13">settlement_pending</M>, 'Live: the payment is not yet visible. On the gasless rail: the relay is in flight, timed out, or landed and its record is not read yet. The same invoice stays valid: retry the identical proof after the Retry-After seconds (2).'],
         ]}
       />
       <P>
@@ -407,13 +407,15 @@ export default function Page() {
         )}
       />
       <P>
-        <M>signedDelegate</M> is the base64 of a borsh NEP-366 <M>SignedDelegate</M>, at most 4096
-        bytes, signed with an ed25519 key of the payer (its full-access key or an{' '}
+        <M>signedDelegate</M> is the base64 of a borsh NEP-366 <M>SignedDelegate</M> of at most
+        4096 bytes once decoded (a larger one is refused <M>invalid_payment_header</M>, like any
+        malformed header), signed with an ed25519 key of the payer (its full-access key or an{' '}
         <DocLink href="/docs/cli#agent-key">agent key</DocLink> for <M>pay_from_escrow</M>). Its
         delegate action is exactly what the clients build: sender = <M>payer</M>, receiver = the
         registry, one FunctionCall <M>pay_from_escrow</M> whose arguments are the bytes{' '}
         <M>{'{"service_id":<id>,"nonce":"<nonce>"}'}</M> of this invoice, 30 TGas, no deposit; its
-        nonce is the signing key’s nonce + 1 and it expires 100 blocks past the height the buyer
+        nonce is the signing key’s nonce + 1, read at optimistic finality so that a nonce spent in a
+        block not yet final is not signed again, and it expires 100 blocks past the height the buyer
         read. NEAR has a relayer pay the deposit a relayed call attaches, so the gateway relays
         nothing else.
       </P>
@@ -421,9 +423,10 @@ export default function Page() {
       <P>
         A gateway without <M>RELAYER_ENABLED</M> answers a delegate proof <M>relayer_disabled</M>{' '}
         before it reads the invoice. With it, after the invoice checks (<M>unknown_nonce</M>,{' '}
-        <M>invoice_used</M>, <M>invoice_expired</M>) the gateway runs these, in this order. Every
-        refusal comes before the relay, so a refused delegate costs the relayer nothing and burns
-        nothing: the invoice stays open, and the 402 also carries a fresh one.
+        <M>invoice_used</M>, <M>invoice_expired</M>) the gateway runs these, in this order.
+        Refusals 1–8 cost the relayer nothing: they come before the relay. <M>relay_failed</M>{' '}
+        costs at most one relay’s gas. No refusal burns the nonce: the invoice stays open, and the
+        402 also carries a fresh one.
       </P>
       <DocTable
         head={['#', 'Check', 'Reason on failure']}
@@ -437,12 +440,12 @@ export default function Page() {
           ['3', 'No relay of this invoice is in flight.', 'settlement_pending (the same invoice)'],
           [
             '4',
-            'The registry holds no payment for the nonce yet. One it does hold is served only as the retry of this gateway’s own timed-out relay (same payer, service and price); any other is never relayed again.',
+            'The registry holds no payment for the nonce yet. One it does hold is served only as the retry of a relay this gateway process sent (one that timed out, or whose record was not read yet), presented by that relay’s payer with its signing key, for this service and price; any other payment is never relayed again.',
             'invoice_used',
           ],
           [
             '5',
-            'No relay of this invoice that timed out can still land: there was none, or its delegate expired without NEAR running it (the key’s nonce never reached the delegate’s).',
+            'No relay of this invoice that this gateway sent can still land: there was none, or its delegate expired without NEAR running it (the key’s nonce, read at final, never reached the delegate’s).',
             'settlement_pending, with that relay tx in transaction',
           ],
           [
@@ -452,26 +455,42 @@ export default function Page() {
           ],
           [
             '7',
-            'The signing key is an access key of the payer: full access, or a function-call key for the registry allowing pay_from_escrow; the delegate nonce is above the key’s.',
+            'The signing key is an access key of the payer, read at final: full access, or a function-call key for the registry allowing pay_from_escrow. The delegate nonce is above the key’s nonce read at optimistic finality (a nonce spent in a block not yet final is spent), above every nonce this gateway relayed for that key whose delegate may still run, and not the nonce of a relay of that key in flight.',
             'unknown_key, key_not_allowed, stale_nonce',
           ],
           ['8', 'The escrow holds price + 0.002 NEAR.', 'escrow_insufficient'],
           [
             '9',
-            'The relay: the registry’s own receipt must have succeeded — the transaction’s status is never trusted alone — and its payment record must name the payer, this service and the price.',
-            'relay_failed with the chain code in code (e.g. ERR_ESCROW_INSUFFICIENT); settlement_pending with the relay tx, in transaction, when the outcome is unknown',
+            'The relay: the registry’s own receipt must have succeeded — the transaction’s status is never trusted alone — and its payment record must name the payer, this service and the price. The gateway remembers the relay as soon as it is sent, before it reads anything else.',
+            'relay_failed, with a code (below); settlement_pending with the relay tx, in transaction, when the outcome is unknown (a timeout) or the record is not read yet; a record of another payer, service or price: tx_mismatch or its reason',
           ],
         ]}
       />
       <P>
+        The <M>code</M> of a <M>relay_failed</M> says whose failure it was: the registry’s{' '}
+        <M>ERR_*</M> (e.g. <M>ERR_ESCROW_INSUFFICIENT</M>) or <M>CONTRACT_ERROR</M> when NEAR ran
+        the delegate and its call failed; <M>DELEGATE_REJECTED</M> when NEAR refused the delegate
+        itself (its key or nonce changed after the checks); <M>RELAYER_ERROR</M> when the relay
+        failed on the gateway’s side (its key, account or balance, or the RPC), whose detail stays
+        in the gateway’s log.
+      </P>
+      <P>
         A served call is burned, proxied and attested as on the tx rail; its{' '}
         <M>X-PAYMENT-RESPONSE</M> names the relay transaction. While the answer is{' '}
         <M>settlement_pending</M>, present the same delegate again: once the relay has landed the
-        retry is served without a second relay. Never sign a new delegate for an invoice whose relay
-        may still land. A relay whose delegate NEAR ran but whose call did not pay keeps the invoice
-        pending until it expires. In-flight and timed-out relays are kept in the gateway’s memory,
-        so a gateway restart forgets them: the retry of a relay that landed before the restart is
-        then <M>invoice_used</M>. What this means for the relayer and for front-running is on the{' '}
+        retry is served without a second relay. The clients do this on their own: a gasless buy
+        presents the same delegate again after each <M>settlement_pending</M>, waiting the
+        Retry-After clamped to 1–10 s, until the gateway answers definitively; it waits at most
+        150 s in all (the client’s <M>gaslessWaitMs</M>), longer than the delegate’s 100 blocks.
+        Never sign a new delegate for an invoice whose relay may still land. A relay whose delegate
+        NEAR ran but whose call did not pay keeps the invoice pending until it expires. The relays a
+        gateway sent stay in its memory until their invoice is served, so a gateway restart forgets
+        them: the retry of a relay that landed before the restart is then <M>invoice_used</M>, and a
+        delegate whose relay had not landed yet can be relayed a second time. NEAR runs a delegate
+        nonce once, so that cannot pay twice, but the second relay costs gas and its answer (
+        <M>relay_failed</M> or <M>stale_nonce</M>) does not say the first one paid: after either,
+        read the escrow balance before buying again. What this means for the relayer and for
+        front-running is on the{' '}
         <DocLink href="/docs/security#relayer">security page</DocLink>.
       </P>
 

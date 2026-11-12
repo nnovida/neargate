@@ -1608,6 +1608,15 @@ describe('LiveNearClient gasless rail: blockHeight, accessKey, signPayDelegate, 
     expect(rpc.calls).toHaveLength(calls);
   });
 
+  it("accessKey reads at `final` unless asked for `optimistic`: the latest block, which a new nonce must be above", async () => {
+    const key = nearSigner(BUYER).publicKey;
+    rpc.query('view_access_key', fixture('view-access-key-full.json'));
+    await client.accessKey(BUYER, key, 'optimistic');
+    expect(rpc.callsTo('query').at(-1)?.params).toMatchObject({ request_type: 'view_access_key', finality: 'optimistic' });
+    await client.accessKey(BUYER, key, 'final');
+    expect(rpc.callsTo('query').at(-1)?.params).toMatchObject({ request_type: 'view_access_key', finality: 'final' });
+  });
+
   it('accessKey fails closed: a permission or nonce it cannot read is RPC_BAD_RESPONSE, never a quiet answer', async () => {
     const key = nearSigner(BUYER).publicKey;
     const odd: Json[] = [];
@@ -1646,6 +1655,24 @@ describe('LiveNearClient gasless rail: blockHeight, accessKey, signPayDelegate, 
       rpc.callsTo('query').some((c) => c.params.request_type === 'view_access_key' && c.params.public_key === publicKey),
     ).toBe(true);
     expect(rpc.callsTo('send_tx')).toEqual([]);
+  });
+
+  it("signPayDelegate takes the key's nonce at `optimistic`: two back-to-back buys sign distinct nonces while `final` lags the first relay", async () => {
+    const agent = nearSigner(BUYER);
+    let optimisticNonce = AGENT_KEY_NONCE;
+    rpc.query('view_access_key', (call: RpcCall) => {
+      const envelope = fixture('view-access-key-agent.json');
+      // `final` has not seen the first relay yet; `optimistic` has.
+      envelope.result.nonce = Number(call.params.finality === 'optimistic' ? optimisticNonce : AGENT_KEY_NONCE);
+      return envelope;
+    });
+    const first = decodeSignedDelegate(await client.signPayDelegate({ serviceId: 1, nonce: NONCE }, agent.signer));
+    expect(first?.nonce).toBe(AGENT_KEY_NONCE + 1n);
+    optimisticNonce = first!.nonce; // the first relay ran in a block that is not final yet
+    const second = decodeSignedDelegate(await client.signPayDelegate({ serviceId: 1, nonce: '4243' }, agent.signer));
+    expect(second?.nonce).toBe(AGENT_KEY_NONCE + 2n);
+    const reads = rpc.callsTo('query').filter((c) => c.params.request_type === 'view_access_key' && c.params.public_key === agent.publicKey);
+    expect(reads.map((c) => c.params.finality)).toEqual(['optimistic', 'optimistic']);
   });
 
   it('signPayDelegate: a key the account does not hold is SIGNER_KEY_NOT_FOUND, before anything is signed', async () => {
@@ -1693,17 +1720,51 @@ describe('LiveNearClient gasless rail: blockHeight, accessKey, signPayDelegate, 
     );
   });
 
-  it('relayPay: NEAR refusing the delegate itself (a used nonce) is TX_FAILED naming the relay tx', async () => {
+  /**
+   * The outcome of a relay whose delegate NEAR refused, as the RPC returns it: the delegate receipt
+   * (on the sender's account) failed with `kind` at action 0, so no registry receipt exists, and
+   * the tx's own status follows that receipt: a top-level Failure, on which near-api-js throws.
+   */
+  function refusedRelay(kind: Json): Json {
+    const envelope = fixture('tx-relay-ok.json');
+    const failure = { Failure: { ActionError: { index: 0, kind } } };
+    envelope.result.status = failure;
+    const [delegateReceipt, , , , refund] = envelope.result.receipts_outcome;
+    delegateReceipt.outcome.status = failure;
+    delegateReceipt.outcome.receipt_ids = [refund.id]; // only the relayer's gas refund
+    envelope.result.receipts_outcome = [delegateReceipt, refund];
+    return envelope;
+  }
+
+  it('relayPay: NEAR refusing the delegate itself (a used nonce) is DELEGATE_REJECTED naming the relay tx', async () => {
     const { b64 } = await agentDelegate();
-    const refused = fixture('tx-relay-ok.json');
-    refused.result.receipts_outcome[0].outcome.status = {
-      Failure: { ActionError: { index: 0, kind: { DelegateActionInvalidNonce: { ak_nonce: 13, delegate_nonce: 13 } } } },
-    };
-    rpc.sendTx(refused);
+    rpc.sendTx(refusedRelay({ DelegateActionInvalidNonce: { ak_nonce: 13, delegate_nonce: 13 } }));
     const err = await rejection(client.relayPay(b64, nearSigner(GATEWAY).signer));
-    expect(err).toMatchObject({ code: 'TX_FAILED', httpStatus: 502 });
-    expect(err.message).toMatch(/DelegateActionInvalidNonce/);
-    expect(err.message).toContain(`(tx ${rpc.sent[0]!.hash})`);
+    expect(err).toMatchObject({ code: 'DELEGATE_REJECTED', httpStatus: 400 });
+    expect(err.message).toBe(`NEAR rejected the relayed delegate: Invalid delegate nonce (ak: 13, delegate: 13) (tx ${rpc.sent[0]!.hash})`);
+  });
+
+  it("relayPay: a delegate signed with a key its sender does not hold is DELEGATE_REJECTED, never the relayer's SIGNER_KEY_NOT_FOUND", async () => {
+    const { b64, publicKey } = await agentDelegate();
+    const gateway = nearSigner(GATEWAY);
+    rpc.sendTx(refusedRelay({ DelegateActionAccessKeyError: { AccessKeyNotFound: { account_id: BUYER, public_key: publicKey } } }));
+    const err = await rejection(client.relayPay(b64, gateway.signer));
+    expect(err).toMatchObject({ code: 'DELEGATE_REJECTED', httpStatus: 400 });
+    expect(err.message).toContain(`Access key ${publicKey} does not exist on account ${BUYER}`);
+    expect(err.message).not.toContain(gateway.publicKey);
+  });
+
+  it("relayPay: NEAR refusing the relay tx itself (the relayer's own key) keeps the relayer's code: the gateway does not show it to the buyer", async () => {
+    const { b64 } = await agentDelegate();
+    const gateway = nearSigner(GATEWAY);
+    const invalid = fixture('error-not-enough-balance.json');
+    invalid.error.data.TxExecutionError.InvalidTxError = {
+      InvalidAccessKeyError: { AccessKeyNotFound: { account_id: GATEWAY, public_key: gateway.publicKey } },
+    };
+    rpc.sendTx(invalid);
+    const err = await rejection(client.relayPay(b64, gateway.signer));
+    expect(err).toMatchObject({ code: 'SIGNER_KEY_NOT_FOUND', httpStatus: 400 });
+    expect(err.message).toBe(`${gateway.publicKey} is not an access key of ${GATEWAY} on near-testnet`);
   });
 
   it("relayPay: an outcome without the registry's receipt, or a timeout, is TX_TIMEOUT naming the relay tx (it may still land)", async () => {

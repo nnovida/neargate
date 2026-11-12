@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import type { GaslessWait } from '@agentgate/client';
 import { LiveNearClient, createChainClient } from '@agentgate/chain';
 import {
   AgentGateError,
@@ -11,7 +12,7 @@ import {
   type AgentGateConfig,
 } from '@agentgate/shared';
 import { addAgentKey, assertAgentKeysAvailable, formatAgentKeyAdded } from './agent-key';
-import { buyService, formatBuyBody, formatBuyReceipt } from './buy';
+import { buyService, formatBuyBody, formatBuyReceipt, formatGaslessWait } from './buy';
 import { createDemoAccounts } from './demo-accounts';
 import {
   balanceAccountArg,
@@ -234,6 +235,7 @@ withConfigFlags(
   const config = cliConfig(opts);
   const chain = createChainClient(config);
   const signer = await cliSigner(config, 'buyer', signerFlags(opts));
+  const explorer = explorerOf(config);
   const bought = await buyService({
     chain,
     signer,
@@ -243,11 +245,21 @@ withConfigFlags(
     ...(opts.body !== undefined ? { body: opts.body } : {}),
     ...(opts.gateway !== undefined ? { gateway: opts.gateway } : {}),
     ...(opts.fromEscrow === true ? { fromEscrow: true } : {}),
-    ...(opts.gasless === true ? { gasless: true } : {}),
+    ...(opts.gasless === true
+      ? {
+          gasless: true,
+          ...explorer,
+          escrowBalanceHint: '`neargate escrow balance`',
+          // One progress line on stderr while the relay settles; stdout stays the body's.
+          onGaslessWait: (wait: GaslessWait) => {
+            if (wait.attempt === 1) console.error(formatGaslessWait(wait, explorer));
+          },
+        }
+      : {}),
   });
 
   // The receipt → stderr so the response body on stdout stays pipeable.
-  for (const line of formatBuyReceipt(bought, explorerOf(config))) console.error(line);
+  for (const line of formatBuyReceipt(bought, explorer)) console.error(line);
   console.log(formatBuyBody(bought.result.body));
 });
 
@@ -433,6 +445,7 @@ withConfigFlags(
   await startAgentGateMcpServer({
     chain,
     signerProvider: () => cliSigner(config, 'buyer', flags),
+    ...explorerOf(config),
   });
 });
 

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { deserialize, serialize } from 'borsh';
 import { PublicKey, SCHEMA, actions, buildDelegateAction, encodeDelegateAction, encodeSignedDelegate } from 'near-api-js';
 import type { Signer } from 'near-api-js';
-import { AgentGateError, SIGNED_DELEGATE_MAX, base58Encode, isBase64, isRecord } from '@agentgate/shared';
+import { AgentGateError, SIGNED_DELEGATE_MAX, SIGNED_DELEGATE_MAX_CHARS, base58Encode, isBase64, isRecord } from '@agentgate/shared';
 import { invalid } from './checks';
 import { mapContractPanic } from './near-errors';
 
@@ -20,9 +20,7 @@ export const PAY_DELEGATE_TTL_BLOCKS = 100;
 /** The gateway relays a delegate only while it stays valid this many more blocks: time for the relay to land. */
 export const RELAY_MIN_TTL_BLOCKS = 20;
 /** nearcore's ACCESS_KEY_NONCE_RANGE_MULTIPLIER: a nonce of `height × 10^6` or more is DelegateActionNonceTooLarge. */
-const NONCE_RANGE_MULTIPLIER = 1_000_000n;
-/** The longest base64 of SIGNED_DELEGATE_MAX bytes. */
-const SIGNED_DELEGATE_MAX_CHARS = Math.ceil(SIGNED_DELEGATE_MAX / 3) * 4;
+export const NONCE_RANGE_MULTIPLIER = 1_000_000n;
 const MAX_TEXT = 300;
 
 /** One action of a delegate: a FunctionCall in full, any other action by its name. */
@@ -47,18 +45,20 @@ export interface DecodedDelegate {
   signed: { delegateAction: unknown; signature: unknown };
 }
 
-/** Why `inspectPayDelegate` refuses a delegate (the gateway answers 402 `delegate_<reason>`). */
-export type PayDelegateRefusal =
-  | 'malformed'
-  | 'wrong_sender'
-  | 'wrong_receiver'
-  | 'wrong_action'
-  | 'wrong_args'
-  | 'deposit_not_zero'
-  | 'gas_too_high'
-  | 'gas_too_low'
-  | 'expired'
-  | 'nonce_too_large';
+/** Why `inspectPayDelegate` refuses a delegate (the gateway answers 402 `delegate_<reason>`), in the order it checks. */
+export const PAY_DELEGATE_REFUSALS = [
+  'malformed',
+  'wrong_sender',
+  'wrong_receiver',
+  'wrong_action',
+  'wrong_args',
+  'deposit_not_zero',
+  'gas_too_high',
+  'gas_too_low',
+  'expired',
+  'nonce_too_large',
+] as const;
+export type PayDelegateRefusal = (typeof PAY_DELEGATE_REFUSALS)[number];
 
 export interface PayDelegateExpectation {
   registryId: string;
@@ -269,6 +269,11 @@ function receiptState(outcome: unknown): { state: 'success' } | { state: 'failur
   return { state: 'pending' }; // Unknown, Started, NotStarted, or a shape this client does not know
 }
 
+/** NEAR refusing the delegate itself (its signature, sender, expiry, key or nonce): DELEGATE_REJECTED (400), the buyer's to fix. */
+function delegateRejected(failure: unknown): AgentGateError {
+  return new AgentGateError('DELEGATE_REJECTED', `NEAR rejected the relayed delegate: ${clip(JSON.stringify(failure) ?? 'no detail')}`, 400);
+}
+
 /** A failed receipt as an AgentGateError: a contract panic keeps its ERR_* code, anything else is TX_FAILED. */
 function failureError(failure: unknown, what: string): AgentGateError {
   const kind = isRecord(failure) && isRecord(failure['ActionError']) ? failure['ActionError']['kind'] : undefined;
@@ -286,9 +291,9 @@ function failureError(failure: unknown, what: string): AgentGateError {
  * The verdict on a relay of a pay delegate, from its tx outcome (`send_tx`/`tx` result). The outer
  * status is never trusted: a Delegate action can succeed while the call it carries fails. Follows
  * the tx to its delegate receipt (on the sender's account), then to the receipt the registry
- * executed: `paid` once that one succeeded; `failed` when the delegate receipt or the registry's
- * failed (the registry's panic keeps its ERR_* code); `unknown` while the outcome does not show
- * them both finished.
+ * executed: `paid` once that one succeeded; `failed` when the delegate receipt failed (NEAR refused
+ * the delegate: DELEGATE_REJECTED) or the registry's did (its panic keeps its ERR_* code);
+ * `unknown` while the outcome does not show them both finished.
  */
 export function judgeRelayOutcome(outcome: unknown, registryId: string): RelayVerdict {
   if (!isRecord(outcome) || !isRecord(outcome['transaction_outcome']) || !Array.isArray(outcome['receipts_outcome'])) {
@@ -305,9 +310,7 @@ export function judgeRelayOutcome(outcome: unknown, registryId: string): RelayVe
   const delegateReceipt = typeof firstIds[0] === 'string' ? receipts.get(firstIds[0]) : undefined;
   if (delegateReceipt === undefined) return { status: 'unknown', detail: 'the outcome does not show the delegate receipt' };
   const delegateState = receiptState(delegateReceipt);
-  if (delegateState.state === 'failure') {
-    return { status: 'failed', error: failureError(delegateState.failure, 'the relayed delegate') };
-  }
+  if (delegateState.state === 'failure') return { status: 'failed', error: delegateRejected(delegateState.failure) };
   if (delegateState.state === 'pending') return { status: 'unknown', detail: 'the delegate receipt has not finished' };
   const childIds = Array.isArray(delegateReceipt['receipt_ids']) ? (delegateReceipt['receipt_ids'] as unknown[]) : [];
   const registryReceipt = childIds

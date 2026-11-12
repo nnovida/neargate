@@ -1,4 +1,4 @@
-import { createAgentGateClient, type PayAndFetchResult } from '@agentgate/client';
+import { createAgentGateClient, type GaslessWait, type PayAndFetchResult } from '@agentgate/client';
 import {
   AgentGateError,
   PAYMENT_STORAGE_FEE_YOCTO,
@@ -37,8 +37,18 @@ export interface BuyServiceOpts {
    * The gasless rail (implies `fromEscrow`): sign `pay_from_escrow` as a NEP-366 delegate that the
    * gateway relays, paying the gas; the escrow pays price + storage fee and nothing is sent from
    * the account. A gateway whose 402 offers no relay is RELAYER_UNAVAILABLE before anything is signed.
+   * While the gateway's relay settles, the same delegate is presented again until the gateway
+   * answers definitively (`gaslessWaitMs`, `onGaslessWait`).
    */
   gasless?: boolean;
+  /** Gasless: forwarded to createAgentGateClient (default 150 s). */
+  gaslessWaitMs?: number;
+  /** Gasless: called on each settlement_pending answer (the CLI prints one progress line). */
+  onGaslessWait?: (wait: GaslessWait) => void;
+  /** The explorer's base URL (live mode): a GASLESS_NOT_SERVED message links the relay tx there. */
+  explorerUrl?: string;
+  /** How a GASLESS_NOT_SERVED message names the escrow balance read on this surface (CLI command, MCP tool). */
+  escrowBalanceHint?: string;
   /** Forwarded to createAgentGateClient. */
   settleDelayMs?: number;
   fetchImpl?: typeof fetch;
@@ -129,6 +139,10 @@ export async function buyService(opts: BuyServiceOpts): Promise<BuyServiceResult
     ...(maxYocto !== undefined ? { maxYocto } : {}),
     ...(opts.fromEscrow === true || opts.gasless === true ? { payFrom: 'escrow' as const } : {}),
     ...(opts.gasless === true ? { gasless: true } : {}),
+    ...(opts.gaslessWaitMs !== undefined ? { gaslessWaitMs: opts.gaslessWaitMs } : {}),
+    ...(opts.onGaslessWait !== undefined ? { onGaslessWait: opts.onGaslessWait } : {}),
+    ...(opts.explorerUrl !== undefined ? { explorerUrl: opts.explorerUrl } : {}),
+    ...(opts.escrowBalanceHint !== undefined ? { escrowBalanceHint: opts.escrowBalanceHint } : {}),
     ...(opts.settleDelayMs !== undefined ? { settleDelayMs: opts.settleDelayMs } : {}),
     ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
     ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
@@ -179,6 +193,23 @@ export function formatBuyReceipt(bought: BuyServiceResult, opts: { explorerUrl?:
   }
   lines.push(`status:   ${result.status}`);
   return lines;
+}
+
+/**
+ * The one progress line `neargate buy --gasless` prints to stderr while the gateway's relay
+ * settles (its first settlement_pending answer): the relay tx, with an explorer link when
+ * `explorerUrl` is given, and how long the CLI keeps presenting the same signed delegate.
+ */
+export function formatGaslessWait(wait: GaslessWait, opts: { explorerUrl?: string } = {}): string {
+  const tx = wait.transaction;
+  const named =
+    tx === undefined
+      ? ''
+      : ` (tx ${tx}${opts.explorerUrl === undefined ? '' : `, ${stripTrailingSlashes(opts.explorerUrl)}/txns/${tx}`})`;
+  return (
+    `waiting:  the gateway's relay${named} is settling; presenting the same signed delegate again ` +
+    `for up to ${Math.round(wait.capMs / 1000)} s`
+  );
 }
 
 /** The purchased body as `neargate buy` prints it on stdout: text as-is, JSON pretty-printed. */

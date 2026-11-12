@@ -40,6 +40,8 @@ export interface McpServerDeps {
   signerProvider: () => AnySigner | Promise<AnySigner>;
   /** Injectable fetch (tests / get_invoice). Defaults to globalThis.fetch. */
   fetchImpl?: typeof fetch;
+  /** The explorer's base URL (live mode): a gasless buy that is not served links its relay tx there. */
+  explorerUrl?: string;
 }
 
 const MCP_NAME = 'neargate';
@@ -218,7 +220,13 @@ export function buildAgentGateMcpServer(deps: McpServerDeps): McpServer {
           id,
           ...(maxNear !== undefined ? { maxNear } : {}),
           ...(fromEscrow === true ? { fromEscrow: true } : {}),
-          ...(gasless === true ? { gasless: true } : {}),
+          ...(gasless === true
+            ? {
+                gasless: true,
+                escrowBalanceHint: 'the neargate_escrow_balance tool',
+                ...(deps.explorerUrl !== undefined ? { explorerUrl: deps.explorerUrl } : {}),
+              }
+            : {}),
           ...(method !== undefined ? { method } : {}),
           ...(body !== undefined ? { body } : {}),
           ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),

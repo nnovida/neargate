@@ -1,4 +1,4 @@
-import type { PayDelegateRefusal } from '@agentgate/chain/delegate';
+import { PAY_DELEGATE_REFUSALS, type PayDelegateRefusal } from '@agentgate/chain/delegate';
 
 /**
  * Machine-readable reason codes attached to 402 responses.
@@ -47,6 +47,23 @@ export type PaywallErrorCode =
   | 'escrow_insufficient'
   | 'relay_failed'
   | 'pending';
+
+/**
+ * Every 402 `error` the gasless rail answers of its own (RELAYER_ENABLED): the rail off, the
+ * delegate (its structure, then its timing once the payment checks passed), its signature, its key
+ * and nonce, the escrow, the relay. It also answers the invoice checks it shares with the tx rail
+ * (`invoice_used`, ...) and `settlement_pending`. The docs list each one (dashboard/test).
+ */
+export const DELEGATE_RAIL_ERRORS: readonly PaywallErrorCode[] = [
+  'relayer_disabled',
+  ...PAY_DELEGATE_REFUSALS.map((reason) => `delegate_${reason}` as const),
+  'bad_signature',
+  'unknown_key',
+  'key_not_allowed',
+  'stale_nonce',
+  'escrow_insufficient',
+  'relay_failed',
+];
 
 /** x402 proof header (request) + settlement header (response). Lowercase on the wire. */
 export const HEADER_X_PAYMENT = 'x-payment';

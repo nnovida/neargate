@@ -426,7 +426,11 @@ export default function Page() {
                 price + <M>0.002 NEAR</M>; nothing is sent from the account. The gateway’s 402 must
                 offer a relayer, else <M>RELAYER_UNAVAILABLE</M> before anything is signed; the
                 escrow checks of <M>--from-escrow</M> run next. An{' '}
-                <DocLink href="#agent-key">agent key</DocLink> can sign it.
+                <DocLink href="#agent-key">agent key</DocLink> can sign it. While the gateway
+                answers <M>settlement_pending</M> (its relay is settling), <M>buy</M> presents the
+                same signed delegate again, waiting the gateway’s Retry-After (1–10 s), until the
+                gateway answers definitively, for at most 150 s; it prints one <M>waiting:</M> line
+                on stderr meanwhile.
               </>
             ),
           },
@@ -445,6 +449,7 @@ export default function Page() {
       <CodeBlock
         label="stderr"
         code={[
+          'waiting:  the gateway’s relay (tx <tx hash>, <explorer>/txns/<tx hash>) is settling; presenting the same signed delegate again for up to 150 s      (with --gasless, only while its relay settles)',
           'service:  #1 RWA FX & Gold Oracle',
           'url:      http://localhost:4021/svc/1',
           'paid:     0.5 NEAR + 0.002 NEAR storage',
@@ -460,8 +465,9 @@ export default function Page() {
         <strong className="text-white">Never pay twice for one call.</strong> If the payment went
         through but the gateway did not serve the call, <M>buy</M> fails with{' '}
         <M>PAID_NOT_SERVED</M> naming the transaction and nonce (with --gasless,{' '}
-        <M>GASLESS_NOT_SERVED</M> naming the nonce and, when the gateway gave it, the relay
-        transaction); see <DocLink href="#error-codes">Error codes</DocLink> before retrying.
+        <M>GASLESS_NOT_SERVED</M> naming the nonce, whether the escrow paid and, when the gateway
+        gave it, the relay transaction); see <DocLink href="#error-codes">Error codes</DocLink>{' '}
+        before buying again.
       </P>
 
       {/* ───────────────────────────── status ───────────────────────────── */}
@@ -667,7 +673,7 @@ export default function Page() {
               <M>neargate_buy</M>
               <Sub>{'{ id, maxNear?, fromEscrow?, gasless?, method?, body? }'}</Sub>
             </span>,
-            'Pays the invoice with a registry pay call and returns the response body. maxNear caps the total. With fromEscrow it calls pay_from_escrow instead, debiting the prepaid escrow (ERR_ESCROW_INSUFFICIENT, before sending, if it holds less). gasless implies fromEscrow and signs that call as a delegate the gateway relays, paying the gas (RELAYER_UNAVAILABLE when the gateway offers no relayer); the result then says gasless and names the relayer.',
+            'Pays the invoice with a registry pay call and returns the response body. maxNear caps the total. With fromEscrow it calls pay_from_escrow instead, debiting the prepaid escrow (ERR_ESCROW_INSUFFICIENT, before sending, if it holds less). gasless implies fromEscrow and signs that call as a delegate the gateway relays, paying the gas (RELAYER_UNAVAILABLE when the gateway offers no relayer); the result then says gasless and names the relayer. While the relay settles the tool waits, for at most 150 s; a GASLESS_NOT_SERVED it returns points at the relay tx and neargate_escrow_balance.',
             <strong key="y" className="text-white">
               yes
             </strong>,
@@ -921,16 +927,22 @@ export default function Page() {
             <M key="12">GASLESS_NOT_SERVED</M>,
             <span key="12m">
               --gasless only: the gateway did not serve the call. The account sent nothing; the
-              escrow paid only if the gateway’s relay landed. The error names the nonce, the
-              service and a reason: <M>refused</M> (the gateway’s 402 error, and after{' '}
-              <M>relay_failed</M> the chain code, e.g. <M>ERR_ESCROW_INSUFFICIENT</M>: nothing was
-              paid), <M>settlement_pending</M> (the relay, with its transaction when the gateway
-              named it, was still settling: it may have paid), <M>redirect</M> or{' '}
-              <M>transport</M> (the gateway may have relayed it).
+              escrow paid only if the gateway’s relay landed. <M>buy</M> already presented the same
+              signed delegate again for as long as the gateway answered{' '}
+              <M>settlement_pending</M>, up to 150 s. The message says whether the escrow paid
+              (the error’s <M>escrowPaid</M>: <M>no</M> or <M>unknown</M>) and names the nonce, the
+              service, the relay transaction when the gateway named it (with its explorer link in
+              live mode) and a reason:{' '}
+              <M>refused</M> (the gateway’s 402 error, and after <M>relay_failed</M> its code: the
+              registry’s, e.g. <M>ERR_ESCROW_INSUFFICIENT</M>, <M>DELEGATE_REJECTED</M> or{' '}
+              <M>RELAYER_ERROR</M>), <M>settlement_pending</M> (the relay was still settling after
+              150 s), <M>redirect</M> or <M>transport</M> (the gateway may have relayed it).
               <Sub>
-                After settlement_pending, redirect or transport, present the same signed delegate
-                again (the error carries it); never sign a new one for that invoice while its relay
-                may still land. After refused, fix the cause and buy again.
+                When the escrow did not pay (<M>no</M>), fix the cause and buy again. When it may
+                have (<M>unknown</M>), check the relay transaction on the explorer and{' '}
+                <M>npm run neargate -- escrow balance</M> before buying again: buying again signs a
+                NEW payment. After <M>invoice_used</M>, always check the escrow balance before
+                buying again: it can mean the gateway’s relay landed before the gateway restarted.
               </Sub>
             </span>,
           ],

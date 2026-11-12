@@ -1,10 +1,10 @@
 import { JsonRpcProvider } from 'near-api-js';
 import { AccessKeyDoesNotExistError, AccountDoesNotExistError, UnknownTransactionError } from 'near-api-js/rpc-errors';
-import { AgentGateError, isRecord } from '@agentgate/shared';
+import { AgentGateError, isRecord, type ViewFinality } from '@agentgate/shared';
 import { badResponse, mapNearError } from './near-errors';
 
 /** `optimistic` sees a tx's effects as soon as it executes; `final` once its block is final. */
-export type ViewFinality = 'optimistic' | 'final';
+export type { ViewFinality };
 
 /** A read the RPC has not answered within this long fails with RPC_TIMEOUT (504). */
 export const RPC_READ_TIMEOUT_MS = 30_000;
@@ -125,14 +125,18 @@ export class NearRpc {
 
   /**
    * The access key's nonce and permission (`'FullAccess'` or `{FunctionCall: …}`), as the RPC
-   * shows them, or null when the account or key does not exist.
+   * shows them at `finality`, or null when the account or key does not exist.
    */
-  async viewAccessKey(accountId: string, publicKey: string): Promise<{ nonce: unknown; permission: unknown } | null> {
+  async viewAccessKey(
+    accountId: string,
+    publicKey: string,
+    finality: ViewFinality = 'final',
+  ): Promise<{ nonce: unknown; permission: unknown } | null> {
     const what = `the access key lookup for ${accountId}`;
     try {
       // The raw view (near-api-js's viewAccessKey would turn a nonce it cannot read into a TypeError).
       const key: unknown = await this.bounded(what, () =>
-        this.provider.query({ request_type: 'view_access_key', account_id: accountId, public_key: publicKey, finality: 'final' }),
+        this.provider.query({ request_type: 'view_access_key', account_id: accountId, public_key: publicKey, finality }),
       );
       if (!isRecord(key)) throw badResponse(what);
       return { nonce: key['nonce'], permission: key['permission'] };

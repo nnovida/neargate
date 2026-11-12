@@ -2,7 +2,7 @@ import { describe, it, expect, expectTypeOf } from 'vitest';
 import {
   X402_VERSION, X402_SCHEME, X402_ASSET_NEAR,
   encodeXPayment, decodeXPayment, encodeXPaymentResponse, decodeXPaymentResponse,
-  isNearAccountId, isNearTxHash, isEd25519PublicKey, isBase64, caip2For, SIGNED_DELEGATE_MAX,
+  isNearAccountId, isNearTxHash, isEd25519PublicKey, isBase64, caip2For, SIGNED_DELEGATE_MAX, SIGNED_DELEGATE_MAX_CHARS,
   type NearPaymentExtra, type PaymentPayload, type PaymentRequiredResponse, type PaymentRequirements,
   type SettlementResponse,
 } from '../src/x402';
@@ -185,19 +185,25 @@ describe('x402 codec', () => {
     expect(() => decodeXPayment(withPayload({ transaction: TX_44, nonce: '42', payer: 'buyer.testnet' }))).toThrow(/kind/);
   });
 
-  it('bounds signedDelegate at the base64 of SIGNED_DELEGATE_MAX (4096) bytes, far inside the 16 KiB header limit (R58 §3)', () => {
+  it('bounds signedDelegate at exactly SIGNED_DELEGATE_MAX (4096) decoded bytes, far inside the 16 KiB header limit (R58 §3)', () => {
     expect(SIGNED_DELEGATE_MAX).toBe(4096);
-    const atMax = 'A'.repeat(Math.ceil(SIGNED_DELEGATE_MAX / 3) * 4); // 5464 base64 chars
-    expect(atMax).toHaveLength(5464);
+    expect(SIGNED_DELEGATE_MAX_CHARS).toBe(5464); // the base64 of 4096 bytes: 1365 groups of 3 bytes, then 1 byte and "=="
+    const atMax = `${'A'.repeat(SIGNED_DELEGATE_MAX_CHARS - 2)}==`;
+    expect(Buffer.from(atMax, 'base64')).toHaveLength(4096);
     const header = encodeXPayment({
       ...delegatePayment,
       payload: { kind: 'delegate', signedDelegate: atMax, nonce: '7', payer: 'buyer.testnet' },
     });
     expect(decodeXPayment(header).payload).toMatchObject({ kind: 'delegate', signedDelegate: atMax });
     expect(header.length).toBeLessThan(8 * 1024); // the whole X-PAYMENT header, base64 JSON around it
-    const err = decodeError(withPayload({ kind: 'delegate', signedDelegate: `${atMax}AAAA`, nonce: '42', payer: 'buyer.testnet' }));
-    expect(err.code).toBe('INVALID_PAYMENT');
-    expect(err.message).toMatch(/signedDelegate/);
+
+    // One byte more is refused, even in the same 5464 characters: 4097 bytes ("=" padding), 4098 (none), then longer.
+    for (const over of [`${'A'.repeat(SIGNED_DELEGATE_MAX_CHARS - 1)}=`, 'A'.repeat(SIGNED_DELEGATE_MAX_CHARS), `${'A'.repeat(SIGNED_DELEGATE_MAX_CHARS)}AAAA`]) {
+      expect(Buffer.from(over, 'base64').length).toBeGreaterThan(SIGNED_DELEGATE_MAX);
+      const err = decodeError(withPayload({ kind: 'delegate', signedDelegate: over, nonce: '42', payer: 'buyer.testnet' }));
+      expect(err.code, `${over.length} chars`).toBe('INVALID_PAYMENT');
+      expect(err.message).toMatch(/signedDelegate/);
+    }
   });
 
   it('rejects a delegate payload whose signedDelegate is not base64', () => {

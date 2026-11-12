@@ -4,14 +4,16 @@ import { LiveNearClient } from './near-live';
 
 export { MockChainHttpClient } from './mock';
 export { LiveNearClient } from './near-live';
-export { TxTimeoutError, mapContractPanic } from './near-errors';
+export { TxTimeoutError, mapContractPanic, mapRelayError } from './near-errors';
 export { verifyNearSignature } from './near-signature';
 export { KeySigner } from './near-signer';
-export { deriveDevnetKey, type DevnetKey } from './devnet-key';
+export { deriveDevnetKey, devnetRelayTxHash, type DevnetKey } from './devnet-key';
 export {
   PAY_DELEGATE_GAS,
   PAY_DELEGATE_METHOD,
+  PAY_DELEGATE_REFUSALS,
   PAY_DELEGATE_TTL_BLOCKS,
+  NONCE_RANGE_MULTIPLIER,
   RELAY_MIN_TTL_BLOCKS,
   buildEscrowPayDelegate,
   decodeSignedDelegate,

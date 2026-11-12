@@ -1,5 +1,6 @@
 import { AgentGateError } from '@agentgate/shared';
 import {
+  NONCE_RANGE_MULTIPLIER,
   PAY_DELEGATE_GAS,
   PAY_DELEGATE_METHOD,
   decodeSignedDelegate,
@@ -12,9 +13,6 @@ import {
 // SignedDelegate before it runs the delegate's call, with the same helpers the gateway and the
 // client use (near-delegate.ts), so the mock refuses what NEAR would refuse.
 
-/** nearcore's ACCESS_KEY_NONCE_RANGE_MULTIPLIER: a delegate nonce of `height × 10^6` or more is too large. */
-const NONCE_RANGE_MULTIPLIER = 1_000_000n;
-
 /** What the relay reads from the devnet: its height and the sender's key nonce. */
 export interface RelayLedger {
   height: number;
@@ -22,9 +20,9 @@ export interface RelayLedger {
   keyNonce(accountId: string, publicKey: string): bigint | null;
 }
 
-/** NEAR refusing the delegate itself: TX_FAILED naming the DelegateAction error, as a live relay reports it. */
+/** NEAR refusing the delegate itself: DELEGATE_REJECTED naming the DelegateAction error, as a live relay reports it. */
 function refused(kind: string, detail: string): AgentGateError {
-  return new AgentGateError('TX_FAILED', `NEAR rejected the relayed delegate: ${kind} (${detail})`, 400);
+  return new AgentGateError('DELEGATE_REJECTED', `NEAR rejected the relayed delegate: ${kind} (${detail})`, 400);
 }
 
 /**

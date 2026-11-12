@@ -31,5 +31,5 @@ export {
   isUpstreamSuccess,
 } from './proxy';
 export type { ProxyOutcome, ProxyFailureCode, ProxyOptions } from './proxy';
-export { HEADER_X_PAYMENT, HEADER_X_PAYMENT_RESPONSE } from './types';
+export { DELEGATE_RAIL_ERRORS, HEADER_X_PAYMENT, HEADER_X_PAYMENT_RESPONSE } from './types';
 export type { PaywallErrorCode } from './types';

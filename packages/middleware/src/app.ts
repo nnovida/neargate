@@ -19,10 +19,10 @@ import {
   decodeXPayment,
   encodeXPaymentResponse,
   isNearAccountId,
-  isNearTxHash,
   isValidNonce,
   PAYMENT_STORAGE_FEE_YOCTO,
   randomNonce,
+  timedOutTxHash,
   trustTier,
   X402_ASSET_NEAR,
   X402_SCHEME,
@@ -119,16 +119,10 @@ function defaultUpstreamsFile(): string {
   return path.join(packageDir, 'data', 'upstreams.json');
 }
 
-/**
- * The tx hash a TX_TIMEOUT failure names (a change call that was sent but whose outcome is
- * unknown), or undefined for any other failure. Read by duck typing: the gateway does not pull
- * the live chain client in just to recognise its error.
- */
-function timedOutTxHash(err: unknown): string | undefined {
-  if (!(err instanceof AgentGateError) || err.code !== 'TX_TIMEOUT') return undefined;
-  const txHash = (err as { txHash?: unknown }).txHash;
-  return isNearTxHash(txHash) ? txHash : undefined;
-}
+/** An X-PAYMENT proof and the rail that settles it. */
+type Proof =
+  | { kind: 'tx'; payload: Extract<NearExactPayload, { kind: 'tx' }> }
+  | { kind: 'delegate'; payload: Extract<NearExactPayload, { kind: 'delegate' }>; rail: DelegateRail };
 
 /** What a settled payment hands the serve path: the tx to name and attest, the payer, the registry's self-payment flag. */
 interface Settled {
@@ -268,6 +262,12 @@ export function createApp(deps: MiddlewareDeps): Express {
       })
     : undefined;
 
+  /** A proof with the rail that settles it: the tx rail, or the gasless rail while it is on (null when it is off). */
+  function proofOf(payload: NearExactPayload): Proof | null {
+    if (payload.kind === 'tx') return { kind: 'tx', payload };
+    return delegateRail === undefined ? null : { kind: 'delegate', payload, rail: delegateRail };
+  }
+
   /**
    * The x402 requirement for one invoice: pay `price + storage fee` through the
    * registry's `pay(service_id, nonce)`. With the relayer on, `extra.relayer` names the gateway
@@ -364,12 +364,9 @@ export function createApp(deps: MiddlewareDeps): Express {
     resource: string,
     invoice: StoredInvoice,
     payload: Extract<NearExactPayload, { kind: 'delegate' }>,
+    rail: DelegateRail,
   ): Promise<Settled | null> {
-    if (delegateRail === undefined) {
-      await respond402Fresh(res, service, resource, 'relayer_disabled');
-      return null;
-    }
-    const outcome = await delegateRail.settle({
+    const outcome = await rail.settle({
       service,
       nonce: payload.nonce,
       signedDelegate: payload.signedDelegate,
@@ -690,8 +687,10 @@ export function createApp(deps: MiddlewareDeps): Express {
         await respond402Fresh(res, service, resource, 'invalid_payment_header');
         return;
       }
-      if (payment.payload.kind === 'delegate' && delegateRail === undefined) {
-        // The gasless delegate rail is off unless RELAYER_ENABLED (the invoice stays open).
+      // The proof's rail: a delegate only while the gasless rail is on (RELAYER_ENABLED).
+      const proof = proofOf(payment.payload);
+      if (proof === null) {
+        // The gasless delegate rail is off (the invoice stays open).
         await respond402Fresh(res, service, resource, 'relayer_disabled');
         return;
       }
@@ -706,15 +705,18 @@ export function createApp(deps: MiddlewareDeps): Express {
       // 3b. The payment the registry holds for this nonce: proven by the buyer's tx (the tx
       //     rail), or made by relaying the buyer's signed delegate (the gasless rail).
       const settled =
-        payment.payload.kind === 'tx'
-          ? await settleTx(res, service, resource, invoice, payment.payload)
-          : await settleDelegate(res, service, resource, invoice, payment.payload);
+        proof.kind === 'tx'
+          ? await settleTx(res, service, resource, invoice, proof.payload)
+          : await settleDelegate(res, service, resource, invoice, proof.payload, proof.rail);
       if (settled === null) return;
       const txHashHeader = settled.txHash;
 
       // 3c. Burn the nonce BEFORE proxying — single-use even if the upstream
       // fails, and exactly one concurrent request can win the race.
       const consumed = await invoices.markUsed(nonceHeader);
+      // Burned (by this request or a concurrent one): a relay of it need not be remembered. A burn
+      // that failed (it threw) keeps it, so the retry is still served from it.
+      if (proof.kind === 'delegate') proof.rail.served(nonceHeader);
       if (!consumed) {
         await respond402Fresh(res, service, resource, 'invoice_used');
         return;

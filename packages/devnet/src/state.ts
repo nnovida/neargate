@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { deriveDevnetKey, type DevnetKey } from '@agentgate/chain/devnet-key';
+import { deriveDevnetKey, devnetRelayTxHash, type DevnetKey } from '@agentgate/chain/devnet-key';
 import {
   AgentGateError,
   ESCROW_STORAGE_FEE_YOCTO,
@@ -136,10 +136,11 @@ export class DevnetState {
     this.maxPayments = options.maxPayments ?? MAX_PAYMENTS;
   }
 
-  /** Starts a block for a successful mutating call and names its transaction. */
-  private nextTx(payload: unknown): { txHash: string; blockHeight: number; timestamp: number } {
+  /** Starts a block for a successful mutating call and names its transaction (`txHash`, when the call brings its own name). */
+  private nextTx(payload: unknown, txHash?: string): { txHash: string; blockHeight: number; timestamp: number } {
     this.blockHeight += 1;
     this.txCounter += 1;
+    if (txHash !== undefined) return { txHash, blockHeight: this.blockHeight, timestamp: Date.now() };
     const digest = createHash('sha256')
       .update(JSON.stringify(payload) + String(this.txCounter))
       .digest();
@@ -238,7 +239,8 @@ export class DevnetState {
    * nonce), and a refusal changes nothing. Then, as on NEAR, the key's nonce moves to the
    * delegate's before the call runs, so a failing call (ERR_ESCROW_INSUFFICIENT, ERR_NONCE_USED, …)
    * spends the delegate all the same. The call runs as the sender, attaching nothing: the escrow
-   * pays price + fee, the relayer pays nothing (the devnet has no gas).
+   * pays price + fee, the relayer pays nothing (the devnet has no gas). Its tx is named by the
+   * delegate (`devnetRelayTxHash`), which the mock client names too when this answer times out.
    */
   relay(relayer: string, signedDelegate: string): { txHash: string } {
     assertAccountId(relayer, 'relayer');
@@ -251,7 +253,7 @@ export class DevnetState {
     });
     this.keyNonces.set(delegate.senderId, delegate.nonce);
     const { serviceId, nonce } = relayedPayArgs(delegate);
-    return this.payFromEscrow(delegate.senderId, serviceId, nonce, '0');
+    return this.payFromEscrow(delegate.senderId, serviceId, nonce, '0', devnetRelayTxHash(signedDelegate));
   }
 
   /** lib.rs `register_service`. The registry keeps REGISTRATION_DEPOSIT_YOCTO and refunds the rest. */
@@ -343,13 +345,15 @@ export class DevnetState {
    * lib.rs `pay_from_escrow`: `pay` funded by the signer's escrow instead of an attached deposit.
    * It takes no deposit (checked first, after the mock-only funding check), then runs the same
    * checks and settlement as `pay`; the escrow is debited price + fee, the price goes to the
-   * payment target and nothing is refunded.
+   * payment target and nothing is refunded. `txHash` names the tx of a call that brings its own
+   * name (a relay).
    */
   payFromEscrow(
     signer: string,
     serviceId: number,
     nonce: string,
     depositYocto: Yocto,
+    txHash?: string,
   ): { txHash: string } {
     assertAccountId(signer, 'signer');
     const attached = parseYocto(depositYocto);
@@ -360,7 +364,7 @@ export class DevnetState {
         'pay_from_escrow takes no deposit, it spends the escrow',
       );
     }
-    return this.settlePayment(signer, serviceId, nonce, { kind: 'escrow' });
+    return this.settlePayment(signer, serviceId, nonce, { kind: 'escrow' }, txHash);
   }
 
   /**
@@ -374,6 +378,7 @@ export class DevnetState {
     serviceId: number,
     nonce: string,
     funding: { kind: 'deposit'; attached: bigint } | { kind: 'escrow' },
+    namedTx?: string,
   ): { txHash: string } {
     const service = this.service(serviceId);
     if (!service.active) throw contractError('ERR_SERVICE_INACTIVE', 'the service is switched off');
@@ -411,12 +416,10 @@ export class DevnetState {
       );
     }
 
-    const { txHash, blockHeight, timestamp } = this.nextTx({
-      kind: funding.kind === 'escrow' ? 'pay_from_escrow' : 'pay',
-      serviceId,
-      nonce,
-      payer: signer,
-    });
+    const { txHash, blockHeight, timestamp } = this.nextTx(
+      { kind: funding.kind === 'escrow' ? 'pay_from_escrow' : 'pay', serviceId, nonce, payer: signer },
+      namedTx,
+    );
     if (escrowAfter !== undefined) {
       // The escrow sits in the registry's balance: the price leaves it, the fee stays.
       this.escrow.set(signer, escrowAfter);

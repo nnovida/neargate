@@ -3,6 +3,7 @@ import { TypedError } from 'near-api-js';
 import {
   AccessKeyDoesNotExistError,
   AccessKeyNotFoundActionError,
+  ActionExecutionError,
   AccountDoesNotExistError,
   ContractCodeDoesNotExistError,
   ContractExecutionError,
@@ -47,21 +48,23 @@ export interface CallErrorContext extends NearErrorContext {
  * or the call's own bound ran out). The tx may still land: look it up before retrying, or a
  * retry can register or pay twice. The error carries what that takes:
  *
- * - `txHash`: the hash of the signed tx that was sent (its explorer page is in the message)
+ * - `txHash`: the hash of the signed tx that was sent (its explorer page is in the message, when
+ *   the chain has an explorer: the mock devnet has none)
  */
 export class TxTimeoutError extends AgentGateError {
   readonly txHash: string;
   private readonly lead: string;
-  private readonly explorerUrl: string;
+  private readonly explorerUrl: string | undefined;
 
   /**
    * `lead` says what happened, e.g. "the NEAR RPC failed (HTTP 502) after the pay tx was sent".
    * `note`, when given, is appended as a further sentence (what the caller left behind to check).
    */
-  constructor(lead: string, txHash: string, explorerUrl: string, note?: string) {
+  constructor(lead: string, txHash: string, explorerUrl: string | undefined, note?: string) {
     super(
       'TX_TIMEOUT',
-      `${lead}: tx ${txHash} may still land; check ${explorerUrl}/txns/${txHash} before retrying` +
+      `${lead}: tx ${txHash} may still land; ` +
+        (explorerUrl === undefined ? 'look it up before retrying' : `check ${explorerUrl}/txns/${txHash} before retrying`) +
         (note === undefined ? '' : `. ${note}`),
       504,
     );
@@ -337,4 +340,21 @@ export function mapCallError(err: unknown, ctx: CallErrorContext): AgentGateErro
     );
   }
   return mapNearError(err, ctx);
+}
+
+/**
+ * A failed relay of a NEP-366 delegate (the gasless rail) as an AgentGateError. NEAR refusing the
+ * delegate itself (its signature, sender, expiry, key or nonce: the relay tx's one action, the
+ * Delegate, failed at index 0, and near-api-js threw on the tx's Failure) is DELEGATE_REJECTED
+ * (400) naming the relay tx: nothing ran, and it is the buyer's to fix. A key the sender does not
+ * hold is one of those: it names the delegate's key, never the relayer's. Anything else maps as any
+ * change call (`mapCallError`): a refusal of the relay tx itself (the relayer's own key, account
+ * or balance, an action index of null) keeps its SIGNER_* / ERR_INSUFFICIENT_BALANCE code, which
+ * the gateway keeps to its own log.
+ */
+export function mapRelayError(err: unknown, ctx: CallErrorContext): AgentGateError {
+  if (err instanceof ActionExecutionError && err.actionIndex === 0) {
+    return new AgentGateError('DELEGATE_REJECTED', withTx(`NEAR rejected the relayed delegate: ${clip(err.message)}`, err), 400);
+  }
+  return mapCallError(err, ctx);
 }

@@ -82,8 +82,29 @@ export interface AgentGateClientOpts {
    * (`extra.relayer`, `extra.relayMethod: 'pay_from_escrow'`), else RELAYER_UNAVAILABLE before
    * anything is read or signed; escrow mode's checks then run first (PRICE_MISMATCH, the budget,
    * ERR_ESCROW_INSUFFICIENT). The key may be the agent's function-call key.
+   *
+   * While the gateway answers `settlement_pending` (its relay is in flight, or timed out and may
+   * still land), the client keeps presenting the same signed delegate until the gateway answers
+   * definitively: served, or a refusal (`delegate_expired` once the delegate can no longer land:
+   * it is valid 100 blocks), within `gaslessWaitMs`.
    */
   gasless?: boolean;
+  /**
+   * Gasless only: how long (ms) to keep presenting the signed delegate while the gateway answers
+   * `settlement_pending`, counted from the first presentation. Default GASLESS_WAIT_MS (150 s): past
+   * the delegate's 100 blocks the gateway's answer is definitive. Between two presentations the
+   * client waits the gateway's Retry-After, clamped to 1-10 s.
+   */
+  gaslessWaitMs?: number;
+  /** Gasless only: called on each `settlement_pending` answer, before the wait (progress). It never fails the call. */
+  onGaslessWait?: (wait: GaslessWait) => void;
+  /** The chain explorer's base URL (no trailing slash): GASLESS_NOT_SERVED links the relay tx there. */
+  explorerUrl?: string;
+  /**
+   * How a GASLESS_NOT_SERVED message tells the buyer to read its escrow (e.g. "`neargate escrow
+   * balance`"). Default: "the escrow balance (escrowOf)".
+   */
+  escrowBalanceHint?: string;
   logger?: Logger;
   /** Wait after the on-chain payment before retrying with proof. Default: 0 (mock) / 3000 (live). */
   settleDelayMs?: number;
@@ -108,8 +129,8 @@ export interface AgentGateClient {
    * (base64-encoded proof). With `gasless`, nothing is sent: the client signs the
    * pay_from_escrow as a NEP-366 delegate (chain.signPayDelegate) and the proof carries it
    * for the gateway to relay. While the gateway answers `settlement_pending`, waits
-   * Retry-After and retries the same proof, up to 3×. Non-402 first responses pass
-   * through. Exposes `requirements` (parsed entry) and `settlement` (decoded
+   * Retry-After and retries the same proof, up to 3× (gasless: until a definitive answer, within
+   * `gaslessWaitMs`). Non-402 first responses pass through. Exposes `requirements` (parsed entry) and `settlement` (decoded
    * X-PAYMENT-RESPONSE) on success.
    *
    * A redirect is never followed (`redirect: 'manual'`, whatever `init` says): a 3xx on the
@@ -171,26 +192,54 @@ export class PaidNotServedError extends AgentGateError {
 }
 
 /**
+ * Whether the escrow paid for a gasless call the gateway did not serve: `no` when the gateway's
+ * answer settles it (a refusal before any relay, a relay that definitively failed, or
+ * `delegate_expired` once no relay of the delegate can land), else `unknown`: the relay may have
+ * landed, so read the escrow before buying again.
+ */
+export type GaslessEscrowPaid = 'no' | 'unknown';
+
+/** A `settlement_pending` answer to a gasless call, as `onGaslessWait` reports it. */
+export interface GaslessWait {
+  /** 1 for the first `settlement_pending` answer, then 2, 3, … */
+  attempt: number;
+  /** The relay tx the gateway named, when it did. */
+  transaction?: string;
+  /** How long the client waits before presenting the same delegate again (ms). */
+  retryInMs: number;
+  /** The most the client waits in all (`gaslessWaitMs`). */
+  capMs: number;
+}
+
+/**
  * GASLESS_NOT_SERVED: the gateway did not serve a gasless call. The buyer sent nothing itself:
  * the escrow paid only if the gateway's relay of the signed delegate landed. The error carries:
  *
+ * - `escrowPaid`: `no` when the gateway's answer settles that the escrow did not pay, else
+ *   `unknown` (read the escrow and the relay tx before buying again: a new buy is a new payment)
  * - `reason`: `refused` (a 402 refusal, `gatewayError`; after `relay_failed` the chain's
  *   `chainCode`), `settlement_pending` (the relay, `txHash` when the gateway named it, was still
- *   settling after the last retry: it may have paid), `redirect` (a 3xx, never followed) or
- *   `transport` (no answer: the gateway may have relayed it)
+ *   settling when `gaslessWaitMs` ran out), `redirect` (a 3xx, never followed) or `transport` (no
+ *   answer: the gateway may have relayed it)
  * - `status`: the gateway's HTTP status, when it answered
- * - `signedDelegate`, `nonce`, `serviceId`: what to present again for the same URL (X-PAYMENT
- *   `{kind: 'delegate', signedDelegate, nonce, payer}`); while `txHash` may still land, never sign
- *   a new delegate for this invoice
+ * - `txHash`: the relay tx the gateway named while it settled, if it did
+ * - `signedDelegate`, `nonce`, `serviceId`: the proof that was presented (X-PAYMENT `{kind:
+ *   'delegate', signedDelegate, nonce, payer}`), for a program that re-presents it itself
  */
 export class GaslessNotServedError extends AgentGateError {
   readonly reason: PaidNotServedReason;
+  readonly escrowPaid: GaslessEscrowPaid;
   readonly status: number | undefined;
   readonly gatewayError: string | undefined;
   readonly chainCode: string | undefined;
   readonly txHash: string | undefined;
   readonly nonce: string;
   readonly serviceId: number;
+  /**
+   * The signed delegate (base64): a bearer authorization to pay invoice `nonce` from the buyer's
+   * escrow, which anyone holding it can have relayed until it expires (100 blocks). Re-present it
+   * only to the gateway that issued the invoice; never log it.
+   */
   readonly signedDelegate: string;
 
   constructor(
@@ -198,7 +247,7 @@ export class GaslessNotServedError extends AgentGateError {
     reason: PaidNotServedReason,
     status: number | undefined,
     detail: string,
-    answer: { gatewayError?: string; chainCode?: string; txHash?: string } = {},
+    answer: { escrowPaid: GaslessEscrowPaid; gatewayError?: string; chainCode?: string; txHash?: string },
   ) {
     super(
       'GASLESS_NOT_SERVED',
@@ -207,6 +256,7 @@ export class GaslessNotServedError extends AgentGateError {
     );
     this.name = 'GaslessNotServedError';
     this.reason = reason;
+    this.escrowPaid = answer.escrowPaid;
     this.status = status;
     this.gatewayError = answer.gatewayError;
     this.chainCode = answer.chainCode;
@@ -251,8 +301,35 @@ export async function refuseRedirect(url: string, res: Response): Promise<void> 
   throw new RedirectRefusedError(url, opaque ? 0 : res.status, res.headers.get('location'));
 }
 
-/** Extra proof attempts while the gateway answers `settlement_pending`. */
+/** Extra proof attempts while the gateway answers `settlement_pending` (the tx rails). */
 const MAX_PENDING_RETRIES = 3;
+/**
+ * How long a gasless call keeps presenting its delegate while the gateway answers
+ * `settlement_pending`, by default (ms): past the delegate's 100 blocks, the answer is definitive.
+ */
+export const GASLESS_WAIT_MS = 150_000;
+/** The gateway's Retry-After between two presentations of a gasless delegate, clamped to this range (ms). */
+const GASLESS_RETRY_MIN_MS = 1_000;
+const GASLESS_RETRY_MAX_MS = 10_000;
+/**
+ * The gateway's refusals of a delegate on its first presentation that leave the escrow unpaid:
+ * decided before any relay (the rail off, the proof, the delegate, its key and nonce, the escrow,
+ * the invoice), or a relay that definitively failed.
+ */
+const UNPAID_REFUSALS = new Set([
+  'relayer_disabled',
+  'invalid_payment_header',
+  'unknown_nonce',
+  'invoice_expired',
+  'bad_signature',
+  'unknown_key',
+  'key_not_allowed',
+  'stale_nonce',
+  'escrow_insufficient',
+  'relay_failed',
+]);
+/** The refusal that settles a relay the gateway reported pending: it can no longer land, and did not. */
+const DELEGATE_EXPIRED = 'delegate_expired';
 /** Wait before retrying a `settlement_pending` answer that names no Retry-After. */
 const DEFAULT_PENDING_RETRY_MS = 2_000;
 /** Never sleep longer than this per pending retry, regardless of what the server asks for. */
@@ -488,11 +565,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Why the gateway did not serve a presented proof, as the proof loop saw it. */
-type Unserved =
+/**
+ * Why the gateway did not serve a presented proof, as the proof loop saw it: its last answer, and
+ * the `settlement_pending` answers before it (`pendings`, the last relay tx one named, how long the
+ * loop waited).
+ */
+type Unserved = (
   | { reason: 'redirect'; status: number; location: string }
   | { reason: 'transport'; error: unknown }
-  | { reason: 'refused' | 'settlement_pending'; status: number; body: unknown };
+  | { reason: 'refused' | 'settlement_pending'; status: number; body: unknown }
+) & { pendings: number; relayTx?: string; waitedMs: number };
 
 /** One payment rail's proof, as `presentProof` presents it. */
 interface ProofRail {
@@ -501,8 +583,18 @@ interface ProofRail {
   served(res: FetchedBody): PayAndFetchResult;
   /** The error for a call the gateway did not serve. */
   notServed(what: Unserved): AgentGateError;
+  /**
+   * After the `attempt`-th `settlement_pending` answer `res`, `waitedMs` into the loop: how long to
+   * wait before presenting the proof again (ms), or null to give up.
+   */
+  retryIn(res: FetchedBody, attempt: number, waitedMs: number): number | null;
   /** What the log lines name: the paid tx, or the invoice nonce of a delegate. */
   logFields: Record<string, string>;
+}
+
+/** The tx rails: the same proof again after Retry-After (2 s when none), up to MAX_PENDING_RETRIES times. */
+function txRetryIn(res: FetchedBody, attempt: number): number | null {
+  return attempt > MAX_PENDING_RETRIES ? null : (res.retryAfterMs ?? DEFAULT_PENDING_RETRY_MS);
 }
 
 /** PAID_NOT_SERVED for the tx rails (`pay`, `pay_from_escrow`): the deposit or the escrow is spent. */
@@ -537,11 +629,50 @@ function paidNotServed(
   }
 }
 
+/** The relay tx a `settlement_pending` body names, if it names a well-formed one. */
+function relayTxOf(body: unknown): string | undefined {
+  const relayTx = isRecord(body) ? body['transaction'] : undefined;
+  return isNearTxHash(relayTx) ? relayTx : undefined;
+}
+
+/**
+ * Whether the escrow paid, as far as the gateway's answer settles it. On the first presentation, a
+ * refusal of UNPAID_REFUSALS (or `delegate_*`) was decided before any relay or after one that
+ * definitively failed. Once the gateway reported a relay pending, only `delegate_expired` settles
+ * it: the gateway answers it once that relay can no longer land and did not.
+ */
+function escrowPaidAfter(what: Unserved): GaslessEscrowPaid {
+  if (what.reason !== 'refused') return 'unknown';
+  const error = gatewayErrorOf(what.body);
+  if (error === undefined) return 'unknown';
+  if (what.pendings > 0) return error === DELEGATE_EXPIRED ? 'no' : 'unknown';
+  return error.startsWith('delegate_') || UNPAID_REFUSALS.has(error) ? 'no' : 'unknown';
+}
+
+/** What a GASLESS_NOT_SERVED message advises: only what the buyer can do (read the relay tx and the escrow; a new buy is a new payment). */
+function gaslessAdvice(
+  escrowPaid: GaslessEscrowPaid,
+  relayTx: string | undefined,
+  hints: { explorerUrl?: string; escrowBalanceHint: string },
+): string {
+  if (escrowPaid === 'no') return 'the escrow did not pay for it; buying again signs a new payment';
+  const tx =
+    relayTx === undefined
+      ? ''
+      : `the relay tx ${relayTx}${hints.explorerUrl === undefined ? '' : ` (${hints.explorerUrl}/txns/${relayTx})`} and `;
+  return `the escrow may have paid: check ${tx}${hints.escrowBalanceHint} before buying again, since buying again signs a NEW payment`;
+}
+
 /** GASLESS_NOT_SERVED: the gateway's answer to a signed delegate it did not serve. */
 function gaslessNotServed(
   sent: { signedDelegate: string; nonce: string; serviceId: number },
   what: Unserved,
+  hints: { explorerUrl?: string; escrowBalanceHint: string },
 ): GaslessNotServedError {
+  const escrowPaid = escrowPaidAfter(what);
+  const relayTx = what.reason === 'settlement_pending' ? (relayTxOf(what.body) ?? what.relayTx) : what.relayTx;
+  const known = { escrowPaid, ...(relayTx !== undefined ? { txHash: relayTx } : {}) };
+  const advice = gaslessAdvice(escrowPaid, relayTx, hints);
   switch (what.reason) {
     case 'redirect':
       return new GaslessNotServedError(
@@ -549,41 +680,40 @@ function gaslessNotServed(
         'redirect',
         what.status,
         `the gateway answered HTTP ${what.status}, a redirect${what.location === '' ? '' : ` to ${what.location}`} ` +
-          '(never followed); it may have relayed the delegate, so present the same one again',
+          `(never followed), after the signed delegate reached it; ${advice}`,
+        known,
       );
     case 'transport':
       return new GaslessNotServedError(
         sent,
         'transport',
         undefined,
-        `the request failed: ${formatError(what.error)}; the gateway may have relayed the delegate, so present the same one again`,
+        `the request failed after the signed delegate went out (${formatError(what.error)}); ${advice}`,
+        known,
       );
     case 'refused': {
       const gatewayError = gatewayErrorOf(what.body) ?? 'no reason given';
       const code = isRecord(what.body) ? what.body['code'] : undefined;
       const chainCode = typeof code === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(code) ? code : undefined;
+      const used = gatewayError === 'invoice_used' ? ': the registry holds a payment for it the gateway did not relay, or no longer remembers relaying (a restart)' : '';
       return new GaslessNotServedError(
         sent,
         'refused',
         what.status,
         `the gateway refused the signed pay_from_escrow delegate (HTTP ${what.status} ${JSON.stringify(gatewayError)}` +
-          `${chainCode === undefined ? '' : `, chain code ${chainCode}`})`,
-        { gatewayError, ...(chainCode !== undefined ? { chainCode } : {}) },
+          `${chainCode === undefined ? '' : `, chain code ${chainCode}`})${used}; ${advice}`,
+        { ...known, gatewayError, ...(chainCode !== undefined ? { chainCode } : {}) },
       );
     }
-    case 'settlement_pending': {
-      const relayTx = isRecord(what.body) ? what.body['transaction'] : undefined;
-      const txHash = isNearTxHash(relayTx) ? relayTx : undefined;
+    case 'settlement_pending':
       return new GaslessNotServedError(
         sent,
         'settlement_pending',
         what.status,
-        `the gateway's relay${txHash === undefined ? '' : ` (tx ${txHash})`} was still settling after ` +
-          `${MAX_PENDING_RETRIES} retries (HTTP ${what.status} ${SETTLEMENT_PENDING}): it may have paid, so present ` +
-          'the same delegate again instead of signing a new one',
-        { gatewayError: SETTLEMENT_PENDING, ...(txHash !== undefined ? { txHash } : {}) },
+        `the gateway's relay was still settling after ${Math.round(what.waitedMs / 1000)} s ` +
+          `(HTTP ${what.status} ${SETTLEMENT_PENDING}); ${advice}`,
+        { ...known, gatewayError: SETTLEMENT_PENDING },
       );
-    }
   }
 }
 
@@ -630,6 +760,23 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
   if (!gasless && payFrom === 'escrow' && (typeof chain.escrowOf !== 'function' || typeof chain.payFromEscrow !== 'function')) {
     throw new AgentGateError('BAD_OPTS', 'opts.chain has no escrow methods (escrowOf, payFromEscrow): it cannot pay from the escrow', 500);
   }
+  const gaslessWaitMs = opts.gaslessWaitMs ?? GASLESS_WAIT_MS;
+  if (typeof gaslessWaitMs !== 'number' || !Number.isFinite(gaslessWaitMs) || gaslessWaitMs < 0) {
+    throw new AgentGateError('BAD_OPTS', 'opts.gaslessWaitMs must be a duration in ms (a finite number, 0 or more)', 500);
+  }
+  if (opts.onGaslessWait !== undefined && typeof opts.onGaslessWait !== 'function') {
+    throw new AgentGateError('BAD_OPTS', 'opts.onGaslessWait must be a function', 500);
+  }
+  for (const key of ['explorerUrl', 'escrowBalanceHint'] as const) {
+    const value = opts[key];
+    if (value !== undefined && (typeof value !== 'string' || value.trim() === '')) {
+      throw new AgentGateError('BAD_OPTS', `opts.${key} must be a non-empty string`, 500);
+    }
+  }
+  const hints = {
+    ...(opts.explorerUrl !== undefined ? { explorerUrl: opts.explorerUrl.replace(/\/+$/, '') } : {}),
+    escrowBalanceHint: opts.escrowBalanceHint ?? 'the escrow balance (escrowOf)',
+  };
   const fetchImpl: typeof fetch = opts.fetchImpl ?? fetch;
   const settleDelayMs = opts.settleDelayMs ?? (isMockNetwork(chain.network) ? 0 : 3000);
   const requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
@@ -780,7 +927,21 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
             relayer,
           };
         },
-        notServed: (what) => gaslessNotServed(sent, what),
+        notServed: (what) => gaslessNotServed(sent, what, hints),
+        retryIn: (res, attempt, waitedMs) => {
+          // Until the gateway answers definitively, within the cap: never re-signed.
+          const left = gaslessWaitMs - waitedMs;
+          if (left <= 0) return null;
+          const asked = res.retryAfterMs ?? DEFAULT_PENDING_RETRY_MS;
+          const wait = Math.min(Math.max(asked, GASLESS_RETRY_MIN_MS), GASLESS_RETRY_MAX_MS, left);
+          const transaction = relayTxOf(res.body);
+          try {
+            opts.onGaslessWait?.({ attempt, ...(transaction !== undefined ? { transaction } : {}), retryInMs: wait, capMs: gaslessWaitMs });
+          } catch {
+            // progress reporting never fails the call
+          }
+          return wait;
+        },
         logFields: { nonce: req.extra.nonce },
       });
     }
@@ -812,15 +973,16 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
       payload: { kind: 'tx', transaction: txHash, nonce: req.extra.nonce, payer: signer.accountId },
       served: (res) => ({ status: res.status, body: res.body, settlement: res.settlement, ...paid, txHash }),
       notServed: (what) => paidNotServed(proof, what),
+      retryIn: txRetryIn,
       logFields: { txHash },
     });
   }
 
   /**
    * Presents the X-PAYMENT proof (a paid tx or a signed delegate) and returns the served call;
-   * while the gateway answers `settlement_pending`, waits Retry-After and presents the same proof
-   * again, up to MAX_PENDING_RETRIES times. A call the gateway does not serve throws the rail's
-   * error (`notServed`).
+   * while the gateway answers `settlement_pending`, waits and presents the same proof again for as
+   * long as the rail says (`retryIn`). A call the gateway does not serve throws the rail's error
+   * (`notServed`).
    */
   async function presentProof(url: string, init: RequestInit | undefined, rail: ProofRail): Promise<PayAndFetchResult> {
     const headers = new Headers(init?.headers);
@@ -832,7 +994,14 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
     }));
     const proofInit: RequestInit = { ...init, headers };
 
-    let pendingRetries = 0;
+    const startedAt = Date.now();
+    let pendings = 0;
+    let relayTx: string | undefined;
+    const trail = (): { pendings: number; relayTx?: string; waitedMs: number } => ({
+      pendings,
+      ...(relayTx !== undefined ? { relayTx } : {}),
+      waitedMs: Date.now() - startedAt,
+    });
     for (;;) {
       let res: FetchedBody;
       try {
@@ -840,10 +1009,10 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
       } catch (err) {
         if (err instanceof RedirectRefusedError) {
           logger?.warn('fetchPaid: paid request redirected, not followed', { url, status: err.status, ...rail.logFields });
-          throw rail.notServed({ reason: 'redirect', status: err.status, location: err.location });
+          throw rail.notServed({ reason: 'redirect', status: err.status, location: err.location, ...trail() });
         }
         logger?.warn('fetchPaid: paid request failed', { url, ...rail.logFields, error: formatError(err) });
-        throw rail.notServed({ reason: 'transport', error: err });
+        throw rail.notServed({ reason: 'transport', error: err, ...trail() });
       }
       if (res.status !== 402) {
         logger?.info('fetchPaid: paid request completed', { url, status: res.status });
@@ -851,20 +1020,16 @@ export function createAgentGateClient(opts: AgentGateClientOpts): AgentGateClien
       }
       if (!isSettlementPending(res.body)) {
         logger?.warn('fetchPaid: gateway refused the proof', { url, status: res.status, ...rail.logFields });
-        throw rail.notServed({ reason: 'refused', status: res.status, body: res.body });
+        throw rail.notServed({ reason: 'refused', status: res.status, body: res.body, ...trail() });
       }
-      if (pendingRetries >= MAX_PENDING_RETRIES) {
-        logger?.warn('fetchPaid: settlement still pending after the last retry, giving up', {
-          url,
-          status: res.status,
-          pendingRetries,
-          ...rail.logFields,
-        });
-        throw rail.notServed({ reason: 'settlement_pending', status: res.status, body: res.body });
+      pendings += 1;
+      relayTx = relayTxOf(res.body) ?? relayTx;
+      const wait = rail.retryIn(res, pendings, Date.now() - startedAt);
+      if (wait === null) {
+        logger?.warn('fetchPaid: settlement still pending, giving up', { url, status: res.status, pendings, ...rail.logFields });
+        throw rail.notServed({ reason: 'settlement_pending', status: res.status, body: res.body, ...trail() });
       }
-      pendingRetries += 1;
-      const wait = res.retryAfterMs ?? DEFAULT_PENDING_RETRY_MS;
-      logger?.debug('fetchPaid: settlement pending, retrying', { wait, attempt: pendingRetries });
+      logger?.debug('fetchPaid: settlement pending, retrying', { wait, attempt: pendings });
       await sleep(wait);
     }
   }

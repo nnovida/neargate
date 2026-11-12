@@ -2,8 +2,9 @@ import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
 import { base58Encode } from '@agentgate/shared';
 
 // The devnet's key derivation, shared by the devnet (which checks signatures against it) and the
-// mock client (which signs gasless delegates with it). Mock-chain keys only: every one of them is
-// public knowledge by construction, so they protect nothing and never leave mock mode.
+// mock client (which signs gasless delegates with it), and the tx hash the devnet gives a relay.
+// Mock-chain keys only: every one of them is public knowledge by construction, so they protect
+// nothing and never leave mock mode.
 
 /** The devnet's one full-access key for an account, as near-cli strings. */
 export interface DevnetKey {
@@ -15,6 +16,21 @@ export interface DevnetKey {
 
 /** PKCS#8 DER header for an ed25519 private key; the 32-byte seed follows it. */
 const PKCS8_ED25519_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
+
+/**
+ * The tx hash the devnet gives the relay of `signedDelegate` (base64 borsh): the sha256 of the
+ * delegate's bytes under a devnet prefix, base58 with the top bit set (44 characters, like every
+ * devnet tx). One delegate is relayed at most once (its nonce), so it names one relay; and the mock
+ * client can name the relay it sent even when the devnet's answer never came back.
+ */
+export function devnetRelayTxHash(signedDelegate: string): string {
+  const digest = createHash('sha256')
+    .update('neargate-devnet-relay/v1:')
+    .update(Buffer.from(signedDelegate, 'base64'))
+    .digest();
+  digest.writeUInt8(digest.readUInt8(0) | 0x80, 0);
+  return base58Encode(digest);
+}
 
 /**
  * The key pair every devnet account owns: an ed25519 key whose 32-byte seed is

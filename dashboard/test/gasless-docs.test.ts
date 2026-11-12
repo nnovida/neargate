@@ -5,6 +5,7 @@
  * refuses and the front-running note; the home roadmap ships it. Rendered, so a section that
  * silently loses its text fails here.
  */
+import { DELEGATE_RAIL_ERRORS } from '@agentgate/middleware';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -25,26 +26,8 @@ const text = (page: () => React.JSX.Element): string =>
     .replace(/&amp;/g, '&')
     .replace(/\s+/g, ' ');
 
-/** Every 402 error the delegate rail can answer, in the gateway's order. */
-const DELEGATE_ERRORS = [
-  'relayer_disabled',
-  'delegate_malformed',
-  'delegate_wrong_sender',
-  'delegate_wrong_receiver',
-  'delegate_wrong_action',
-  'delegate_wrong_args',
-  'delegate_deposit_not_zero',
-  'delegate_gas_too_high',
-  'delegate_gas_too_low',
-  'delegate_expired',
-  'delegate_nonce_too_large',
-  'bad_signature',
-  'unknown_key',
-  'key_not_allowed',
-  'stale_nonce',
-  'escrow_insufficient',
-  'relay_failed',
-];
+/** The relay_failed codes the gateway answers of its own (the registry's ERR_* aside). */
+const RELAY_FAILED_CODES = ['DELEGATE_REJECTED', 'RELAYER_ERROR'];
 
 describe('protocol docs page: the gasless rail', () => {
   const page = text(ProtocolPage);
@@ -57,8 +40,8 @@ describe('protocol docs page: the gasless rail', () => {
       'signedDelegate',
       'NEP-366',
       '{"service_id":<id>,"nonce":"<nonce>"}',
-      'at most 4096 bytes',
-      'the signing key’s nonce + 1',
+      'of at most 4096 bytes once decoded (a larger one is refused invalid_payment_header',
+      'the signing key’s nonce + 1, read at optimistic finality',
     ]) {
       expect(page, needle).toContain(needle);
     }
@@ -67,10 +50,26 @@ describe('protocol docs page: the gasless rail', () => {
   });
 
   it('lists every check of the delegate rail with its 402 error, and what a pending relay carries', () => {
-    for (const code of DELEGATE_ERRORS) expect(page, code).toContain(code);
-    expect(page).toContain('Every refusal comes before the relay');
+    // The gateway's own list (middleware DELEGATE_RAIL_ERRORS): a new refusal must be documented.
+    expect(DELEGATE_RAIL_ERRORS.length).toBeGreaterThan(10);
+    for (const code of DELEGATE_RAIL_ERRORS) expect(page, code).toContain(code);
+    for (const code of RELAY_FAILED_CODES) expect(page, code).toContain(code);
+    expect(page).toContain('Refusals 1–8 cost the relayer nothing: they come before the relay.');
+    expect(page).toContain('relay_failed costs at most one relay’s gas');
+    expect(page).not.toContain('Every refusal comes before the relay');
     expect(page).toContain('the relay tx, in transaction');
     expect(html(ProtocolPage)).toMatch(/id="gasless-checks"/);
+  });
+
+  it('says the clients re-present a pending delegate on their own, and what a gateway restart forgets', () => {
+    for (const needle of [
+      'Retry-After clamped to 1–10 s',
+      'it waits at most 150 s in all',
+      'a gateway restart forgets them',
+      'read the escrow balance before buying again',
+    ]) {
+      expect(page, needle).toContain(needle);
+    }
   });
 });
 
@@ -89,6 +88,21 @@ describe('CLI docs page: buy --gasless', () => {
       expect(page, needle).toContain(needle);
     }
   });
+
+  it('says buy re-presents while the relay settles, and advises only what the CLI can do', () => {
+    for (const needle of [
+      "waiting: the gateway’s relay (tx <tx hash>, <explorer>/txns/<tx hash>) is settling",
+      'for at most 150 s; it prints one waiting: line on stderr',
+      'escrowPaid',
+      'npm run neargate -- escrow balance before buying again: buying again signs a NEW payment',
+      'always check the escrow balance before buying again: it can mean the gateway’s relay landed before the gateway restarted',
+      'DELEGATE_REJECTED',
+      'RELAYER_ERROR',
+      'points at the relay tx and neargate_escrow_balance',
+    ]) {
+      expect(page, needle).toContain(needle);
+    }
+  });
 });
 
 describe('security docs page: the relayer', () => {
@@ -101,6 +115,7 @@ describe('security docs page: the relayer', () => {
       'bad_signature',
       'stale_nonce',
       'nothing a third party can redeem is public',
+      'Between the relay landing and the burn the payment is already public on chain; the protection there is invoice_used for anything this gateway process did not relay.',
       'After a relay timeout the payment is public on chain',
       'the same front-running residual as the tx rails',
     ]) {

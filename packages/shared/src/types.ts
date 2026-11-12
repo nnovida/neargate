@@ -123,6 +123,9 @@ export type AccessKeyPermission =
   | 'FullAccess'
   | { receiverId: string; methodNames: string[]; allowance: Yocto | null };
 
+/** Which block a view reads: the latest (`optimistic`) or the last final one (`final`). */
+export type ViewFinality = 'optimistic' | 'final';
+
 /** An access key as the chain holds it (`view_access_key`): its nonce and its permission. */
 export interface AccessKeyInfo {
   nonce: bigint;
@@ -185,8 +188,13 @@ export interface ChainClient {
 
   /** The chain's current block height (live: the `final` block; mock: the devnet's height). */
   blockHeight(): Promise<number>;
-  /** The account's access key `publicKey`: its nonce and permission, or null when it holds no such key. */
-  accessKey(accountId: string, publicKey: string): Promise<AccessKeyInfo | null>;
+  /**
+   * The account's access key `publicKey`: its nonce and permission, or null when it holds no such
+   * key. Read at `final` finality by default: what NEAR has settled, for judging a key's authority
+   * or whether a delegate ran. `optimistic` reads the latest block, which is what a NEW nonce must
+   * be above: a nonce spent in a block that is not final yet is already spent.
+   */
+  accessKey(accountId: string, publicKey: string, finality?: ViewFinality): Promise<AccessKeyInfo | null>;
   /**
    * Signs, without sending anything, a NEP-366 delegate of one zero-deposit
    * `pay_from_escrow(service_id, nonce)` to the registry with 30 TGas, as the signer's account: the
