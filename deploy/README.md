@@ -112,6 +112,25 @@ account's key file; paste it into Railway yourself and never commit it. The proj
 the public repository URL, without Railway's GitHub app, so a push does not deploy by itself:
 redeploy both services from Railway after each push to `main`.
 
+## (e) Prebuilt images (GitHub Packages)
+
+Publishing a GitHub release runs `.github/workflows/images.yml`, which builds the same two
+Dockerfiles and pushes them to the GitHub Container Registry, under the repository's Packages:
+
+| Image | Built from | Tags |
+|---|---|---|
+| `ghcr.io/nnovida/neargate-gateway` | `packages/middleware/Dockerfile` | the release version (`0.2.1`), `latest`, `sha-<commit>` |
+| `ghcr.io/nnovida/neargate-dashboard` | `dashboard/Dockerfile` | the same |
+
+```bash
+docker run -d -p 127.0.0.1:3012:3012 -e PORT=3012 --env-file .env ghcr.io/nnovida/neargate-gateway:0.2.1
+docker run -d -p 127.0.0.1:3011:3011 --env-file .env ghcr.io/nnovida/neargate-dashboard:0.2.1
+```
+
+They take the variables listed for Railway above. The dashboard image is built without a site
+origin (`NEXT_PUBLIC_SITE_URL` is fixed at build time); to serve it under your own domain, build it
+yourself with `--build-arg NEXT_PUBLIC_SITE_URL=https://<dashboard-host>`.
+
 ## Check it
 
 ```bash

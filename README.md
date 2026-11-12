@@ -59,7 +59,7 @@ curl -i https://neargate-gateway-production.up.railway.app/svc/1      # an HTTP 
 
 The same catalog, with each service's page, score and activity, is on the dashboard: https://neargate-dashboard-production.up.railway.app.
 
-Both are also on npm: `npm install -g @neargate/cli` installs the `neargate` binary, the same CLI without a clone, and `npm install @neargate/sdk` gives your own code the paying client ([packages/sdk/README.md](packages/sdk/README.md)).
+Both are also on npm: `npm install -g @neargate/cli` installs the `neargate` binary, the same CLI without a clone, and `npm install @neargate/sdk` gives your own code the paying client ([packages/sdk/README.md](packages/sdk/README.md)). Each GitHub release also publishes the gateway and dashboard images to GitHub Packages, `ghcr.io/nnovida/neargate-gateway` and `ghcr.io/nnovida/neargate-dashboard` ([deploy/README.md](deploy/README.md)).
 
 ## Do X → see Y
 

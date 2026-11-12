@@ -1,9 +1,9 @@
 /**
  * e2e/deploy-config.test.ts — the hosting files, read as data: the pm2 ecosystem file is required
- * (never started) and the compose and vercel files are read as text. Nothing here starts a
- * process, runs docker or reaches a network.
+ * (never started); the compose and vercel files, the Dockerfiles and the images workflow are read
+ * as text. Nothing here starts a process, runs docker or reaches a network.
  */
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
@@ -151,11 +151,44 @@ describe('Dockerfiles: npm ci sees every workspace', () => {
       .map((d) => `${parent}/${d.name}/package.json`);
   });
 
-  it.each(['dashboard/Dockerfile', 'packages/middleware/Dockerfile'])('%s copies every workspace manifest', (file) => {
+  // Every workspace that ships a Dockerfile, not only the two Railway builds: the oracle and the
+  // devnet images run the same `npm ci`.
+  const dockerfiles = ['', ...manifests.map((m) => path.posix.dirname(m))]
+    .map((dir) => path.posix.join(dir, 'Dockerfile'))
+    .filter((file) => existsSync(path.join(REPO_ROOT, file)));
+
+  it('finds the Dockerfiles (the check cannot pass by reading none)', () => {
+    expect(dockerfiles).toEqual(
+      expect.arrayContaining(['dashboard/Dockerfile', 'packages/middleware/Dockerfile', 'packages/oracle/Dockerfile', 'packages/devnet/Dockerfile']),
+    );
+  });
+
+  it.each(dockerfiles)('%s copies every workspace manifest', (file) => {
     const dockerfile = readFileSync(path.join(REPO_ROOT, file), 'utf8');
     expect(manifests.length).toBeGreaterThan(8);
     const missing = manifests.filter((m) => !dockerfile.includes(`COPY ${m} ${path.posix.dirname(m)}/`));
     expect(missing).toEqual([]);
+  });
+});
+
+describe('.github/workflows/images.yml: a release publishes the hosted images to ghcr.io', () => {
+  const workflow = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'images.yml'), 'utf8');
+
+  it('runs when a release is published, and by hand', () => {
+    expect(workflow).toMatch(/^on:\n {2}release:\n {4}types: \[published\]\n {2}workflow_dispatch:$/m);
+  });
+
+  it('may write packages and nothing else beyond reading the repository', () => {
+    expect(workflow).toMatch(/^permissions:\n {2}contents: read\n {2}packages: write\n/m);
+    expect(workflow).not.toMatch(/secrets\.(?!GITHUB_TOKEN\b)/);
+  });
+
+  it('builds the two images Railway runs, from the same Dockerfiles, and pushes them to ghcr.io', () => {
+    expect(workflow).toContain('registry: ghcr.io');
+    expect(workflow).toContain('images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}');
+    expect(workflow).toMatch(/- image: neargate-gateway\n\s+dockerfile: packages\/middleware\/Dockerfile\n/);
+    expect(workflow).toMatch(/- image: neargate-dashboard\n\s+dockerfile: dashboard\/Dockerfile\n/);
+    expect(workflow).toMatch(/push: true/);
   });
 });
 

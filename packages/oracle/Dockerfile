@@ -20,6 +20,7 @@ COPY packages/client/package.json packages/client/
 COPY packages/devnet/package.json packages/devnet/
 COPY packages/middleware/package.json packages/middleware/
 COPY packages/oracle/package.json packages/oracle/
+COPY packages/sdk/package.json packages/sdk/
 COPY packages/shared/package.json packages/shared/
 
 # 2. Install. Deliberately NOT `--omit=dev`: the whole stack runs TypeScript
