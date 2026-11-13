@@ -23,10 +23,10 @@
 | **How NEAR fits in** | The agent pays the registry contract per call: no account at the seller, no API key, no subscription. A NEAR function-call key lets the agent spend only a prepaid escrow, NEP-366 meta transactions let the gateway pay its gas, and the client refuses any invoice above its cap (`--max`, `maxNear`). Every counted call is a payment the contract received ([NEAR features used](#near-features-used)). |
 | **Try it** | `npm install && npm run demo` runs the whole loop on a mock chain, with no key and no network ([Try it](#try-it-no-keys)); every step a judge can run: [Do X → see Y](#do-x--see-y). |
 | **Tracks** | Agent Economy (`agents`): agents paying for APIs by themselves. AI Security & Defense (`security`): function-call keys, spending caps and payment-backed scores. Real-World Money (`realworld`): NEP-366 meta transactions, so the agent needs no gas. |
-| **Status** | Live on NEAR testnet: the registry `neargate-app-registry.testnet`, the gateway at https://neargate-gateway-production.up.railway.app and the dashboard at https://neargate-dashboard-production.up.railway.app, with one seeded service ([deployment](#deployed-on-near-testnet)). |
+| **Status** | Live on NEAR testnet: the registry `neargate-app-registry.testnet`, the gateway at https://neargate-gateway-production.up.railway.app and the dashboard at https://neargate-dashboard-production.up.railway.app, with nine services from four seller accounts, eight of them active and each paid for and attested on chain ([the live catalog](#the-live-catalog)). The CLI and the SDK are on npm as `@neargate/cli` and `@neargate/sdk`; release [v0.2.1](https://github.com/nnovida/neargate/releases/tag/v0.2.1) carries the deployed contract's wasm and publishes the gateway and dashboard images. |
 | **Built at** | NEAR HACKATHON ([nearhackathon.com](https://nearhackathon.com)), as the NEAR port of AgentGate, an earlier x402 gateway. What existed before and what is new: [Built on AgentGate](#disclosure). |
 
-**Contents:** [Try it](#try-it-no-keys) · [Do X → see Y](#do-x--see-y) · [How it works](#how-it-works) · [NEAR features](#near-features-used) · [Tech stack](#tech-stack) · [Testnet deployment](#deployed-on-near-testnet) · [Tests](#tests) · [Error codes](#error-codes) · [Layout](#repository-layout) · [Built on AgentGate](#disclosure) · [Limits](#limits-and-trust-model) · [License](#license)
+**Contents:** [Try it](#try-it-no-keys) · [Do X → see Y](#do-x--see-y) · [How it works](#how-it-works) · [NEAR features](#near-features-used) · [Tech stack](#tech-stack) · [Testnet deployment](#deployed-on-near-testnet) · [Live catalog](#the-live-catalog) · [Tests](#tests) · [Error codes](#error-codes) · [Layout](#repository-layout) · [Built on AgentGate](#disclosure) · [Limits](#limits-and-trust-model) · [License](#license)
 
 ## Try it (no keys)
 
@@ -53,7 +53,7 @@ The two hashes are the buyer's `pay` and the gateway's `record_attestation` on t
 On NEAR testnet, also with no key:
 
 ```bash
-npm run neargate -- list                  # the live catalog of the registry neargate-app-registry.testnet
+npm run neargate -- list                  # the live catalog of the registry neargate-app-registry.testnet (nine services)
 curl -i https://neargate-gateway-production.up.railway.app/svc/1      # an HTTP 402 with the x402 invoice
 ```
 
@@ -176,25 +176,46 @@ The badges under the logo show the same stack.
 | CLI, SDK and agent tools | MCP SDK 1.29, Zod 3.25, commander 12, tsup 8 | `npm run neargate -- …` and the five MCP tools; published to npm as `@neargate/cli` and `@neargate/sdk` (`npm run npm:pack` builds both) |
 | Buyer agent | Claude via the Messages API | picks a service, keeps to its budget and pays; model from `LLM_MODEL` (default `claude-sonnet-4-6`), and a deterministic MockLlm without `ANTHROPIC_API_KEY` |
 | Dashboard | Next.js 16.2, React 18.3, Tailwind CSS 3.4, SWR 2.4 | the catalog, service pages, activity feed and `/docs`, refreshed every 5 s |
-| Tests and CI | Vitest 3.2, tsx 4, GitHub Actions | `npm test`, and in CI on pull requests and pushes to `main`: typecheck, tests, dashboard build, the demo and `cargo test` |
-| Hosting | Railway (live: the gateway and the dashboard); PM2, Docker Compose, Vercel and Cloudflare Tunnel as options | the runbook for each: [deploy/README.md](deploy/README.md) |
+| Tests and CI | Vitest 3.2, tsx 4, GitHub Actions | `npm test`, and in CI on pull requests and pushes to `main`: typecheck, tests, dashboard build, the demo and `cargo test`; a published release builds the gateway and dashboard images |
+| Hosting | Railway (live: the gateway and the dashboard); images on GitHub Packages (ghcr.io); PM2, Docker Compose, Vercel and Cloudflare Tunnel as options | the runbook for each: [deploy/README.md](deploy/README.md) |
 
 ## Deployed on NEAR testnet
 
-**Deployed on 2026-11-12:** the registry and its four accounts, the gateway and the dashboard (both on Railway), and one seeded service: `npm run near:seed` wrote the register → pay → attest triple below through the hosted gateway, and `npm run smoke:live` passes against it.
+**Deployed on 2026-11-12:** the registry and its four accounts, the gateway and the dashboard (both on Railway), and one seeded service: `npm run near:seed` wrote the register → pay → attest triple below through the hosted gateway, and `npm run smoke:live` passes against it. **On 2026-11-13** three more seller accounts wrapped eight more public APIs behind the hosted gateway with `npm run neargate -- wrap`, and the buyer paid for one call of each active service ([the live catalog](#the-live-catalog)).
 
 | What | Value |
 |---|---|
 | Registry contract | [`neargate-app-registry.testnet`](https://testnet.nearblocks.io/address/neargate-app-registry.testnet) (the CLI's default registry) |
 | Deploy + `new()` | [`MaCbVgv9…`](https://testnet.nearblocks.io/txns/MaCbVgv9GcC1a6pXfFrY7VNLyUZKmgosstYcHkBRY3p) |
 | Gateway | `https://neargate-gateway-production.up.railway.app`, run by `neargate-app-gateway.testnet` (it signs the attestations and relays gasless payments) |
-| Seed accounts | `neargate-app-seller.testnet` registers the seed service; `neargate-app-buyer.testnet` pays for it |
+| Seller accounts | `neargate-app-seller.testnet` (the seed service #1), `neargate-app-markets.testnet`, `neargate-app-weather.testnet` and `neargate-app-geo.testnet`; `neargate-app-buyer.testnet` pays for the calls |
 | Dashboard | `https://neargate-dashboard-production.up.railway.app`: catalog, service pages, activity feed and `/docs` |
 | `register_service` | [`Gkm8cvN8…`](https://testnet.nearblocks.io/txns/Gkm8cvN8p3Mo7iTX9waXqPzx8JkxdonQ1pJejEMtXQEz) (service #1, USD exchange rates at 0.01 NEAR) |
 | `pay` | [`GzdVvhQM…`](https://testnet.nearblocks.io/txns/GzdVvhQMEaZAfLxqkuQnbEX2PGMwtByoTgA5HGYuXEVr) (0.01 NEAR + 0.002 NEAR storage) |
 | `record_attestation` | [`33A9zf2o…`](https://testnet.nearblocks.io/txns/33A9zf2o8LzgHCTA1brh57Wc5xzR8zLRTdEEWXu1hYM4) (signed by the gateway: score 1/1) |
+| Release | [v0.2.1](https://github.com/nnovida/neargate/releases/tag/v0.2.1): `neargate_registry.wasm` (its sha256 in base58 is the account's on-chain `code_hash`, `KpAJ6n7C…`), its ABI and the two npm tarballs; publishing it built `ghcr.io/nnovida/neargate-gateway` and `ghcr.io/nnovida/neargate-dashboard` |
 
-Running your own deployment (testnet; needs near-cli-rs, and cargo-near for the deploy):
+### The live catalog
+
+Every service runs behind the hosted gateway, names `neargate-app-gateway.testnet` as its attestor and wraps a free public API with no key. Each active one has one paid, served and attested call from `neargate-app-buyer.testnet` (score 1/1); `npm run neargate -- list` prints the same table from the registry.
+
+| # | Service | Price (NEAR) | Seller | Upstream | `register_service` |
+|---|---|---|---|---|---|
+| 1 | USD exchange rates | 0.01 | `neargate-app-seller` | open.er-api.com | [`Gkm8cvN8…`](https://testnet.nearblocks.io/txns/Gkm8cvN8p3Mo7iTX9waXqPzx8JkxdonQ1pJejEMtXQEz) |
+| 2 | NEAR/USD spot price | 0.005 | `neargate-app-markets` | Coinbase | [`GE63CMVG…`](https://testnet.nearblocks.io/txns/GE63CMVG1biAnAtQhggysurrpJQZj2ECJRaPoqacjEAy) |
+| 3 | Gold spot price (XAU), paused | 0.01 | `neargate-app-markets` | gold-api.com, which the gateway could not reach (IPv4 only, see [Limits](#limits-and-trust-model)) | [`2a3B3nxP…`](https://testnet.nearblocks.io/txns/2a3B3nxPaLbp7NvxdPv9L12nGtw47Q5TjbwNDq92Z584) |
+| 4 | Euro reference rates | 0.005 | `neargate-app-markets` | European Central Bank, via Frankfurter | [`8srkqLh9…`](https://testnet.nearblocks.io/txns/8srkqLh9NTu7A8TpbiNasjm9GkZLBdhYsu14WKBZ86qr) |
+| 5 | Weather now: Jakarta | 0.003 | `neargate-app-weather` | Open-Meteo | [`FmzfaPyF…`](https://testnet.nearblocks.io/txns/FmzfaPyFbQ7Q1GvcwSWMCL9y772Pjy9dJDZHkroVguiH) |
+| 6 | Air quality: Jakarta | 0.003 | `neargate-app-weather` | Open-Meteo | [`DzsFSrNh…`](https://testnet.nearblocks.io/txns/DzsFSrNhAMEjMSaaF2cDrwaJ73pfPPvCnwtKKRmxNdX1) |
+| 7 | Earthquakes M4.5+ (24h) | 0.005 | `neargate-app-geo` | USGS | [`91R3v8Xw…`](https://testnet.nearblocks.io/txns/91R3v8Xwi2EVNGgpWSAdVBHiEBJ4UKSbgxRemzoqYDJ) |
+| 8 | Public holidays (7 days) | 0.002 | `neargate-app-geo` | Nager.Date | [`63zetLZu…`](https://testnet.nearblocks.io/txns/63zetLZuqw3Edwk1vzHjpGnfsP8nxLJEgB9ik6AQZGB4) |
+| 9 | Gold spot price (XAU/USD) | 0.01 | `neargate-app-markets` | Coinbase | [`FAU7dmMF…`](https://testnet.nearblocks.io/txns/FAU7dmMFocrhJ6MRc9LA8pu6Y3Qqkt9yD98YsqEqcy2n) |
+
+All accounts are `.testnet`. A service's name and description are fixed on chain; its owner can point it at another upstream (`npm run neargate -- map <id> <url>`, which sends no transaction) or pause it (`npm run neargate -- pause <id>`). Service #3 was paused that way and #9 replaces it.
+
+### Run your own
+
+Your own deployment on testnet needs near-cli-rs, and cargo-near for the deploy:
 
 | Script | Does |
 |---|---|
@@ -210,7 +231,7 @@ Hosting the gateway and the dashboard (Railway, pm2, Vercel or docker compose): 
 
 | Suite | Command | Tests |
 |---|---|---|
-| TypeScript: every package, the e2e flows on the mock chain (in-process servers on port 0), the dashboard | `npm test` | 1,288 in 74 files (vitest); no network |
+| TypeScript: every package, the e2e flows on the mock chain (in-process servers on port 0), the dashboard | `npm test` | 1,315 in 77 files (vitest); no network |
 | Contract: unit tests and near-workspaces sandbox tests | `cd contracts && cargo test` (build the wasm first: [contracts/README.md](contracts/README.md#test)) | 59: 53 unit, 6 sandbox |
 | Typecheck, dashboard build, demo | `npm run typecheck`, `npm run build`, `npm run demo` | |
 
@@ -229,6 +250,7 @@ The ones a buyer or seller meets most. The CLI prints `error: <CODE>: <message>`
 | `ERR_ESCROW_INSUFFICIENT` | The escrow holds less than price + 0.002 NEAR. | `escrow deposit` more. |
 | `RELAYER_UNAVAILABLE` | `--gasless`, but the gateway offers no relayer. | Use `--from-escrow`. |
 | `TX_TIMEOUT` | A transaction was sent, but its outcome is unknown. | Check the named tx on nearblocks before retrying. |
+| `RPC_ERROR` | The NEAR RPC failed or rate-limited a call; the public `rpc.testnet.near.org` limits bursts. | Retry, or pass another testnet RPC with `--rpc`, e.g. `https://test.rpc.fastnear.com`. |
 | `CONFIG_INVALID` | A bad flag or variable, e.g. a malformed account id or URL, or an unknown network. | Fix the named flag or variable. Unset, `REGISTRY_CONTRACT_ID` means the deployed registry. |
 | `GATEWAY_REQUIRED` | A live `wrap` with no `--gateway` and no hosted default. | Pass `--gateway`; the registry stores it for good. |
 | `settlement_pending` (402) | The payment is not visible yet, or a gasless relay is in flight, timed out or not read yet. | Retry the same proof after `Retry-After`; `buy --gasless` does it on its own. |
@@ -293,6 +315,7 @@ NearGate is the NEAR port of AgentGate, the team's x402 gateway for Casper, buil
 | A leaked agent key | can spend the whole escrow, on any active service, plus gas from the account balance up to the key's allowance. Keep both small; revoke the key by deleting it with the full-access key. |
 | Tx proofs can be front-run | Once a buyer's `pay` transaction is public, anyone watching can present it first and receive the response; the buyer then gets `invoice_used` (`PAID_NOT_SERVED`). That is inherent to paying first and proving after. On the gasless rail nothing redeemable is public before the buyer's request reaches the gateway; between the relay landing and the burn the payment is public, and the gateway answers `invoice_used` to anything it did not relay itself. After a relay timeout the payment is public before the buyer's retry, so that retry can be front-run. |
 | One gateway process | Receipts, rate limits, the relays not yet served and the delegate nonces relayed live in the gateway's memory, so run one instance. Without `INVOICE_STORE_PATH` a restart forgets open invoices. A restart always forgets the relays: the retry of a relay that landed before it gets `invoice_used`, and a delegate whose relay had not landed yet can be relayed again (NEAR runs it once, so it cannot pay twice, but that answer may not say it paid). Check `escrow balance` before buying again. |
+| The hosted gateway reaches upstreams over IPv6 | On Railway, the gateway could not reach the two upstream APIs tried that have only an IPv4 address: one was refused before payment (`503 service_unavailable`), the other was paid and then answered `502 upstream_unreachable` with no attestation. Every upstream with an IPv6 address (an AAAA record) worked. Check with `dig AAAA <host>` before you wrap an API on the hosted gateway. |
 | Native NEAR only | The registry stores up to four price options per service, but only native NEAR is settled; NEP-141 tokens are next. |
 
 Security reports: [SECURITY.md](SECURITY.md). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
