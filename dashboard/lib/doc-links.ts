@@ -46,6 +46,11 @@ export const DOC_GROUPS: DocGroup[] = [
     hint: 'Sell an API, buy a call, or plug the catalog into an agent.',
     links: [
       {
+        href: '/docs/guide',
+        label: 'Sell & buy',
+        keywords: ['guide', 'how to', 'step by step', 'sell', 'seller', 'buy', 'buyer', 'wallet', 'import wallet', 'import-account', 'private key', 'where the key goes', 'near-credentials', 'BUYER_PRIVATE_KEY', 'SELLER_PRIVATE_KEY', 'faucet', 'create-account', 'IPv6', 'AAAA', 'agent key', 'claude_desktop_config', '@neargate/sdk', 'sdk', 'fetchPaid', 'createAgentGateClient', 'self-payment', 'change price', 'rename'],
+      },
+      {
         href: '/docs/cli',
         label: 'CLI & MCP',
         keywords: ['neargate', 'wrap', 'map', 'buy', 'list', 'status', 'pause', 'resume', 'demo-accounts', 'escrow', 'agent-key', '--from-escrow', '--gasless', 'gasless', '--allowance', 'neargate_escrow_balance', 'fromEscrow', 'ERR_ESCROW_INSUFFICIENT', 'RELAYER_UNAVAILABLE', 'GASLESS_NOT_SERVED', 'mcp', 'claude desktop', '--account', '--key-file', '--max', '--price', '--registry', '--rpc', '--mode', 'neargate_buy', 'neargate_list_services', 'error codes', 'BUDGET_EXCEEDED', 'PAID_NOT_SERVED', 'TX_TIMEOUT', 'RPC_TIMEOUT', 'SIGNER_KEY_NOT_FOUND', 'REGISTRY_MISMATCH', 'SERVICE_MISMATCH', 'troubleshooting'],

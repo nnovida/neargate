@@ -124,7 +124,11 @@ export default function Page() {
       </P>
 
       <H2 id="roles">The roles: seller, buyer, operator</H2>
-      <P>Three actors meet at the gateway. Each has its own commands; this is the short version.</P>
+      <P>
+        Three actors meet at the gateway. Each has its own commands; this is the short version. For
+        the seller and the buyer step by step on the live deployment, see{' '}
+        <DocLink href="/docs/guide">Sell &amp; buy</DocLink>.
+      </P>
       <H3 id="role-seller">Seller — wraps an API</H3>
       <P>
         A seller owns an upstream HTTP API and wants to charge per call. Running{' '}
@@ -140,7 +144,7 @@ export default function Page() {
         <M>402</M>, pays through the registry and retries with proof. You can do that with one
         command (<M>neargate buy</M>), any MCP-capable agent through the{' '}
         <DocLink href="/docs/cli#mcp">MCP server</DocLink>, the bundled buyer agent, or the{' '}
-        <M>@agentgate/client</M> package’s <M>fetchPaid</M> helper. The{' '}
+        <M>@neargate/sdk</M> package’s <M>fetchPaid</M> helper. The{' '}
         <DocLink href="/docs/protocol">protocol page</DocLink> spells out every step for a
         hand-rolled client.
       </P>
@@ -232,6 +236,11 @@ export default function Page() {
             href: '/docs/quickstart',
             title: 'Quickstart',
             desc: 'Try the live testnet deployment, run the offline demo (register → 402 → pay → serve → attest → score), bring a local stack up with seeded data, then the testnet scripts.',
+          },
+          {
+            href: '/docs/guide',
+            title: 'Sell & buy',
+            desc: 'Step by step on the live deployment: an account and where its key goes, wrapping an API behind the hosted gateway, and buying from your account, an agent key, Claude Desktop or @neargate/sdk.',
           },
           {
             href: '/docs/cli',

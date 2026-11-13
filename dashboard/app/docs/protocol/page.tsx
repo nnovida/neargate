@@ -613,7 +613,7 @@ export default function Page() {
         activity feed names a block, not a transaction. The only party that knows the transaction of
         an attestation is the gateway that sent it, so the gateway serves what it did about each paid
         call, keyed by the invoice nonce. This is where a buyer, a seed script or the{' '}
-        <M>waitForReceipt</M> helper in <M>@agentgate/client</M> learns the attestation’s transaction.
+        <M>waitForReceipt</M> helper in <M>@neargate/sdk</M> learns the attestation’s transaction.
       </P>
       <CodeBlock label="curl <gateway>/receipts/3673826824572287" code={'(no payment, no header needed)'} />
       <CodeBlock

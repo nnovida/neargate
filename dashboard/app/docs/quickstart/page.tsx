@@ -85,7 +85,8 @@ export default function Page() {
             score on <DocLink href="/services/1">/services/1</DocLink> grows. To put your own API
             behind this gateway, <DocLink href="/docs/cli#wrap">wrap</DocLink> it with{' '}
             <M>--attestor {DEFAULT_GATEWAY_ACCOUNT_ID || '<gateway account>'}</M> so the
-            gateway’s attestations count.
+            gateway’s attestations count. Both roles step by step, an existing wallet and an agent
+            key included: <DocLink href="/docs/guide">Sell &amp; buy</DocLink>.
           </P>
         </>
       ) : null}

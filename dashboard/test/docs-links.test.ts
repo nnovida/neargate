@@ -6,13 +6,14 @@ import sitemap from '@/app/sitemap';
 import { DOC_GROUPS, DOC_LINKS } from '@/lib/doc-links';
 
 /**
- * R47: the docs shrank to six pages (overview, quickstart, cli, protocol, security, contract).
+ * R47: the docs shrank to six pages (overview, quickstart, cli, protocol, security, contract);
+ * the step-by-step guide (sell & buy) came back as a seventh.
  * Every link that used to point at a deleted page (sitemap, sidebar, search, in-page links) must
  * be gone, and every remaining docs link must resolve to a real page.
  */
 const DASHBOARD_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const APP_DIR = path.join(DASHBOARD_DIR, 'app');
-const KEPT = ['', 'cli', 'contract', 'protocol', 'quickstart', 'security'];
+const KEPT = ['', 'cli', 'contract', 'guide', 'protocol', 'quickstart', 'security'];
 const DELETED = [
   'api',
   'architecture',
@@ -100,7 +101,7 @@ describe('in-page links', () => {
 
   it('every in-page #anchor a docs page links to on another docs page exists as an id there', () => {
     const missing: string[] = [];
-    const ref = /(?<![\w.-])\/docs\/(cli|contract|protocol|quickstart|security)#([a-z0-9-]+)/g;
+    const ref = /(?<![\w.-])\/docs\/(cli|contract|guide|protocol|quickstart|security)#([a-z0-9-]+)/g;
     for (const file of walk(DASHBOARD_DIR)) {
       const text = readFileSync(file, 'utf8');
       for (const m of text.matchAll(ref)) {

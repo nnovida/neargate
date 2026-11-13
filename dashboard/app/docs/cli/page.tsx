@@ -897,7 +897,7 @@ export default function Page() {
 
       <H3 id="codes-client">Buying: invoice and payment</H3>
       <P>
-        Raised by <M>buy</M>, <M>neargate_buy</M> and <M>fetchPaid</M> in <M>@agentgate/client</M>.
+        Raised by <M>buy</M>, <M>neargate_buy</M> and <M>fetchPaid</M> in <M>@neargate/sdk</M>.
         Every refusal below happens <em>before</em> a payment is sent, except{' '}
         <M>PAID_NOT_SERVED</M> and <M>GASLESS_NOT_SERVED</M>.
       </P>

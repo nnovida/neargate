@@ -12,6 +12,7 @@ import { SWRConfig } from 'swr';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_GATEWAY_ACCOUNT_ID, DEFAULT_GATEWAY_URL, type ServiceRecord } from '@agentgate/shared';
 import CliPage from '@/app/docs/cli/page';
+import GuidePage from '@/app/docs/guide/page';
 import QuickstartPage from '@/app/docs/quickstart/page';
 import Home from '@/app/page';
 import { CatalogGrid } from '@/components/catalog-grid';
@@ -79,6 +80,7 @@ const SURFACES: Array<{ name: string; text: () => string }> = [
   { name: 'service page', text: () => withData({ '/api/services/1': serviceDetail }, ServiceDetail, { id: 1 }) },
   { name: 'quickstart, live section', text: quickstartLive },
   { name: 'CLI reference', text: () => page(CliPage) },
+  { name: 'sell & buy guide', text: () => page(GuidePage) },
 ];
 
 describe('the CLI commands on the site run from any folder', () => {
