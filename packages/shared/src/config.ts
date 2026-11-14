@@ -46,9 +46,13 @@ export const DEFAULT_DASHBOARD_URL: string = 'https://neargate-dashboard-product
  */
 export const DEFAULT_GATEWAY_ACCOUNT_ID: string = 'neargate-app-gateway.testnet';
 
-/** Per-network RPC and explorer defaults (overridable via NEAR_RPC_URL / NEAR_EXPLORER_URL). */
+/**
+ * Per-network RPC and explorer defaults (overridable via NEAR_RPC_URL / NEAR_EXPLORER_URL).
+ * Testnet uses FastNEAR's free public RPC: NEAR's own rpc.testnet.near.org rate-limits bursts,
+ * and a single `list` of the live catalog already makes one burst of view calls.
+ */
 const NEAR_DEFAULTS: Record<NearNetwork, { rpcUrl: string; explorerUrl: string }> = {
-  testnet: { rpcUrl: 'https://rpc.testnet.near.org', explorerUrl: 'https://testnet.nearblocks.io' },
+  testnet: { rpcUrl: 'https://test.rpc.fastnear.com', explorerUrl: 'https://testnet.nearblocks.io' },
   mainnet: { rpcUrl: 'https://rpc.mainnet.near.org', explorerUrl: 'https://nearblocks.io' },
 };
 

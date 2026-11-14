@@ -30,7 +30,7 @@ describe('loadConfig — mock mode defaults', () => {
     expect(cfg.invoiceTtlMs).toBe(300000);
     expect(cfg.upstreamTimeoutMs).toBe(30000);
     expect(cfg.nearNetwork).toBe('testnet');
-    expect(cfg.nearRpcUrl).toBe('https://rpc.testnet.near.org');
+    expect(cfg.nearRpcUrl).toBe('https://test.rpc.fastnear.com');
     expect(cfg.nearExplorerUrl).toBe('https://testnet.nearblocks.io');
     expect(cfg.registryContractId).toBe(DEFAULT_REGISTRY_CONTRACT_ID);
     expect(cfg.registryContractId).toBe('neargate-app-registry.testnet');
@@ -52,7 +52,7 @@ describe('loadConfig — mock mode defaults', () => {
   it('treats empty-string env values as unset (matches .env.example blanks)', () => {
     const cfg = loadConfig({ REGISTRY_CONTRACT_ID: '', NEAR_RPC_URL: '  ', MOCK_BUYER_ACCOUNT: '' });
     expect(cfg.registryContractId).toBe(DEFAULT_REGISTRY_CONTRACT_ID);
-    expect(cfg.nearRpcUrl).toBe('https://rpc.testnet.near.org');
+    expect(cfg.nearRpcUrl).toBe('https://test.rpc.fastnear.com');
     expect(cfg.mockBuyerAccount).toBe('buyer.mock');
   });
 

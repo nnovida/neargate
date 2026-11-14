@@ -251,7 +251,7 @@ The ones a buyer or seller meets most. The CLI prints `error: <CODE>: <message>`
 | `ERR_ESCROW_INSUFFICIENT` | The escrow holds less than price + 0.002 NEAR. | `escrow deposit` more. |
 | `RELAYER_UNAVAILABLE` | `--gasless`, but the gateway offers no relayer. | Use `--from-escrow`. |
 | `TX_TIMEOUT` | A transaction was sent, but its outcome is unknown. | Check the named tx on nearblocks before retrying. |
-| `RPC_ERROR` | The NEAR RPC failed or rate-limited a call; the public `rpc.testnet.near.org` limits bursts. | Retry, or pass another testnet RPC with `--rpc`, e.g. `https://test.rpc.fastnear.com`. |
+| `RPC_ERROR` | The NEAR RPC failed or rate-limited a call. The default testnet RPC is FastNEAR's `https://test.rpc.fastnear.com`. | Retry, or pass another testnet RPC with `--rpc`, e.g. NEAR's own `https://rpc.testnet.near.org` (it limits bursts). |
 | `CONFIG_INVALID` | A bad flag or variable, e.g. a malformed account id or URL, or an unknown network. | Fix the named flag or variable. Unset, `REGISTRY_CONTRACT_ID` means the deployed registry. |
 | `GATEWAY_REQUIRED` | A live `wrap` with no `--gateway` and no hosted default. | Pass `--gateway`; the registry stores it for good. |
 | `settlement_pending` (402) | The payment is not visible yet, or a gasless relay is in flight, timed out or not read yet. | Retry the same proof after `Retry-After`; `buy --gasless` does it on its own. |

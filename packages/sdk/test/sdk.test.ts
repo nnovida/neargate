@@ -22,7 +22,7 @@ describe('@neargate/sdk', () => {
     expect(config.mode).toBe('live');
     expect(config.nearNetwork).toBe('testnet');
     expect(config.registryContractId).toBe(DEFAULT_REGISTRY_CONTRACT_ID);
-    expect(config.nearRpcUrl).toBe('https://rpc.testnet.near.org');
+    expect(config.nearRpcUrl).toBe('https://test.rpc.fastnear.com');
     expect(createNearGateChain()).toBeInstanceOf(LiveNearClient);
   });
 

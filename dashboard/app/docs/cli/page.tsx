@@ -103,7 +103,7 @@ export default function Page() {
           {
             name: '--rpc <url>',
             type: 'NEAR_RPC_URL',
-            desc: 'The NEAR RPC. Default: the RPC of NEAR_NETWORK (testnet: https://rpc.testnet.near.org).',
+            desc: 'The NEAR RPC. Default: the RPC of NEAR_NETWORK (testnet: FastNEAR, https://test.rpc.fastnear.com).',
           },
           {
             name: '--registry <contract id>',

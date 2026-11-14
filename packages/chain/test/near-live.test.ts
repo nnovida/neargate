@@ -48,7 +48,7 @@ import { RPC_READ_TIMEOUT_MS } from '../src/near-rpc';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Json = any;
 
-const RPC_URL = 'https://rpc.testnet.near.org';
+const RPC_URL = 'https://test.rpc.fastnear.com'; // the testnet default in packages/shared/src/config.ts
 const REGISTRY = 'neargate-registry.testnet';
 const SELLER = 'seller.testnet';
 const PAYOUT = 'seller-payout.testnet';
@@ -599,7 +599,7 @@ describe('LiveNearClient registry views', () => {
     rpc.view('get_service', () => new Response('upstream down', { status: 502 }));
     const err = await rejection(client.getService(1));
     expect(err).toMatchObject({ code: 'RPC_ERROR', httpStatus: 502 });
-    expect(err.message).not.toContain('rpc.testnet.near.org');
+    expect(err.message).not.toContain(new URL(RPC_URL).host);
   });
 
   it('a view answered with HTTP 408 stays RPC_TIMEOUT once near-api-js stops retrying', async () => {
