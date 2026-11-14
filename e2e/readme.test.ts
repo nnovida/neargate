@@ -53,11 +53,11 @@ const LIVE_VALUE_DOCS = ['README.md', 'docs/DEMO-VIDEO.md'] as const;
 const NOT_DEPLOYED = 'Not deployed yet';
 
 /**
- * The disclosure's diff link. GitHub resolves it against the repository (`<repo>/compare/…`), so
- * it works without knowing the repository URL; it is not a file, so the relative-link check skips
- * exactly this one target.
+ * The disclosure's diff link: absolute, so it also works for a reader of the file outside GitHub's
+ * web view (a clone, the raw file, an AI screener), where a relative `../../compare/…` resolves to
+ * nothing.
  */
-const COMPARE_LINK = '../../compare/pre-hackathon...hackathon-submission';
+const COMPARE_LINK = 'https://github.com/nnovida/neargate/compare/pre-hackathon...hackathon-submission';
 
 /** The live values the testnet deploy (Task 7b) and the hosting (Task 9b) fill in. */
 const LIVE_VALUES = [
@@ -231,8 +231,6 @@ describe('README.md: everything it points at exists', () => {
     const targets = [...proseLines(README).join('\n').matchAll(/\]\(([^)\s]+)\)/g)]
       .map((m) => m[1]!)
       .filter((t) => !/^(https?:|mailto:|#)/.test(t))
-      // GitHub's compare view, not a file: see COMPARE_LINK.
-      .filter((t) => t !== COMPARE_LINK)
       .map((t) => t.replace(/#.*$/, '').replace(/\/$/, ''));
     expect(targets.length).toBeGreaterThan(3);
     const missing = targets.filter((t) => !tracked.some((f) => f === t || f.startsWith(`${t}/`)) || !existsSync(path.join(REPO_ROOT, t)));

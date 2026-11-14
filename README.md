@@ -22,6 +22,7 @@
 | **Product** | A gateway that answers an unpaid call with an x402 invoice, and a NEAR contract, `neargate-registry`, that takes the payment and keeps each service's score. The agent reads the invoice, pays the registry, retries with the transaction as proof and gets the response; the gateway then records an attestation on chain. A CLI, an MCP server, a client library, a buyer agent and a dashboard sit around them. |
 | **How NEAR fits in** | The agent pays the registry contract per call: no account at the seller, no API key, no subscription. A NEAR function-call key lets the agent spend only a prepaid escrow, NEP-366 meta transactions let the gateway pay its gas, and the client refuses any invoice above its cap (`--max`, `maxNear`). Every counted call is a payment the contract received ([NEAR features used](#near-features-used)). |
 | **Try it** | `npm install && npm run demo` runs the whole loop on a mock chain, with no key and no network ([Try it](#try-it-no-keys)); every step a judge can run: [Do X → see Y](#do-x--see-y). |
+| **Demo video** | [2:19 on X](https://x.com/NearGateHQ/status/2121401017711657335), filmed on the live testnet deployment, every payment a real transaction: the catalog, a 402 invoice, a paid call and its transaction on the explorer, the score going up, an agent key paying from its escrow, a gasless call, and how a seller wraps an API. |
 | **Tracks** | Agent Economy (`agents`): agents paying for APIs by themselves. AI Security & Defense (`security`): function-call keys, spending caps and payment-backed scores. Real-World Money (`realworld`): NEP-366 meta transactions, so the agent needs no gas. |
 | **Status** | Live on NEAR testnet: the registry `neargate-app-registry.testnet`, the gateway at https://neargate-gateway-production.up.railway.app and the dashboard at https://neargate-dashboard-production.up.railway.app, with nine services from four seller accounts, eight of them active and each paid for and attested on chain ([the live catalog](#the-live-catalog)). The CLI and the SDK are on npm as `@neargate/cli` and `@neargate/sdk`; release [v0.2.1](https://github.com/nnovida/neargate/releases/tag/v0.2.1) carries the deployed contract's wasm and publishes the gateway and dashboard images. |
 | **Built at** | NEAR HACKATHON ([nearhackathon.com](https://nearhackathon.com)), as the NEAR port of AgentGate, an earlier x402 gateway. What existed before and what is new: [Built on AgentGate](#disclosure). |
@@ -231,7 +232,7 @@ Hosting the gateway and the dashboard (Railway, pm2, Vercel or docker compose): 
 
 | Suite | Command | Tests |
 |---|---|---|
-| TypeScript: every package, the e2e flows on the mock chain (in-process servers on port 0), the dashboard | `npm test` | 1,315 in 77 files (vitest); no network |
+| TypeScript: every package, the e2e flows on the mock chain (in-process servers on port 0), the dashboard | `npm test` | 1,321 in 78 files (vitest); no network |
 | Contract: unit tests and near-workspaces sandbox tests | `cd contracts && cargo test` (build the wasm first: [contracts/README.md](contracts/README.md#test)) | 59: 53 unit, 6 sandbox |
 | Typecheck, dashboard build, demo | `npm run typecheck`, `npm run build`, `npm run demo` | |
 
@@ -294,13 +295,13 @@ NearGate is the NEAR port of AgentGate, the team's x402 gateway for Casper, buil
 |---|---|
 | Pre-hackathon baseline | tag `pre-hackathon` = `5ee92e3` (2026-07-24), the last Casper commit |
 | Hackathon work | every commit after it, all from 2026-11-11 on, inside the NEAR HACKATHON window |
-| The diff | [pre-hackathon...hackathon-submission](../../compare/pre-hackathon...hackathon-submission) on GitHub; in a clone, `git diff --stat pre-hackathon hackathon-submission` |
+| The diff | [pre-hackathon...hackathon-submission](https://github.com/nnovida/neargate/compare/pre-hackathon...hackathon-submission) on GitHub; in a clone, `git diff --stat pre-hackathon hackathon-submission` |
 
 **Built in the window:** the `neargate-registry` contract with its escrow and sandbox tests (it replaces the Casper contracts); the NEAR client on near-api-js and the mock chain's NEAR mirror; the NEAR x402 rail (pay through the registry, verified by view and by transaction) and the NEAR-key self-map; the escrow, the restricted agent keys and the NEP-366 gasless relay; the CLI, MCP server, client and buyer agent on NEAR; the dashboard on NEAR; the testnet scripts, the hosting files, this README and the guards.
 
 **Carried over from AgentGate and ported:** the monorepo layout and the product idea; the gateway's 402 proxy (invoice store, nonce burn, attestation queue and retries, SSRF guard, rate limits); the CLI and MCP structure; the buyer agent and its MockLlm; the mock-chain devnet idea; the sample oracle; the dashboard's Next.js shell. **Removed:** the Casper contracts, the casper-js-sdk and CSPR.cloud client, and the CEP-18 facilitator rail. Internal package and env names keep the AgentGate prefix: the `@agentgate/*` workspaces, `AGENTGATE_MODE` and `AGENTGATE_ADMIN_TOKEN`; the CLI workspace is `@neargate/cli`. The CLI and the SDK are published to npm as `@neargate/cli` and `@neargate/sdk`, built from the workspaces by `npm run npm:pack`; from this repo, run the CLI with `npm run neargate -- …`.
 
-**Libraries:** near-sdk 5.30.1 and near-workspaces 0.24.0 (contract and sandbox tests); near-api-js 7.4.0 and borsh (NEAR client); Express with helmet, express-rate-limit and undici (gateway); the MCP SDK (`@modelcontextprotocol/sdk`), commander and zod (CLI); Next.js 16, React 18, SWR and Tailwind CSS (dashboard), with the fonts Space Grotesk, Inter and JetBrains Mono bundled in `dashboard/app/fonts` (SIL OFL 1.1); vitest, tsx, tsup and TypeScript. No project template was used; the baseline is AgentGate itself.
+**Libraries:** near-sdk 5.30.1 (contract); near-workspaces 0.24.0 with tokio, serde_json and anyhow (sandbox tests); near-api-js 7.4.0 and borsh (NEAR client); Express with helmet, express-rate-limit and undici (gateway); the MCP SDK (`@modelcontextprotocol/sdk`), commander and zod (CLI); Next.js 16, React 18, SWR, and Tailwind CSS with PostCSS and Autoprefixer (dashboard), with the fonts Space Grotesk, Inter and JetBrains Mono bundled in `dashboard/app/fonts` (SIL OFL 1.1); vitest, tsx, tsup and TypeScript. No project template was used; the baseline is AgentGate itself.
 
 **AI code:** AI coding assistants were used throughout the window to write, test and review the code and the docs. The event's rules ask for this disclosure.
 
