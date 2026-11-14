@@ -198,7 +198,7 @@ The badges under the logo show the same stack.
 
 ### The live catalog
 
-Every service runs behind the hosted gateway, names `neargate-app-gateway.testnet` as its attestor and wraps a free public API with no key. Each active one has one paid, served and attested call from `neargate-app-buyer.testnet` (score 1/1); `npm run neargate -- list` prints the same table from the registry.
+Every service runs behind the hosted gateway, names `neargate-app-gateway.testnet` as its attestor and wraps a free public API with no key. Each active one has been paid for, served and attested at least once, with `neargate-app-buyer.testnet` as the buyer; `npm run neargate -- list` prints the same table from the registry, with each service's current score.
 
 | # | Service | Price (NEAR) | Seller | Upstream | `register_service` |
 |---|---|---|---|---|---|
